@@ -413,6 +413,8 @@ class TradingSessionLog:
 
 ## 4. Event Bus
 
+> ✅ **IMPLEMENTED** — See `src/event_bus.py` and `src/tests/test_event_bus.py` (39 tests passing)
+
 **Problem:** Agents are tightly coupled through shared DataFrames and manual orchestration in `main.py`.
 
 **DSH Pattern:** Typed events with `emit`, `waterfall`, `parallel`, `serial` dispatch modes.
@@ -4060,7 +4062,7 @@ class CorrelationManager:
 | 🟡 **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None |
 | 🟡 **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None |
 | 🟡 **10** | Runtime Invariants (#21) | 1 day | Safety guarantees | Low | None |
-| 🟢 **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None |
+| ✅ **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None | **DONE** |
 | 🟢 **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None |
 | 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
 | 🟢 **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None |
