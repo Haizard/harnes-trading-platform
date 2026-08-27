@@ -1,23 +1,17 @@
 """
 🌙 Moon Dev's Model System
 Built with love by Moon Dev 🚀
+
+Primary: AWS Bedrock (qwen.qwen3-coder-next)
 """
 
 from .base_model import BaseModel, ModelResponse
-from .claude_model import ClaudeModel
-from .groq_model import GroqModel
-from .openai_model import OpenAIModel
-from .gemini_model import GeminiModel
-from .deepseek_model import DeepSeekModel
+from .bedrock_model import BedrockModel
 from .model_factory import model_factory
 
 __all__ = [
     'BaseModel',
     'ModelResponse',
-    'ClaudeModel',
-    'GroqModel',
-    'OpenAIModel',
-    'GeminiModel',
-    'DeepSeekModel',
+    'BedrockModel',
     'model_factory'
-] 
+]

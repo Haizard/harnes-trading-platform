@@ -51,8 +51,8 @@ if not env_path.exists():
 load_dotenv(dotenv_path=env_path)
 
 # Model override settings
-MODEL_TYPE = "claude"  # Using Claude for chat responses
-MODEL_NAME = "claude-3-haiku-20240307"  # Fast, efficient model
+MODEL_TYPE = "bedrock"  # AWS Bedrock
+MODEL_NAME = "qwen.qwen3-coder-next"  # Primary model
 
 # Configuration - All in one place! 🎯
 YOUTUBE_CHANNEL_ID = "UCN7D80fY9xMYu5mHhUhXEFw"

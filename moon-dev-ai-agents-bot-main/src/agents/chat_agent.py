@@ -41,9 +41,9 @@ if not env_path.exists():
 
 load_dotenv(dotenv_path=env_path)
 
-# Model override settings
-MODEL_TYPE = "groq"  # Using Claude for chat responses
-MODEL_NAME = "llama-3.1-8b-instant"  # Fast, efficient model llama-3.1-8b-instant
+# Model override settings — All AI via Bedrock
+MODEL_TYPE = "bedrock"  # AWS Bedrock
+MODEL_NAME = "qwen.qwen3-coder-next"  # Primary model
 
 # Configuration - All in one place! 🎯
 RESTREAM_CHECK_INTERVAL = 0.1  # Reduce to 100ms for more responsive chat

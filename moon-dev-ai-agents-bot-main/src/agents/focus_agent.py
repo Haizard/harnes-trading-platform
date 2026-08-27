@@ -45,9 +45,9 @@ cprint(f"\n🔍 Checking environment setup...", "cyan")
 cprint(f"📂 Project Root: {project_root}", "cyan")
 cprint(f"📝 .env Path: {env_path}", "cyan")
 
-# Model override settings
-MODEL_TYPE = "deepseek"  # Using DeepSeek
-MODEL_NAME = "deepseek-chat"  # Fast chat model
+# Model override settings — All AI via Bedrock
+MODEL_TYPE = "bedrock"  # AWS Bedrock
+MODEL_NAME = "qwen.qwen3-coder-next"  # Primary model
 
 # Configuration for faster testing
 MIN_INTERVAL_MINUTES = 6  # Less than a second
@@ -93,56 +93,25 @@ X/10
 class FocusAgent:
     def __init__(self):
         """Initialize the Focus Agent"""
-        # Environment variables should already be loaded from project root
-        
         self._announce_model()  # Announce at startup
         
-        # Debug environment variables (without showing values)
-        for key in ["OPENAI_KEY", "ANTHROPIC_KEY", "GEMINI_KEY", "GROQ_API_KEY", "DEEPSEEK_KEY"]:
-            if os.getenv(key):
-                cprint(f"✅ Found {key}", "green")
-            else:
-                cprint(f"❌ Missing {key}", "red")
-        
-        # Initialize model using factory
+        # Initialize model using factory (Bedrock)
         self.model_factory = model_factory
         self.model = self.model_factory.get_model(MODEL_TYPE, MODEL_NAME)
         
         if not self.model:
-            raise ValueError(f"🚨 Could not initialize {MODEL_TYPE} {MODEL_NAME} model! Check API key and model availability.")
+            raise ValueError(f"🚨 Could not initialize Bedrock model! Check AWS credentials in .env")
         
         self._announce_model()  # Announce after initialization
         
-        # Print model info with pricing if available
-        if MODEL_TYPE == "openai":
-            model_info = self.model.AVAILABLE_MODELS.get(MODEL_NAME, {})
-            cprint(f"\n💫 Moon Dev's Focus Agent using OpenAI!", "green")
-            cprint(f"🤖 Model: {model_info.get('description', '')}", "cyan")
-            cprint(f"💰 Pricing:", "yellow")
-            cprint(f"  ├─ Input: {model_info.get('input_price', '')}", "yellow")
-            cprint(f"  └─ Output: {model_info.get('output_price', '')}", "yellow")
-        
-        # Initialize voice client
+        # Initialize voice client (OpenAI TTS — kept for voice only)
         openai_key = os.getenv("OPENAI_KEY")
-        if not openai_key:
-            raise ValueError("🚨 OPENAI_KEY not found in environment variables!")
-        self.openai_client = openai.OpenAI(api_key=openai_key)
-        
-        # Initialize local DeepSeek client if enabled
-        if USE_LOCAL_DEEPSEEK:
-            self.local_deepseek = openai.OpenAI(
-                api_key="not-needed",
-                base_url=f"http://{LAMBDA_IP}:8000/v1"
-            )
-            cprint("🚀 Moon Dev's Focus Agent using Local DeepSeek!", "green")
+        if openai_key:
+            import openai as openai_mod
+            self.openai_client = openai_mod.OpenAI(api_key=openai_key)
         else:
-            self.local_deepseek = None
-        
-        # Initialize Anthropic for Claude models
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        if not anthropic_key:
-            raise ValueError("🚨 ANTHROPIC_KEY not found in environment variables!")
-        self.anthropic_client = Anthropic(api_key=anthropic_key)
+            self.openai_client = None
+            cprint("⚠️ OPENAI_KEY not found — voice announcements disabled", "yellow")
         
         # Initialize Google Speech client
         google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
