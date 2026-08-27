@@ -68,6 +68,8 @@
 
 ## 2. Risk Guard Waterfall
 
+> ✅ **IMPLEMENTED** — See `src/risk_guard.py` and `src/tests/test_risk_guard.py` (37 tests passing)
+
 **Problem:** Moon Dev's RiskAgent checks PnL *after* positions are already open (polling every 5 minutes). There is no pre-trade validation — orders go directly to Jupiter.
 
 **DSH Pattern:** `tools/pre-execute` waterfall — listeners run in priority order, each can deny, modify, or pass through.
@@ -3226,6 +3228,8 @@ preset_manager.on_change(lambda p: asyncio.create_task(on_preset_change(p)))
 
 ## 25. Benchmark Tracker — Know If You're Adding Alpha
 
+> ✅ **IMPLEMENTED** — See `src/benchmark_tracker.py` and `src/tests/test_benchmark_tracker.py` (17 tests passing)
+
 **Problem:** Moon Dev tracks PnL in dollars but never asks: "Would I have made more just holding Bitcoin?" If the bot underperforms buy-and-hold, all complexity is wasted.
 
 **DSH Pattern:** `Session Query` + `Session Log` — track benchmark alongside every trade.
@@ -4044,7 +4048,7 @@ class CorrelationManager:
 
 | Priority | Improvement | Effort | Impact | Risk | Dependencies |
 |---|---|---|---|---|---|
-| 🔴 **1** | Risk Guard Waterfall (#2) | 1-2 days | Prevents bad trades | Low | Session Log |
+| ✅ **1** | Risk Guard Waterfall (#2) | 1-2 days | Prevents bad trades | Low | Session Log | **DONE** |
 | 🔴 **2** | Session Log (#3) | 1 day | Debug every decision | Low | None |
 | 🔴 **3** | Weighted Prediction Engine (#9) | 1-2 days | Better signals | Low | Features exist |
 | 🟡 **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine |
@@ -4067,7 +4071,7 @@ class CorrelationManager:
 | 🟢 **21** | Multi-Step Trade Planning (#17) | 2 days | Structured trades | Medium | Risk Guard + Log |
 | 🟢 **22** | MCP Integration (#20) | 2-3 days | External services | Medium | None |
 | 🔵 **23** | Process Isolation (#8) | 3-5 days | Fault tolerance | Medium | All above |
-| 🔴 **24** | Benchmark Tracker (#25) | 1 day | Know if adding alpha | Low | Session Log + Price Feed |
+| ✅ **24** | Benchmark Tracker (#25) | 1 day | Know if adding alpha | Low | Session Log + Price Feed | **DONE** |
 | 🔴 **25** | Execution Quality Tracker (#28) | 1 day | Know true costs | Low | Session Log |
 | 🟡 **26** | Funding Cost Accounting (#30) | 1-2 days | Stop hidden losses | Low | MCP Integration |
 | 🟡 **27** | Alpha Decay Detection (#29) | 1-2 days | Auto-disable bad strategies | Low | Session Log |
