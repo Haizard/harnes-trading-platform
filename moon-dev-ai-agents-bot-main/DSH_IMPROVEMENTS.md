@@ -681,6 +681,8 @@ registry.register(
 
 ## 6. YAML Config & Profiles
 
+> ✅ **IMPLEMENTED** — See `src/yaml_config.py` and `src/tests/test_yaml_config.py` (30 tests passing)
+
 **Problem:** `config.py` is hardcoded Python. No way to switch between paper-trading, production, or backtesting without editing source.
 
 **DSH Pattern:** Profile → Bundles → Patches. Layered YAML composition.
@@ -4065,7 +4067,7 @@ class CorrelationManager:
 | ✅ **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None | **DONE** |
 | 🟢 **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None |
 | 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
-| 🟢 **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None |
+| ✅ **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None | **DONE** |
 | 🟢 **15** | Portfolio Goal System (#13) | 1 day | Portfolio-level decisions | Low | Session Log |
 | 🟢 **16** | Real-Time Signal Processing (#14) | 2-3 days | No more 15-min lag | Medium | Jobs system |
 | 🟢 **17** | Parallel Analysis (#15) | 1-2 days | Faster analysis | Low | Async infrastructure |
