@@ -977,6 +977,8 @@ class IsolatedArchitecture:
 
 ## 9. Weighted Prediction Engine
 
+> ✅ **IMPLEMENTED** — See `src/weighted_predictor.py` and `src/tests/test_weighted_predictor.py` (32 tests passing)
+
 **Problem:** Current `PredictionEngine` uses binary +1/-1 scoring with arbitrary thresholds and equal weighting. No regime awareness.
 
 ```python
@@ -1178,6 +1180,8 @@ class WeightOptimizer:
 
 ## 10. Multi-Stage Signal Validation Pipeline
 
+> ✅ **IMPLEMENTED** — See `src/signal_pipeline.py` and `src/tests/test_feedback_and_tracking.py`
+
 **Problem:** The LLM sees everything at once and has to juggle all concerns. No staged filtering.
 
 **DSH Pattern:** Waterfall pipeline — each stage validates independently.
@@ -1316,6 +1320,8 @@ def create_signal_pipeline() -> SignalPipeline:
 ---
 
 ## 11. Trade Feedback Loop
+
+> ✅ **IMPLEMENTED** — See `src/feedback_loop.py` and `src/tests/test_feedback_and_tracking.py`
 
 **Problem:** No mechanism to learn from past trades. The system makes the same mistakes repeatedly.
 
@@ -3604,6 +3610,8 @@ class PositionSizer:
 
 ## 28. Execution Quality Tracker
 
+> ✅ **IMPLEMENTED** — See `src/execution_tracker.py` and `src/tests/test_feedback_and_tracking.py`
+
 **Problem:** The system sets `slippage_bps = 199` but never measures actual slippage. You don't know if you're losing 0.5% or 2% per trade to execution.
 
 **DSH Pattern:** `Session Log` — every fact is durable, queryable, and immutable.
@@ -4058,9 +4066,9 @@ class CorrelationManager:
 |---|---|---|---|---|---|
 | ✅ **1** | Risk Guard Waterfall (#2) | 1-2 days | Prevents bad trades | Low | Session Log | **DONE** |
 | ✅ **2** | Session Log (#3) | 1 day | Debug every decision | Low | None | **DONE** |
-| 🔴 **3** | Weighted Prediction Engine (#9) | 1-2 days | Better signals | Low | Features exist |
-| 🟡 **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine |
-| 🟡 **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log |
+| ✅ **3** | Weighted Prediction Engine (#9) | 1-2 days | Better signals | Low | Features exist | **DONE** |
+| ✅ **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine | **DONE** |
+| ✅ **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log | **DONE** |
 | 🟡 **6** | Single LLM call with compact context (#16) | 1 day | Better decisions, save money | Medium | Compactor |
 | 🟡 **7** | Human Feedback System (#18) | 1-2 days | Learn from judgment | Low | Session Log |
 | 🟡 **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None |
@@ -4080,7 +4088,7 @@ class CorrelationManager:
 | 🟢 **22** | MCP Integration (#20) | 2-3 days | External services | Medium | None |
 | 🔵 **23** | Process Isolation (#8) | 3-5 days | Fault tolerance | Medium | All above |
 | ✅ **24** | Benchmark Tracker (#25) | 1 day | Know if adding alpha | Low | Session Log + Price Feed | **DONE** |
-| 🔴 **25** | Execution Quality Tracker (#28) | 1 day | Know true costs | Low | Session Log |
+| ✅ **25** | Execution Quality Tracker (#28) | 1 day | Know true costs | Low | Session Log | **DONE** |
 | 🟡 **26** | Funding Cost Accounting (#30) | 1-2 days | Stop hidden losses | Low | MCP Integration |
 | 🟡 **27** | Alpha Decay Detection (#29) | 1-2 days | Auto-disable bad strategies | Low | Session Log |
 | 🟡 **28** | Position Sizing Optimization (#27) | 1-2 days | 2-5x return improvement | Medium | None |
