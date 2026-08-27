@@ -1,0 +1,2 @@
+# Moon Dev's Trading Ideas 🌙
+RSI Mean Reversion Strategy: Buy when RSI(14) is below 30 and sell when RSI(14) is above 70. Use a 15-minute timeframe on BTC-USD.

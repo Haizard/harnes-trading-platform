@@ -1,0 +1,21 @@
+STRATEGY_NAME: KineticExhaustion
+
+STRATEGY_DETAILS:
+The KineticExhaustion strategy is a pure mean-reversion approach designed to capitalize on extreme momentum conditions in the cryptocurrency markets, specifically optimized for BTC-USD on the 15-minute timeframe. It operates on the principle that price velocity (kinetic energy) eventually reaches a point of exhaustion, leading to a high-probability reversal toward the mean.
+
+### 1. Key Strategy Components
+*   **Asset:** BTC-USD (Bitcoin)
+*   **Timeframe:** 15-Minute (15m)
+*   **Core Logic:** Mean Reversion via Momentum Exhaustion
+*   **Primary Indicator:** Relative Strength Index (RSI)
+
+### 2. Entry/Exit Rules
+*   **Long Entry (Buy):**
+    *   Trigger: Enter a long position when the RSI(14) value drops below the 30 threshold.
+    *   Condition: This signifies the "Exhaustion" phase where selling pressure has reached a statistical extreme.
+*   **Exit / Short Entry (Sell):**
+    *   Trigger: Close the long position and/or enter a short position when the RSI(14) value rises above the 70 threshold.
+    *   Condition: This signifies the "Kinetic" peak where buying pressure is likely overextended.
+
+### 3. Risk Management
+*   **Stop Loss:** While the base strategy relies on RSI levels, it is recommended to implement a fixed percentage stop

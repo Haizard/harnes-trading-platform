@@ -1,0 +1,18 @@
+STRATEGY_NAME: KineticOscillation
+
+STRATEGY_DETAILS:
+The KineticOscillation strategy is a mean-reversion system designed to capture price extremes on the BTC-USD pair by identifying exhaustion in price velocity using the Relative Strength Index (RSI). By operating on the 15-minute timeframe, it seeks to capitalize on short-term "rubber band" effects where the price has stretched too far in one direction and is likely to snap back to its mean.
+
+### 1. Key Strategy Components
+*   **Asset:** BTC-USD (Optimized for high liquidity and volatility).
+*   **Timeframe:** 15-Minute (M15).
+*   **Core Logic:** Mean Reversion based on momentum exhaustion.
+*   **Primary Driver:** Relative Strength Index (RSI) acting as a velocity gauge.
+
+### 2. Entry/Exit Rules
+*   **Long Entry (Buy):**
+    *   Wait for the RSI (14) to cross below the 30 level.
+    *   Execute a market buy order when the candle closes while the RSI is in the "Oversold" territory (< 30).
+*   **Short Entry / Exit Long (Sell):**
+    *   Wait for the RSI (14) to cross above the 70 level.
+    *   Execute a market sell order (or close long position

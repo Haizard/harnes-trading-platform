@@ -1,0 +1,42 @@
+# Ignore DeepSeek Harness (separate project)
+deepseek-harness-master/
+
+# Ignore Freebuff internal
+.freebuff/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+cookies.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp data
+temp_data/
+src/audio/
+src/data/sentiment/

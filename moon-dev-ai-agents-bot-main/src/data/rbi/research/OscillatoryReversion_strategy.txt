@@ -1,0 +1,22 @@
+STRATEGY_NAME: OscillatoryReversion
+
+STRATEGY_DETAILS:
+This strategy focuses on capturing mean reversion opportunities within the BTC-USD market by identifying extreme price exhaustion levels using the Relative Strength Index (RSI). By operating on the 15-minute timeframe, it seeks to capitalize on short-term "overstretched" conditions where the price is likely to snap back to its local mean.
+
+### 1. Key Strategy Components
+*   **Asset:** BTC-USD (Bitcoin)
+*   **Timeframe:** 15-Minute (M15)
+*   **Core Logic:** Mean Reversion / Counter-trend
+*   **Indicator:** Relative Strength Index (RSI)
+
+### 2. Entry/Exit Rules
+*   **Long Entry (Buy):**
+    *   Trigger: Enter a long position when the RSI (14-period) crosses below the 30 threshold.
+    *   Context: This signifies an "oversold" condition where selling pressure is likely exhausted.
+*   **Short Exit / Sell Signal:**
+    *   Trigger: Close the long position (or enter a short) when the RSI (14-period) crosses above the 70 threshold.
+    *   Context: This signifies an "overbought" condition where buying momentum is likely peaking.
+
+### 3. Risk Management
+*   **Stop Loss:** To protect against "falling knife" scenarios, a fixed percentage stop loss (e.g., 1.5% - 2% from entry) or a recent swing-low stop loss is recommended.
+*   **Position Sizing:** Moon Dev

@@ -1,0 +1,26 @@
+STRATEGY_NAME: KineticReversal
+
+STRATEGY_DETAILS:
+The KineticReversal strategy is a classic mean-reversion system designed to capture short-term price corrections in high-liquidity environments like BTC-USD. By utilizing the Relative Strength Index (RSI) on a 15-minute timeframe, the strategy identifies periods where price momentum has become overextended (stretched) in either direction, betting on a return to the local mean.
+
+### 1. Key Strategy Components
+*   **Asset Class:** Cryptocurrency (Specifically optimized for BTC-USD).
+*   **Timeframe:** 15-Minute (M15). This provides a balance between noise reduction and high-frequency trading opportunities.
+*   **Market Logic:** Mean Reversion. The strategy assumes that extreme RSI readings are unsustainable and that price will eventually "snap back" to its average.
+
+### 2. Entry/Exit Rules
+*   **Long Entry (Buy):** Enter a long position when the RSI (14) crosses below the **30** level. This indicates the asset is technically "oversold" on the 15-minute lookback period.
+*   **Short Exit/Sell (Close):** Close the long position (or initiate a sell) when the RSI (14) crosses above the **70** level. This indicates the asset has reached an "overbought" state and the upward momentum is likely exhausted.
+*   **Execution Note:** Entries and exits should ideally be confirmed at the close of the 15-minute candle to avoid "wick" traps where the RSI briefly touches a level but retreats before the interval ends.
+
+### 3. Risk Management
+*   **Stop Loss Placement:** Since RSI can stay oversold in a strong downtrend, it is recommended to place a hard stop loss 1.5% - 2% below the entry price or below the recent swing low.
+*   **Position Sizing:** Given the volatility of Bitcoin, Moon Dev recommends using a consistent risk-per-trade (e.g., 1-2% of total account equity).
+*   **Trend Filtering (Optional Enhancement):** To avoid "falling knives," this strategy performs best in sideways or ranging markets. In a strong trending market, consider only taking trades that align with the higher timeframe trend (e.g., 4H timeframe).
+
+### 4. Required Indicators
+*   **Relative Strength Index (RSI):**
+    *   **Length:** 14 periods.
+    *   **Lower Bound:** 30 (Oversold).
+    *   **Upper Bound:** 70 (Overbought).
+    *   **Source:** Close Price.
