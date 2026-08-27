@@ -775,6 +775,8 @@ class ProfileLoader:
 
 ## 7. Async Scheduling
 
+> ✅ **IMPLEMENTED** — See `src/async_scheduler.py` and `src/tests/test_remaining_features.py`
+
 **Problem:** `time.sleep(300)` blocks the entire process. All agents freeze during sleep.
 
 **DSH Pattern:** `ctx.jobs` — background jobs with cooperative cancellation.
@@ -898,6 +900,8 @@ await runner.start()
 ---
 
 ## 8. Process Isolation
+
+> ✅ **IMPLEMENTED** — See `src/process_isolation.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** All agents, MongoDB connections, and trading logic share one Python process. A crash in one kills everything.
 
@@ -1450,6 +1454,8 @@ class TradeFeedbackLoop:
 
 ## 12. Ensemble Strategy System
 
+> ✅ **IMPLEMENTED** — See `src/ensemble_strategy.py` and `src/tests/test_remaining_features.py`
+
 **Problem:** Only one strategy runs at a time. No A/B testing or combination.
 
 **DSH Pattern:** Capability seams — Service Definition / Provider / Consumer.
@@ -1742,6 +1748,8 @@ class GoalSystem:
 
 ## 14. Real-Time Signal Processing
 
+> ✅ **IMPLEMENTED** — See `src/async_scheduler.py` (real-time job execution)
+
 **Problem:** 15-minute polling cycle means signals expire before execution.
 
 **DSH Pattern:** `ctx.jobs` — continuous background processing.
@@ -1854,6 +1862,8 @@ class RealTimePositionMonitor:
 ---
 
 ## 15. Parallel Analysis
+
+> ✅ **IMPLEMENTED** — See `src/async_scheduler.py` (parallel job execution)
 
 **Problem:** Sequential analysis — one token at a time, one LLM call at a time.
 
@@ -2024,6 +2034,8 @@ class TradingCompactor:
 ---
 
 ## 17. Multi-Step Trade Planning (Plan Mode)
+
+> ✅ **IMPLEMENTED** — See `src/trade_planner.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** Most trading decisions are impulsive — "BUY now" without considering the full lifecycle.
 
@@ -2230,6 +2242,8 @@ class TradePlanner:
 
 ## 18. Human Feedback System
 
+> ✅ **IMPLEMENTED** — See `src/human_feedback.py` and `src/tests/test_remaining_features.py`
+
 **Problem:** The system never learns from human judgment — only from PnL numbers.
 
 **DSH Pattern:** `command-feedback` + `message-feedback` — immutable remarks + editable per-message ratings.
@@ -2356,6 +2370,8 @@ class FeedbackSystem:
 ---
 
 ## 19. Spill & Smart Data Storage
+
+> ✅ **IMPLEMENTED** — See `src/spill_storage.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** Market data dumps flood the LLM prompt with noise. Too much context = worse decisions.
 
@@ -2504,6 +2520,8 @@ class SmartDataPacker:
 ---
 
 ## 20. MCP Integration — External Services
+
+> ✅ **IMPLEMENTED** — See `src/mcp_registry.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** Each external data source (CoinGlass, Dune, Birdeye) requires custom API wrappers.
 
@@ -2772,6 +2790,8 @@ registry.register('log_integrity', invariant_session_log_integrity)
 ---
 
 ## 22. Session Query — Trade History Search
+
+> ✅ **IMPLEMENTED** — See `src/session_query.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** No way to search trade history. Can't answer "when did I last profit on AI16Z?" or "what's my win rate in ranging markets?"
 
@@ -3381,6 +3401,8 @@ async def print_daily_benchmark():
 
 ## 26. Walk-Forward Backtesting — Prevent Overfitting
 
+> ✅ **IMPLEMENTED** — See `src/walk_forward.py` and `src/tests/test_remaining_features.py`
+
 **Problem:** The `BacktestEngine` exists but has no out-of-sample validation. Strategies that look good in backtest often fail live because they're overfitted to historical noise.
 
 **DSH Pattern:** `Plan Mode` — structured multi-step validation before deployment.
@@ -3830,6 +3852,8 @@ class AlphaDecayDetector:
 
 ## 30. Funding Cost Accounting
 
+> ✅ **IMPLEMENTED** — See `src/funding_costs.py` and `src/tests/test_remaining_features.py`
+
 **Problem:** On perpetual futures, you pay funding every 8 hours. A long position pays 0.01-0.1% per period = 0.3-3% per day. This cost is never tracked.
 
 **DSH Pattern:** `MCP Integration` — connect to funding rate data as a standard capability seam.
@@ -3930,6 +3954,8 @@ class FundingCostTracker:
 ---
 
 ## 31. Portfolio Correlation Management
+
+> ✅ **IMPLEMENTED** — See `src/correlation_manager.py` and `src/tests/test_remaining_features.py`
 
 **Problem:** The system collects correlation data (Gold, BTC) but never uses it for portfolio construction. Holding 5 tokens that are 90% correlated to BTC is the same as being 100% long BTC — just with more fees.
 
@@ -4084,30 +4110,30 @@ class CorrelationManager:
 | ✅ **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine | **DONE** |
 | ✅ **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log | **DONE** |
 | ✅ **6** | Single LLM call with compact context (#16) | 1 day | Better decisions, save money | Medium | Compactor | **DONE** |
-| 🟡 **7** | Human Feedback System (#18) | 1-2 days | Learn from judgment | Low | Session Log |
+| ✅ **7** | Human Feedback System (#18) | 1-2 days | Learn from judgment | Low | Session Log | **DONE** |
 | ✅ **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None | **DONE** |
 | ✅ **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None | **DONE** |
 | ✅ **10** | Runtime Invariants (#21) | 1 day | Safety guarantees | Low | None | **DONE** |
 | ✅ **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None | **DONE** |
 | ✅ **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None | **DONE** |
-| 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
+| ✅ **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop | **DONE** |
 | ✅ **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None | **DONE** |
 | ✅ **15** | Portfolio Goal System (#13) | 1 day | Portfolio-level decisions | Low | Session Log | **DONE** |
-| 🟢 **16** | Real-Time Signal Processing (#14) | 2-3 days | No more 15-min lag | Medium | Jobs system |
-| 🟢 **17** | Parallel Analysis (#15) | 1-2 days | Faster analysis | Low | Async infrastructure |
-| 🟢 **18** | Async Scheduling (#7) | 2 days | Non-blocking | Low | None |
-| 🟢 **19** | Spill & Smart Data Storage (#19) | 1 day | Reduce LLM noise | Low | None |
-| 🟢 **20** | Session Query (#22) | 1-2 days | Search trade history | Low | Session Log |
-| 🟢 **21** | Multi-Step Trade Planning (#17) | 2 days | Structured trades | Medium | Risk Guard + Log |
-| 🟢 **22** | MCP Integration (#20) | 2-3 days | External services | Medium | None |
-| 🔵 **23** | Process Isolation (#8) | 3-5 days | Fault tolerance | Medium | All above |
+| ✅ **16** | Real-Time Signal Processing (#14) | 2-3 days | No more 15-min lag | Medium | Jobs system | **DONE** |
+| ✅ **17** | Parallel Analysis (#15) | 1-2 days | Faster analysis | Low | Async infrastructure | **DONE** |
+| ✅ **18** | Async Scheduling (#7) | 2 days | Non-blocking | Low | None | **DONE** |
+| ✅ **19** | Spill & Smart Data Storage (#19) | 1 day | Reduce LLM noise | Low | None | **DONE** |
+| ✅ **20** | Session Query (#22) | 1-2 days | Search trade history | Low | Session Log | **DONE** |
+| ✅ **21** | Multi-Step Trade Planning (#17) | 2 days | Structured trades | Medium | Risk Guard + Log | **DONE** |
+| ✅ **22** | MCP Integration (#20) | 2-3 days | External services | Medium | None | **DONE** |
+| ✅ **23** | Process Isolation (#8) | 3-5 days | Fault tolerance | Medium | All above | **DONE** |
 | ✅ **24** | Benchmark Tracker (#25) | 1 day | Know if adding alpha | Low | Session Log + Price Feed | **DONE** |
 | ✅ **25** | Execution Quality Tracker (#28) | 1 day | Know true costs | Low | Session Log | **DONE** |
-| 🟡 **26** | Funding Cost Accounting (#30) | 1-2 days | Stop hidden losses | Low | MCP Integration |
+| ✅ **26** | Funding Cost Accounting (#30) | 1-2 days | Stop hidden losses | Low | MCP Integration | **DONE** |
 | ✅ **27** | Alpha Decay Detection (#29) | 1-2 days | Auto-disable bad strategies | Low | Session Log | **DONE** |
 | ✅ **28** | Position Sizing Optimization (#27) | 1-2 days | 2-5x return improvement | Medium | None | **DONE** |
-| 🟢 **29** | Walk-Forward Backtesting (#26) | 3-5 days | Prevent overfitting | Low | BacktestEngine |
-| 🟢 **30** | Correlation Management (#31) | 1-2 days | True diversification | Medium | Price Feed |
+| ✅ **29** | Walk-Forward Backtesting (#26) | 3-5 days | Prevent overfitting | Low | BacktestEngine | **DONE** |
+| ✅ **30** | Correlation Management (#31) | 1-2 days | True diversification | Medium | Price Feed | **DONE** |
 
 ## Phased Timeline
 
