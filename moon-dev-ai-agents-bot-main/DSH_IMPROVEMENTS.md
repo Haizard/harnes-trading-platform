@@ -1629,6 +1629,8 @@ class EnsembleStrategy(Provider):
 
 ## 13. Portfolio Goal System
 
+> ✅ **IMPLEMENTED** — See `src/portfolio_goals.py` and `src/tests/test_advanced_features.py`
+
 **Problem:** No portfolio-level objective. Individual trades are made without considering the bigger picture.
 
 **DSH Pattern:** `ctx.goals` — one active goal per session with revision tracking.
@@ -1951,6 +1953,8 @@ class ParallelAnalyzer:
 ---
 
 ## 16. LLM Context Compaction
+
+> ✅ **IMPLEMENTED** — See `src/context_compactor.py` and `src/tests/test_advanced_features.py`
 
 **Problem:** LLMs get raw OHLCV dumps and struggle with noise. Too much context = worse decisions.
 
@@ -3504,6 +3508,8 @@ class WalkForwardValidator:
 
 ## 27. Volatility-Adjusted Position Sizing
 
+> ✅ **IMPLEMENTED** — See `src/position_sizer.py` and `src/tests/test_advanced_features.py`
+
 **Problem:** Every trade is $3 regardless of confidence or market volatility. A 90% confidence signal in a calm market gets the same size as a 55% confidence signal in a volatile crash.
 
 **DSH Pattern:** `Goal System` — portfolio-level objectives that adjust parameters dynamically.
@@ -3715,6 +3721,8 @@ class ExecutionTracker:
 ---
 
 ## 29. Alpha Decay Detection
+
+> ✅ **IMPLEMENTED** — See `src/alpha_decay.py` and `src/tests/test_advanced_features.py`
 
 **Problem:** A strategy that worked last month may stop working this month. There's no mechanism to detect when signals expire.
 
@@ -4075,7 +4083,7 @@ class CorrelationManager:
 | ✅ **3** | Weighted Prediction Engine (#9) | 1-2 days | Better signals | Low | Features exist | **DONE** |
 | ✅ **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine | **DONE** |
 | ✅ **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log | **DONE** |
-| 🟡 **6** | Single LLM call with compact context (#16) | 1 day | Better decisions, save money | Medium | Compactor |
+| ✅ **6** | Single LLM call with compact context (#16) | 1 day | Better decisions, save money | Medium | Compactor | **DONE** |
 | 🟡 **7** | Human Feedback System (#18) | 1-2 days | Learn from judgment | Low | Session Log |
 | ✅ **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None | **DONE** |
 | ✅ **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None | **DONE** |
@@ -4084,7 +4092,7 @@ class CorrelationManager:
 | ✅ **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None | **DONE** |
 | 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
 | ✅ **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None | **DONE** |
-| 🟢 **15** | Portfolio Goal System (#13) | 1 day | Portfolio-level decisions | Low | Session Log |
+| ✅ **15** | Portfolio Goal System (#13) | 1 day | Portfolio-level decisions | Low | Session Log | **DONE** |
 | 🟢 **16** | Real-Time Signal Processing (#14) | 2-3 days | No more 15-min lag | Medium | Jobs system |
 | 🟢 **17** | Parallel Analysis (#15) | 1-2 days | Faster analysis | Low | Async infrastructure |
 | 🟢 **18** | Async Scheduling (#7) | 2 days | Non-blocking | Low | None |
@@ -4096,8 +4104,8 @@ class CorrelationManager:
 | ✅ **24** | Benchmark Tracker (#25) | 1 day | Know if adding alpha | Low | Session Log + Price Feed | **DONE** |
 | ✅ **25** | Execution Quality Tracker (#28) | 1 day | Know true costs | Low | Session Log | **DONE** |
 | 🟡 **26** | Funding Cost Accounting (#30) | 1-2 days | Stop hidden losses | Low | MCP Integration |
-| 🟡 **27** | Alpha Decay Detection (#29) | 1-2 days | Auto-disable bad strategies | Low | Session Log |
-| 🟡 **28** | Position Sizing Optimization (#27) | 1-2 days | 2-5x return improvement | Medium | None |
+| ✅ **27** | Alpha Decay Detection (#29) | 1-2 days | Auto-disable bad strategies | Low | Session Log | **DONE** |
+| ✅ **28** | Position Sizing Optimization (#27) | 1-2 days | 2-5x return improvement | Medium | None | **DONE** |
 | 🟢 **29** | Walk-Forward Backtesting (#26) | 3-5 days | Prevent overfitting | Low | BacktestEngine |
 | 🟢 **30** | Correlation Management (#31) | 1-2 days | True diversification | Medium | Price Feed |
 
