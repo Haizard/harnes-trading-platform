@@ -49,11 +49,12 @@ class RiskConfig:
 
 @dataclass
 class ModelConfig:
-    """AI model settings."""
-    primary: str = "gemini-2.0-flash"
-    temperature: float = 0.7
+    """AI model settings — AWS Bedrock."""
+    primary: str = "qwen.qwen3-coder-next"  # AWS Bedrock model ID
+    temperature: float = 0.3  # Lower = more precise
     max_tokens: int = 4096
-    fallback: str = "claude-3-haiku-20240307"
+    region: str = "us-east-1"  # AWS Bedrock region
+    fallback: str = "anthropic.claude-3-haiku-20241022-v1:0"  # Backup model
 
 @dataclass
 class TokenConfig:
@@ -311,9 +312,10 @@ def create_default_profiles(base_dir: str = None):
                 'use_ai_confirmation': True,
             },
             'model': {
-                'primary': 'gemini-2.0-flash',
-                'temperature': 0.7,
+                'primary': 'qwen.qwen3-coder-next',
+                'temperature': 0.3,
                 'max_tokens': 4096,
+                'region': 'us-east-1',
             },
             'trading': {
                 'usd_size': 25,
@@ -343,6 +345,7 @@ def create_default_profiles(base_dir: str = None):
             },
             'model': {
                 'temperature': 0.3,
+                'primary': 'qwen.qwen3-coder-next',
             },
         },
         'production': {
@@ -357,6 +360,7 @@ def create_default_profiles(base_dir: str = None):
             },
             'model': {
                 'temperature': 0.3,
+                'primary': 'qwen.qwen3-coder-next',
             },
         },
         'backtest': {
@@ -366,6 +370,9 @@ def create_default_profiles(base_dir: str = None):
             'risk': {
                 'max_loss_usd': 100,
                 'max_gain_usd': 100,
+            },
+            'model': {
+                'temperature': 0.1,
             },
         },
     }

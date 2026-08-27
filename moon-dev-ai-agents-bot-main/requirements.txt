@@ -21,7 +21,8 @@ backtesting>=0.3.3
 TA-Lib>=0.4.24
 moviepy>=1.0.3
 tqdm>=4.66.1
-anthropic
+boto3>=1.34.0
+botocore>=1.34.0
 solders
 binance-connector
 motor

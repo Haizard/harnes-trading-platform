@@ -5,14 +5,8 @@ Built with love by Moon Dev 🚀
 Dez the Whale Agent tracks open interest changes across different timeframes and announces market moves if she sees anomalies 
 """
 
-# Model override settings
-# Set to "0" to use config.py's AI_MODEL setting
-# Available models:
-# - "deepseek-chat" (DeepSeek's V3 model - fast & efficient)
-# - "deepseek-reasoner" (DeepSeek's R1 reasoning model)
-# - "0" (Use config.py's AI_MODEL setting)
-MODEL_OVERRIDE = "deepseek-chat"  # Set to "0" to disable override
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"  # Base URL for DeepSeek API
+# AWS Bedrock Configuration (replaces DeepSeek/OpenAI/Anthropic)
+# See bedrock_llm.py for all AI calls
 
 import os
 import pandas as pd
@@ -20,7 +14,6 @@ import time
 from datetime import datetime, timedelta
 from termcolor import colored, cprint
 from dotenv import load_dotenv
-import openai
 from pathlib import Path
 from src import nice_funcs as n
 from src import nice_funcs_hl as hl  # Add import for hyperliquid functions
@@ -29,7 +22,8 @@ from collections import deque
 from src.agents.base_agent import BaseAgent
 import traceback
 import numpy as np
-import anthropic
+import asyncio
+from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions, is_bedrock_configured
 
 # Get the project root directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -43,15 +37,14 @@ LOOKBACK_PERIODS = {
 # Whale Detection Settings
 WHALE_THRESHOLD_MULTIPLIER = 1.31 #1.25  # Multiplier for average change to detect whale activity (e.g. 1.25 = 25% above average)
 
-# AI Settings - Override config.py if set
+# AI Settings — all via AWS Bedrock now
 from src import config
 
-# Only set these if you want to override config.py settings
-AI_MODEL = False  # Set to model name to override config.AI_MODEL
-AI_TEMPERATURE = 0  # Set > 0 to override config.AI_TEMPERATURE
-AI_MAX_TOKENS = 50  # Set > 0 to override config.AI_MAX_TOKENS
+AI_MODEL = config.AI_MODEL
+AI_TEMPERATURE = config.AI_TEMPERATURE
+AI_MAX_TOKENS = config.AI_MAX_TOKENS
 
-# Voice settings
+# Voice settings (OpenAI TTS for voice announcements)
 VOICE_MODEL = "tts-1"  # or tts-1-hd for higher quality
 VOICE_NAME = "shimmer"   # Options: alloy, echo, fable, onyx, nova, shimmer
 VOICE_SPEED = 1      # 0.25 to 4.0
@@ -78,50 +71,14 @@ class WhaleAgent(BaseAgent):
         """Initialize Dez the Whale Agent"""
         super().__init__('whale')  # Initialize base agent with type
         
-        # Set AI parameters - use config values unless overridden
-        self.ai_model = MODEL_OVERRIDE if MODEL_OVERRIDE != "0" else config.AI_MODEL
-        self.ai_temperature = AI_TEMPERATURE if AI_TEMPERATURE > 0 else config.AI_TEMPERATURE
-        self.ai_max_tokens = AI_MAX_TOKENS if AI_MAX_TOKENS > 0 else config.AI_MAX_TOKENS
+        # Set AI parameters from config (all via AWS Bedrock)
+        self.ai_model = config.AI_MODEL
+        self.ai_temperature = config.AI_TEMPERATURE
+        self.ai_max_tokens = config.AI_MAX_TOKENS
         
-        print(f"🤖 Using AI Model: {self.ai_model}")
-        if AI_MODEL or AI_TEMPERATURE > 0 or AI_MAX_TOKENS > 0:
-            print("⚠️ Note: Using some override settings instead of config.py defaults")
-            if AI_MODEL:
-                print(f"  - Model: {AI_MODEL}")
-            if AI_TEMPERATURE > 0:
-                print(f"  - Temperature: {AI_TEMPERATURE}")
-            if AI_MAX_TOKENS > 0:
-                print(f"  - Max Tokens: {AI_MAX_TOKENS}")
-        
-        load_dotenv()
-        
-        # Get API keys
-        openai_key = os.getenv("OPENAI_KEY")
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        
-        if not openai_key:
-            raise ValueError("🚨 OPENAI_KEY not found in environment variables!")
-        if not anthropic_key:
-            raise ValueError("🚨 ANTHROPIC_KEY not found in environment variables!")
-            
-        openai.api_key = openai_key
-        self.client = anthropic.Anthropic(api_key=anthropic_key)
-
-        # Initialize DeepSeek client if needed
-        if "deepseek" in self.ai_model.lower():
-            deepseek_key = os.getenv("DEEPSEEK_KEY")
-            if deepseek_key:
-                self.deepseek_client = openai.OpenAI(
-                    api_key=deepseek_key,
-                    base_url=DEEPSEEK_BASE_URL
-                )
-                print("🚀 Moon Dev's Whale Agent using DeepSeek override!")
-            else:
-                self.deepseek_client = None
-                print("⚠️ DEEPSEEK_KEY not found - DeepSeek model will not be available")
-        else:
-            self.deepseek_client = None
-            print(f"🎯 Moon Dev's Whale Agent using Claude model: {self.ai_model}!")
+        print(f"🤖 Using AI Model: {self.ai_model} (AWS Bedrock)")
+        print(f"  - Region: {config.AWS_BEDROCK_REGION if hasattr(config, 'AWS_BEDROCK_REGION') else 'us-east-1'}")
+        print(f"  - Bedrock configured: {is_bedrock_configured()}")
         
         # Initialize Moon Dev API with correct base URL
         self.api = MoonDevAPI(base_url="http://api.moondev.com:8000")
@@ -401,41 +358,17 @@ class WhaleAgent(BaseAgent):
                 market_data=market_data_str
             )
             
-            # Use either DeepSeek or Claude based on model setting
-            if "deepseek" in self.ai_model.lower():
-                if not self.deepseek_client:
-                    raise ValueError("🚨 DeepSeek client not initialized - check DEEPSEEK_KEY")
-                    
-                print(f"\n🤖 Analyzing whale movement with DeepSeek model: {self.ai_model}...")
-                # Make DeepSeek API call
-                response = self.deepseek_client.chat.completions.create(
-                    model=self.ai_model,  # Use the actual model from override
-                    messages=[
-                        {"role": "system", "content": WHALE_ANALYSIS_PROMPT},
-                        {"role": "user", "content": context}
-                    ],
+            # Use AWS Bedrock for AI analysis
+            print(f"\n🤖 Analyzing whale movement with Bedrock model: {self.ai_model}...")
+            response_obj = asyncio.run(bedrock_chat(
+                [ChatMessage(role="user", content=context)],
+                ChatOptions(
+                    system_prompt=WHALE_ANALYSIS_PROMPT,
                     max_tokens=self.ai_max_tokens,
                     temperature=self.ai_temperature,
-                    stream=False
-                )
-                response_text = response.choices[0].message.content.strip()
-            else:
-                print(f"\n🤖 Analyzing whale movement with Claude model: {self.ai_model}...")
-                # Get AI analysis using Claude
-                message = self.client.messages.create(
-                    model=self.ai_model,
-                    max_tokens=self.ai_max_tokens,
-                    temperature=self.ai_temperature,
-                    messages=[{
-                        "role": "user",
-                        "content": context
-                    }]
-                )
-                # Handle both string and list responses
-                if isinstance(message.content, list):
-                    response_text = message.content[0].text if message.content else ""
-                else:
-                    response_text = message.content
+                ),
+            ))
+            response_text = response_obj.text
             
             # Handle response
             if not response_text:

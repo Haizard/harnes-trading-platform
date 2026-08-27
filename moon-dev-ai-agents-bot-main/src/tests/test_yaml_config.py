@@ -83,8 +83,8 @@ class TestConfigs:
 
     def test_model_defaults(self):
         config = ModelConfig()
-        assert config.primary == "gemini-2.0-flash"
-        assert config.temperature == 0.7
+        assert config.primary == "qwen.qwen3-coder-next"
+        assert config.temperature == 0.3
 
     def test_token_config(self):
         t = TokenConfig(address="AAA", name="Test", enabled=True)

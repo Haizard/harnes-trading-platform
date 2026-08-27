@@ -58,7 +58,6 @@ Remember:
 - Cash must be stored as USDC using USDC_ADDRESS: {USDC_ADDRESS}
 """
 
-import anthropic
 import os
 import pandas as pd
 import json
@@ -82,12 +81,13 @@ except Exception:
 # Load environment variables
 load_dotenv()
 
+from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions, is_bedrock_configured
+
 class TradingAgent:
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_KEY"))
         self.recommendations_df = pd.DataFrame(columns=['token', 'action', 'confidence', 'reasoning'])
         self.prediction_engine = PredictionEngine() if PREDICTION_AVAILABLE else None
-        print("🤖 Moon Dev's LLM Trading Agent initialized!")
+        print(f"🤖 Moon Dev's LLM Trading Agent initialized (Bedrock: {is_bedrock_configured()})")
 
     def analyze_market_data(self, token, market_data):
         """Analyze market data using Claude, enriched by PredictionEngine v2 signals."""
@@ -122,26 +122,17 @@ Consider this signal alongside your technical analysis, especially the buy press
 Additional Strategy Signals:
 {json.dumps(market_data['strategy_signals'], indent=2)}
                 """
-            message = self.client.messages.create(
-                model=AI_MODEL,
-                max_tokens=AI_MAX_TOKENS,
-                temperature=AI_TEMPERATURE,
-                messages=[
-                    {
-                        "role": "user", 
-                        "content": f"{TRADING_PROMPT.format(strategy_context=strategy_context)}\n\nMarket Data to Analyze:\n{market_data}"
-                    }
-                ]
-            )
-            
-            # Parse the response - handle both string and list responses
-            response = message.content
-            if isinstance(response, list):
-                # Extract text from TextBlock objects if present
-                response = '\n'.join([
-                    item.text if hasattr(item, 'text') else str(item)
-                    for item in response
-                ])
+            # Use AWS Bedrock for AI analysis
+            import asyncio
+            response_obj = asyncio.run(bedrock_chat(
+                [ChatMessage(role="user", content=f"{TRADING_PROMPT.format(strategy_context=strategy_context)}\n\nMarket Data to Analyze:\n{market_data}")],
+                ChatOptions(
+                    system_prompt="You are Moon Dev's AI Trading Assistant analyzing crypto markets.",
+                    max_tokens=AI_MAX_TOKENS,
+                    temperature=AI_TEMPERATURE,
+                ),
+            ))
+            response = response_obj.text
             
             lines = response.split('\n')
             action = lines[0].strip() if lines else "NOTHING"
@@ -193,13 +184,9 @@ Additional Strategy Signals:
             cprint(f"🎯 Maximum position size: ${max_position_size:.2f} ({MAX_POSITION_PERCENTAGE}% of ${usd_size:.2f})", "cyan")
             
             # Get allocation from AI
-            message = self.client.messages.create(
-                model=AI_MODEL,
-                max_tokens=AI_MAX_TOKENS,
-                temperature=AI_TEMPERATURE,
-                messages=[{
-                    "role": "user", 
-                    "content": f"""You are Moon Dev's Portfolio Allocation AI 🌙
+            # Use AWS Bedrock for portfolio allocation
+            response_obj = asyncio.run(bedrock_chat(
+                [ChatMessage(role="user", content=f"""You are Moon Dev's Portfolio Allocation AI 🌙
 
 Given:
 - Total portfolio size: ${usd_size}
@@ -219,11 +206,16 @@ Example format:
     "token_address": amount_in_usd,
     "{USDC_ADDRESS}": remaining_cash_amount  # Use exact USDC address
 }}"""
-                }]
-            )
+            )],
+            ChatOptions(
+                system_prompt="You are Moon Dev's Portfolio Allocation AI.",
+                max_tokens=AI_MAX_TOKENS,
+                temperature=AI_TEMPERATURE,
+            ),
+            ))
             
             # Parse the response
-            allocations = self.parse_allocation_response(str(message.content))
+            allocations = self.parse_allocation_response(response_obj.text)
             if not allocations:
                 return None
                 

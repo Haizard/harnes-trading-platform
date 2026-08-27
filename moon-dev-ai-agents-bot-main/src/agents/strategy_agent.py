@@ -6,7 +6,6 @@ Handles all strategy-based trading decisions
 from src.config import *
 import json
 from termcolor import cprint
-import anthropic
 import time
 import os
 import importlib
@@ -15,6 +14,7 @@ import pkgutil
 from src import nice_funcs as n
 from src.agents.research_agent import ResearchAgent
 import asyncio
+from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions, is_bedrock_configured
 
 # ✨ PredictionEngine v2 — autonomous multi-factor signals
 try:
@@ -63,7 +63,6 @@ class StrategyAgent:
     def __init__(self):
         """Initialize the Strategy Agent"""
         self.enabled_strategies = []
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_KEY"))
         self.research_agent = ResearchAgent()
         self.predictor = PredictionEngine() if PREDICTION_AVAILABLE else None
         if self.predictor:
@@ -111,23 +110,19 @@ class StrategyAgent:
             # Format signals for prompt
             signals_str = json.dumps(signals, indent=2)
             
-            message = self.client.messages.create(
-                model=AI_MODEL,
-                max_tokens=AI_MAX_TOKENS,
-                temperature=AI_TEMPERATURE,
-                messages=[{
-                    "role": "user",
-                    "content": STRATEGY_EVAL_PROMPT.format(
-                        research_data=market_data.get('research_report', 'No research available'),
-                        strategy_signals=signals_str,
-                        market_data=market_data.get('ohlcv', 'No OHLCV available')
-                    )
-                }]
+            response_obj = await bedrock_chat(
+                [ChatMessage(role="user", content=STRATEGY_EVAL_PROMPT.format(
+                    research_data=market_data.get('research_report', 'No research available'),
+                    strategy_signals=signals_str,
+                    market_data=market_data.get('ohlcv', 'No OHLCV available')
+                ))],
+                ChatOptions(
+                    system_prompt="You are Moon Dev's Advanced Strategy Analyst.",
+                    max_tokens=AI_MAX_TOKENS,
+                    temperature=AI_TEMPERATURE,
+                ),
             )
-            
-            response = message.content
-            if isinstance(response, list):
-                response = response[0].text if hasattr(response[0], 'text') else str(response[0])
+            response = response_obj.text
             
             # Parse response
             lines = response.split('\n')

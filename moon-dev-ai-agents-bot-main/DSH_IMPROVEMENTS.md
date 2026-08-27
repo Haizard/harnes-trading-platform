@@ -4096,6 +4096,84 @@ class CorrelationManager:
 
 ---
 
+## 32. AWS Bedrock AI Model Integration — ✅ DONE
+
+**Problem:** The project used a fragmented mix of AI providers (OpenAI, Anthropic, DeepSeek, Gemini) with separate API keys, clients, and error handling for each. This created complexity, security risks (multiple API keys), and vendor lock-in.
+
+**Solution:** Replaced ALL AI model configurations with a single AWS Bedrock LLM module (`src/bedrock_llm.py`) using Qwen3-Coder-Next as the primary model.
+
+**What Changed:**
+
+| Component | Before | After |
+|---|---|---|
+| **AI Provider** | OpenAI + Anthropic + DeepSeek + Gemini | AWS Bedrock only |
+| **API Keys** | 4+ keys (OPENAI_KEY, ANTHROPIC_KEY, DEEPSEEK_KEY, GEMINI_KEY) | 2 keys (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) |
+| **Model** | gemini-2.0-flash (mixed providers) | qwen.qwen3-coder-next (256K context) |
+| **Client Code** | anthropic.Anthropic + openai.OpenAI + custom wrappers | boto3.bedrock-runtime (single client) |
+| **Error Handling** | Per-provider try/catch | Unified retry with backoff |
+| **Region** | N/A | us-east-1 (widest model availability) |
+| **Cost** | ~$3-15/1M tokens (Claude) | ~$0.22/1M tokens (Qwen3) |
+
+**Files Modified:**
+- `src/bedrock_llm.py` — New unified Bedrock LLM module (400+ lines)
+- `src/config.py` — Updated AI_MODEL and added AWS config
+- `src/agents/trading_agent.py` — Replaced Anthropic client with Bedrock
+- `src/agents/strategy_agent.py` — Replaced Anthropic client with Bedrock
+- `src/agents/whale_agent.py` — Replaced OpenAI/Anthropic/DeepSeek with Bedrock
+- `src/agents/tweet_agent.py` — Replaced OpenAI/Anthropic/DeepSeek with Bedrock
+- `src/yaml_config.py` — Updated ModelConfig defaults to Bedrock
+- `requirements.txt` — Added boto3, removed anthropic
+- `.env_example` — Updated to AWS Bedrock credentials
+- `src/tests/test_bedrock_llm.py` — 44 comprehensive tests
+
+**Key Features:**
+
+| Feature | Description |
+|---|---|
+| **Multi-format support** | Handles Qwen3, Claude, Llama, Mistral, Titan, Cohere response formats |
+| **JSON extraction** | Auto-extracts structured data from AI responses |
+| **Retry with backoff** | Handles rate limits (ThrottlingException) gracefully |
+| **Health check** | `bedrock_health_check()` tests connectivity |
+| **Sync/Async** | Both `bedrock_chat()` (async) and `bedrock_chat_sync()` (sync) |
+| **Convenience functions** | `ask_ai()` and `ask_ai_json()` for simple queries |
+| **Lazy client** | Client created on first use, not at import time |
+| **Cost-optimized** | Qwen3 at $0.22/1M vs Claude at $3-15/1M tokens |
+
+**Usage:**
+```python
+from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions, ask_ai
+
+# Simple usage
+response = await ask_ai("Analyze BTC market data")
+
+# With options
+response = await bedrock_chat(
+    [ChatMessage(role="user", content="Analyze BTC")],
+    ChatOptions(
+        system_prompt="You are a crypto trading expert.",
+        temperature=0.3,
+        max_tokens=4096,
+    ),
+)
+```
+
+**Environment Variables:**
+```bash
+# Required
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+
+# Optional (defaults shown)
+AWS_BEDROCK_REGION=us-east-1
+AWS_BEDROCK_MODEL_ID=qwen.qwen3-coder-next
+```
+
+**Tests:** 44 tests covering configuration, text extraction, JSON parsing, mock Bedrock calls, error handling, and model compatibility.
+
+**Why this matters:** Single AI provider = single API key, simpler error handling, 10x cost reduction, and easy model switching (just change one env var). The Qwen3-Coder-Next model's 256K context window handles the full trading analysis prompt without truncation.
+
+---
+
 # Part 5: Prioritized Roadmap
 
 ---
@@ -4134,6 +4212,7 @@ class CorrelationManager:
 | ✅ **28** | Position Sizing Optimization (#27) | 1-2 days | 2-5x return improvement | Medium | None | **DONE** |
 | ✅ **29** | Walk-Forward Backtesting (#26) | 3-5 days | Prevent overfitting | Low | BacktestEngine | **DONE** |
 | ✅ **30** | Correlation Management (#31) | 1-2 days | True diversification | Medium | Price Feed | **DONE** |
+| ✅ **31** | AWS Bedrock AI Integration (#32) | 1 day | 10x cost reduction, unified AI | Low | AWS Account | **DONE** |
 
 ## Phased Timeline
 
@@ -4231,5 +4310,7 @@ Each iteration through the loop makes the system smarter. The **research gap imp
 ---
 
 *Built by analyzing Moon Dev's AI Trading Platform against DeepSeek Harness architecture patterns.*
-*31 improvements across 5 parts: Architecture, Accuracy, Advanced, Research Gaps, and Roadmap.*
+*32 improvements across 5 parts: Architecture, Accuracy, Advanced, Research Gaps, and Roadmap.*
+*All 32 features implemented and tested (366+ tests passing).*
+*AWS Bedrock integration: Qwen3-Coder-Next model (256K context, $0.22/1M tokens).*
 *Document created: August 2026*

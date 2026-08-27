@@ -77,13 +77,16 @@ DAYSBACK_4_DATA = 3
 DATA_TIMEFRAME = '1H'  # 1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 8H, 12H, 1D, 3D, 1W, 1M
 SAVE_OHLCV_DATA = False  # 🌙 Set to True to save data permanently, False will only use temp data during run
 
-# AI Model Settings 🤖
-AI_MODEL = "gemini-2.0-flash"  # Model Options:
-                                     # - claude-3-haiku-20240307 (Fast, efficient Claude model)
-                                     # - claude-3-sonnet-20240229 (Balanced Claude model)
-                                     # - claude-3-opus-20240229 (Most powerful Claude model)
+# AI Model Settings 🤖 — AWS Bedrock Qwen3-Coder-Next
+# All AI calls now go through AWS Bedrock (see bedrock_llm.py)
+# Model: qwen.qwen3-coder-next (256K context, low cost, multilingual)
+AI_MODEL = "qwen.qwen3-coder-next"  # AWS Bedrock model ID
 AI_MAX_TOKENS = 4096  # Max tokens for response
-AI_TEMPERATURE = 0.7  # Creativity vs precision (0-1)
+AI_TEMPERATURE = 0.3  # Lower = more precise (0.1 for JSON, 0.3 for trading, 0.7 for creative)
+
+# AWS Bedrock Configuration
+AWS_BEDROCK_REGION = "us-east-1"  # Region with widest model availability
+# AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY should be in .env
 
 # Trading Strategy Agent Settings - MAY NOT BE USED YET 1/5/25
 ENABLE_STRATEGIES = True  # Set this to True to use strategies
