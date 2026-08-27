@@ -257,6 +257,8 @@ async def safe_market_buy(token, amount_usd, slippage):
 
 ## 3. Session Log & Audit Trail
 
+> ✅ **IMPLEMENTED** — See `src/session_log.py` and `src/tests/test_session_log.py` (39 tests passing)
+
 **Problem:** All decisions are ephemeral `print()` statements. No way to reconstruct *why* a trade was made.
 
 **DSH Pattern:** Append-only `SessionEventMap` — every event is durable and queryable.
@@ -4049,7 +4051,7 @@ class CorrelationManager:
 | Priority | Improvement | Effort | Impact | Risk | Dependencies |
 |---|---|---|---|---|---|
 | ✅ **1** | Risk Guard Waterfall (#2) | 1-2 days | Prevents bad trades | Low | Session Log | **DONE** |
-| 🔴 **2** | Session Log (#3) | 1 day | Debug every decision | Low | None |
+| ✅ **2** | Session Log (#3) | 1 day | Debug every decision | Low | None | **DONE** |
 | 🔴 **3** | Weighted Prediction Engine (#9) | 1-2 days | Better signals | Low | Features exist |
 | 🟡 **4** | Signal Validation Pipeline (#10) | 1-2 days | Filters weak signals | Low | Prediction Engine |
 | 🟡 **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log |
