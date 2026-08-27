@@ -533,6 +533,8 @@ bus.emit('market/data', Event(type='market/data', data={...}))
 
 ## 5. Tool Pipeline
 
+> ✅ **IMPLEMENTED** — See `src/order_executor.py` and `src/tests/test_order_executor.py` (21 tests passing)
+
 **Problem:** 4 near-identical entry functions (`elegant_entry`, `breakout_entry`, `ai_entry`, `pnl_close`) with duplicated retry logic.
 
 **DSH Pattern:** `defineTool()` with typed schemas, validation, and lifecycle hooks.
@@ -4065,7 +4067,7 @@ class CorrelationManager:
 | 🟡 **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None |
 | 🟡 **10** | Runtime Invariants (#21) | 1 day | Safety guarantees | Low | None |
 | ✅ **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None | **DONE** |
-| 🟢 **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None |
+| ✅ **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None | **DONE** |
 | 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
 | ✅ **14** | YAML Config & Profiles (#6) | 1 day | Environment switching | Low | None | **DONE** |
 | 🟢 **15** | Portfolio Goal System (#13) | 1 day | Portfolio-level decisions | Low | Session Log |
