@@ -2621,6 +2621,8 @@ mcp_registry.register_server(create_defillama_server())
 
 ## 21. Runtime Invariants — Safety Guarantees
 
+> ✅ **IMPLEMENTED** — See `src/invariants.py` and `src/tests/test_presets_invariants_commands.py`
+
 **Problem:** No runtime checks for impossible states. Corrupted state can cascade silently.
 
 **DSH Pattern:** `ctx.invariants` — runtime assertions that verify system contracts.
@@ -2911,6 +2913,8 @@ class TradeQueryEngine:
 
 ## 23. Trading Commands — Manual Intervention
 
+> ✅ **IMPLEMENTED** — See `src/trading_commands.py` and `src/tests/test_presets_invariants_commands.py`
+
 **Problem:** No way to manually intervene in real-time. To change behavior, you edit `config.py` and restart.
 
 **DSH Pattern:** `ctx.commands` — human commands for interactive control.
@@ -3070,6 +3074,8 @@ Bot: All positions closed successfully.
 ---
 
 ## 24. Risk Presets — One-Click Profiles
+
+> ✅ **IMPLEMENTED** — See `src/risk_presets.py` and `src/tests/test_presets_invariants_commands.py`
 
 **Problem:** Changing risk parameters requires editing multiple config values. Slow during market emergencies.
 
@@ -4071,9 +4077,9 @@ class CorrelationManager:
 | ✅ **5** | Trade Feedback Loop (#11) | 2-3 days | Enables learning | Low | Session Log | **DONE** |
 | 🟡 **6** | Single LLM call with compact context (#16) | 1 day | Better decisions, save money | Medium | Compactor |
 | 🟡 **7** | Human Feedback System (#18) | 1-2 days | Learn from judgment | Low | Session Log |
-| 🟡 **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None |
-| 🟡 **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None |
-| 🟡 **10** | Runtime Invariants (#21) | 1 day | Safety guarantees | Low | None |
+| ✅ **8** | Risk Presets (#24) | 0.5 day | One-click risk changes | Low | None | **DONE** |
+| ✅ **9** | Trading Commands (#23) | 1-2 days | Manual intervention | Low | None | **DONE** |
+| ✅ **10** | Runtime Invariants (#21) | 1 day | Safety guarantees | Low | None | **DONE** |
 | ✅ **11** | Event Bus (#4) | 2-3 days | Decouple agents | Medium | None | **DONE** |
 | ✅ **12** | Tool Pipeline (#5) | 2 days | Dedup code, add logging | Low | None | **DONE** |
 | 🟢 **13** | Ensemble Strategy (#12) | 2-3 days | Multiple strategies | Medium | Feedback Loop |
