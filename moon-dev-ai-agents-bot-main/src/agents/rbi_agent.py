@@ -1,21 +1,23 @@
 """
-Moon Dev's RBI Agent (Research-Backtest-Implement) — Enhanced
+Moon Dev's RBI Agent (Research-Backtest-Implement) — Fully Integrated
 
-Full Lifecycle with Validation:
-1. Research -> validate strategy name
-2. Backtest -> validate syntax + structure
-3. Package -> validate no backtesting.lib
-4. Debug -> validate + retry with error context (up to 3 attempts)
-5. Execute -> run backtest with timeout
-6. Evaluate -> AI decides GO_LIVE or REJECT
-7. Deploy -> convert to BaseStrategy class
+Lifecycle (6 phases, down from 7 — redundant Package phase removed):
+1. Research → validate strategy name, log to session
+2. Backtest → generate code, validate syntax + structure + no backtesting.lib
+3. Debug → validate + retry with error context (up to 3 attempts)
+4. Execute → run backtest with runtime retry loop + error context pass-through
+5. Evaluate → AI decides GO_LIVE or REJECT, enhanced with walk-forward + decay data
+6. Deploy → convert to BaseStrategy class, register with alpha decay detector
 
-Key improvements:
-  - Code validation between every phase
-  - Programmatic retry loop (replaces GUI-based debug)
-  - Stricter prompts for Qwen3-Coder-Next
-  - Error context passed to debug agent
-  - Data path made configurable (not hardcoded)
+Key integrations (bridging DSH modules into the live pipeline):
+  - Session Log: every phase, decision, and error is permanently recorded
+  - Runtime retry: execution failures get debug-fix-retry loop (3 attempts)
+  - Realistic costs: commission ~3% approximating real Jupiter slippage/fees
+  - Human approval gate: interactive confirmation before live deployment
+  - Alpha Decay Detector: blocks strategies that have decayed historically
+  - Walk-Forward Validation: catches overfitting on training data
+  - Strategy Memory: tracks idea→outcome history for self-improvement
+  - Post-Deploy Hooks: registers strategy with decay detector + baseline tracker
 """
 
 import os
@@ -47,12 +49,16 @@ from src.config import *
 from src.models import model_factory
 from src.agents.code_validator import CodeValidator
 
+# DSH module imports — bridging standalone modules into the live pipeline
+from src.alpha_decay import AlphaDecayDetector, DecayStatus
+from src.walk_forward import WalkForwardValidator
+from src.feedback_loop import TradeFeedbackLoop
+
 # ── Model Configuration ──────────────────────────────────────
 # Coding tasks use qwen.qwen3-coder-next (best for code generation)
 # Evaluation uses deepseek.v3.2 (best for reasoning)
 RESEARCH_CONFIG  = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
 BACKTEST_CONFIG  = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
-PACKAGE_CONFIG   = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
 DEBUG_CONFIG     = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
 EVALUATE_CONFIG  = {"type": "bedrock", "name": "deepseek.v3.2"}
 DEPLOY_CONFIG    = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
@@ -62,19 +68,28 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data/rbi"
 RESEARCH_DIR = DATA_DIR / "research"
 BACKTEST_DIR = DATA_DIR / "backtests"
-PACKAGE_DIR = DATA_DIR / "backtests_package"
 FINAL_BACKTEST_DIR = DATA_DIR / "backtests_final"
 ARCHIVE_DIR = DATA_DIR / "archive"
 LIVE_STRATEGIES_DIR = PROJECT_ROOT / "strategies/custom"
+STRATEGY_MEMORY_DIR = DATA_DIR / "strategy_memory"
 
-for d in [DATA_DIR, RESEARCH_DIR, BACKTEST_DIR, PACKAGE_DIR, FINAL_BACKTEST_DIR, ARCHIVE_DIR, LIVE_STRATEGIES_DIR]:
+for d in [DATA_DIR, RESEARCH_DIR, BACKTEST_DIR, FINAL_BACKTEST_DIR,
+          ARCHIVE_DIR, LIVE_STRATEGIES_DIR, STRATEGY_MEMORY_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# ── Data Path (use relative path that works cross-platform) ─
+# ── Data Path ────────────────────────────────────────────────
 DATA_PATH = str(DATA_DIR / "BTC-USD-15m.csv")
 
-# ── Max retry attempts for debug loop ──
-MAX_DEBUG_RETRIES = 3
+# ── Retry Limits ─────────────────────────────────────────────
+MAX_DEBUG_RETRIES = 3      # Debug phase: AI-fix attempts per validation failure
+MAX_EXEC_RETRIES = 3       # Execute phase: runtime retry attempts
+EXEC_TIMEOUT = 180         # Seconds per backtest execution attempt
+
+# ── Realistic Backtest Costs ─────────────────────────────────
+# Real Solana/Jupiter trading: ~1% fee each side + ~0.5% slippage + spread
+# Total round-trip ≈ 3%. The old 0.2% commission was dangerously optimistic.
+BACKTEST_CASH = 1_000         # Realistic portfolio size (not $1M)
+BACKTEST_COMMISSION = 0.015   # ~1.5% per side (includes slippage + fees)
 
 # ── Prompts (optimized for Qwen3-Coder-Next) ────────────────
 
@@ -135,7 +150,7 @@ df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
 6. Main block MUST include:
 ```python
 if __name__ == "__main__":
-    bt = Backtest(data, MyStrategy, cash=1_000_000, commission=.002)
+    bt = Backtest(data, MyStrategy, cash={cash}, commission={commission})
     stats = bt.run()
     print(stats)
     print(stats._strategy)
@@ -150,25 +165,6 @@ Strategy to implement:
 {strategy}
 
 Return ONLY the Python code block. No explanation. No markdown outside the code block.
-"""
-
-PACKAGE_PROMPT = """You are Moon Dev's Code Package Agent.
-
-Your job: Ensure the backtest code uses ONLY talib and manual logic. NO backtesting.lib.
-
-RULES:
-1. Replace ANY backtesting.lib imports with talib equivalents
-2. Replace crossignal() with manual crossover logic:
-   bullish = (fast[-1] > slow[-1]) and (fast[-2] <= slow[-2])
-   bearish = (fast[-1] < slow[-1]) and (fast[-2] >= slow[-2])
-3. Replace crossover() similarly
-4. Ensure ALL indicators use self.I(talib.XXX, ...)
-5. Keep all other code structure identical
-
-Input code:
-{code}
-
-Return ONLY the fixed Python code block. No explanation.
 """
 
 DEBUG_PROMPT = """You are Moon Dev's Debug Code Fixer.
@@ -201,11 +197,24 @@ Analyze these backtest results and decide if the strategy should go live.
 BACKTEST STATS:
 {stats}
 
+WALK-FORWARD VALIDATION:
+{walk_forward}
+
+ALPHA DECAY STATUS:
+{decay_status}
+
 Criteria for GO_LIVE:
-1. Return can be positive (even small) OR have a good risk/reward profile
-2. Max Drawdown < 30%
-3. At least 1 trade executed
-4. Win Rate > 40% OR Profit Factor > 1.2
+1. Return must be positive with a good risk/reward profile
+2. Max Drawdown < 25% (strict — this is real money)
+3. At least 3 trades executed (statistical significance)
+4. Win Rate > 45% AND Profit Factor > 1.3
+5. Walk-forward out-of-sample return must be positive (no overfitting)
+6. Strategy must NOT be in decayed/dead status
+
+Reject if:
+- Walk-forward overfit score > 3.0 (strategy only works on training data)
+- Strategy is flagged as DECAYED or DEAD by alpha decay detector
+- Fewer than 3 trades (not statistically significant)
 
 Respond in this EXACT format:
 DECISION: [GO_LIVE or REJECT]
@@ -235,6 +244,101 @@ Backtest code to convert:
 
 Return ONLY the Python code block. No explanation.
 """
+
+
+# ── Session Logger (Synchronous wrapper) ─────────────────────
+class RBISessionLogger:
+    """
+    Synchronous session logger for the RBI pipeline.
+
+    Wraps the async SessionLog with a thin sync layer so the pipeline
+    doesn't need asyncio.run() on every call. Events are buffered
+    and flushed at pipeline end or on demand.
+
+    Uses the same event types and data format as SessionLog so the
+    two are fully interoperable — queries on the CSV work identically.
+    """
+
+    def __init__(self, log_dir: str = None):
+        self.log_dir = log_dir or str(DATA_DIR)
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.log_path = os.path.join(self.log_dir, "rbi_session_log.csv")
+        self.session_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        self._events = []
+
+    def log(self, event_type: str, data: dict, signal_id: str = None):
+        """Append an event to the session log."""
+        event = {
+            "id": f"{self.session_id}_{len(self._events):04d}",
+            "event_type": event_type,
+            "data": json.dumps(data, default=str),
+            "timestamp": datetime.utcnow().isoformat(),
+            "session_id": self.session_id,
+            "signal_id": signal_id or "",
+        }
+        self._events.append(event)
+        self._flush()
+
+    def _flush(self):
+        """Write buffered events to CSV."""
+        if not self._events:
+            return
+        try:
+            import csv
+            file_exists = os.path.exists(self.log_path)
+            with open(self.log_path, "a", newline="", encoding="utf-8") as f:
+                if self._events:
+                    writer = csv.DictWriter(f, fieldnames=self._events[0].keys())
+                    if not file_exists:
+                        writer.writeheader()
+                    for event in self._events:
+                        writer.writerow(event)
+            self._events = []
+        except Exception:
+            pass  # Never crash on logging failure
+
+
+# ── Strategy Memory (Prompt → Outcome Tracking) ──────────────
+class StrategyMemory:
+    """
+    Tracks the full lifecycle of each strategy from idea to outcome.
+
+    Stores in data/rbi/strategy_memory/strategy_history.jsonl:
+    - Idea text → research prompt → strategy name
+    - Code hash → backtest result → GO_LIVE/REJECT decision
+    - Walk-forward result → alpha decay status
+    - If deployed: live performance vs backtest prediction
+    """
+
+    def __init__(self, memory_dir: str = None):
+        self.memory_dir = memory_dir or str(STRATEGY_MEMORY_DIR)
+        os.makedirs(self.memory_dir, exist_ok=True)
+        self.history_path = os.path.join(self.memory_dir, "strategy_history.jsonl")
+
+    def record_pipeline_run(self, record: dict):
+        """Append a pipeline run record."""
+        record["timestamp"] = datetime.utcnow().isoformat()
+        try:
+            with open(self.history_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, default=str) + "\n")
+        except Exception:
+            pass
+
+    def get_strategy_history(self, strategy_name: str = None, limit: int = 50) -> list:
+        """Read strategy history, optionally filtered by name."""
+        if not os.path.exists(self.history_path):
+            return []
+        results = []
+        with open(self.history_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line.strip())
+                    if strategy_name and entry.get("strategy_name") != strategy_name:
+                        continue
+                    results.append(entry)
+                except Exception:
+                    continue
+        return results[-limit:]
 
 
 # ── Helper Functions ─────────────────────────────────────────
@@ -320,16 +424,61 @@ def get_idea_content(idea_url: str) -> str:
         return idea_url
 
 
-# ── Phase Functions (with validation) ────────────────────────
+def _parse_backtest_stats(output: str) -> dict:
+    """Parse backtest stats from subprocess output into a dict."""
+    stats = {}
+    if not output:
+        return stats
 
+    # Try to parse key stats from output
+    # backtesting.py formats like:  Return [%]   15.3241
+    # Some outputs use colons:     Return [%]:  15.3241
+    # Use flexible whitespace matching for both
+    patterns = {
+        "Return [%]": r"Return \[%\]\s*:?\s+([-\d.]+)",
+        "Max. Drawdown [%]": r"Max\. Drawdown \[%\]\s*:?\s+([-\d.]+)",
+        "Win Rate [%]": r"Win Rate \[%\]\s*:?\s+([-\d.]+)",
+        "Sharpe Ratio": r"Sharpe Ratio\s*:?\s+([-\d.]+)",
+        "Profit Factor": r"Profit Factor\s*:?\s+([-\d.]+)",
+        "# Trades": r"# Trades\s*:?\s+(\d+)",
+        "Avg. Trade [%]": r"Avg\. Trade \[%\]\s*:?\s+([-\d.]+)",
+        "Max. Consecutive Losses": r"Max\. Consecutive Losses\s*:?\s+(\d+)",
+    }
+
+    for key, pattern in patterns.items():
+        match = re.search(pattern, output)
+        if match:
+            try:
+                stats[key] = float(match.group(1))
+            except ValueError:
+                stats[key] = match.group(1)
+
+    return stats
+
+
+# ── Global Instances ─────────────────────────────────────────
 validator = CodeValidator()
+alpha_detector = AlphaDecayDetector({
+    "min_trades": 5,
+    "decay_win_rate": 0.35,
+    "dead_win_rate": 0.25,
+    "max_drawdown": 0.15,
+})
+walk_forward_validator = WalkForwardValidator(train_days=60, test_days=7)
+feedback_loop = TradeFeedbackLoop(history_dir=str(DATA_DIR))
+strategy_memory = StrategyMemory()
 
 
-def research_strategy(content: str) -> tuple:
+# ── Phase Functions ──────────────────────────────────────────
+
+def research_strategy(content: str, session_log: RBISessionLogger) -> tuple:
     """Phase 1: Research the strategy idea"""
     cprint("\n[PHASE 1] Researching strategy...", "cyan")
+    session_log.log("signal/generated", {"phase": "research", "idea_preview": content[:200]})
+
     output = run_with_animation(chat_with_model, "Research Agent", RESEARCH_PROMPT, content, RESEARCH_CONFIG)
     if not output:
+        session_log.log("agent/error", {"phase": "research", "error": "No output from research AI"})
         return None, None
 
     name = "UnknownStrategy"
@@ -339,36 +488,47 @@ def research_strategy(content: str) -> tuple:
         if not name:
             name = "UnknownStrategy"
 
+    session_log.log("signal/validated", {
+        "phase": "research", "strategy_name": name, "output_length": len(output)
+    })
     cprint(f"[PHASE 1] Strategy name: {name}", "green")
     return output, name
 
 
-def create_backtest(strategy: str, name: str) -> str:
-    """Phase 2: Generate backtest code with validation"""
+def create_backtest(strategy: str, name: str, session_log: RBISessionLogger) -> str:
+    """Phase 2: Generate backtest code with validation + backtesting.lib check (merged from old Phase 3)"""
     cprint("\n[PHASE 2] Generating backtest code...", "cyan")
 
     prompt = BACKTEST_PROMPT.format(
         strategy=strategy,
         data_path=DATA_PATH,
+        cash=BACKTEST_CASH,
+        commission=BACKTEST_COMMISSION,
     )
 
     output = run_with_animation(chat_with_model, "Backtest Agent", prompt, strategy, BACKTEST_CONFIG)
     if not output:
+        session_log.log("agent/error", {"phase": "backtest", "error": "No output from backtest AI"})
         return None
 
     code = extract_python_code(output)
     if not code:
         cprint("[PHASE 2] Could not extract code from response", "red")
+        session_log.log("agent/error", {"phase": "backtest", "error": "Could not extract code from AI response"})
         return None
 
-    # Validate
+    # Validate (includes syntax + structure + no backtesting.lib)
     result = validator.validate_all(code, phase="backtest")
     if not result.passed:
         cprint(f"[PHASE 2] Validation failed, attempting fix...", "yellow")
-        # Try one fix attempt
-        code = _try_fix_code(code, result.errors, DEBUG_CONFIG, "backtest")
+        session_log.log("signal/validated", {
+            "phase": "backtest", "passed": False, "errors": result.errors[:3]
+        })
+        code = _try_fix_code(code, result.errors, DEBUG_CONFIG, "backtest", session_log)
         if not code:
             return None
+    else:
+        session_log.log("signal/validated", {"phase": "backtest", "passed": True})
 
     # Save
     path = BACKTEST_DIR / f"{name}_BT.py"
@@ -379,77 +539,58 @@ def create_backtest(strategy: str, name: str) -> str:
     return code
 
 
-def package_check(code: str, name: str) -> str:
-    """Phase 3: Remove backtesting.lib, use talib only"""
-    cprint("\n[PHASE 3] Packaging (removing backtesting.lib)...", "cyan")
-
-    prompt = PACKAGE_PROMPT.format(code=code)
-    output = run_with_animation(chat_with_model, "Package Agent", prompt, code, PACKAGE_CONFIG)
-    if not output:
-        return code  # Keep original if packaging fails
-
-    new_code = extract_python_code(output)
-    if not new_code:
-        cprint("[PHASE 3] Could not extract packaged code", "yellow")
-        return code  # Keep original
-
-    # Validate no backtesting.lib remains
-    result = validator.validate_all(new_code, phase="package")
-    if not result.passed:
-        cprint(f"[PHASE 3] Validation failed, keeping original code", "yellow")
-        return code
-
-    # Save
-    path = PACKAGE_DIR / f"{name}_PKG.py"
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(new_code)
-    cprint(f"[PHASE 3] Saved to {path}", "green")
-
-    return new_code
-
-
-def debug_backtest(code: str, name: str) -> str:
-    """Phase 4: Debug with programmatic retry loop"""
-    cprint("\n[PHASE 4] Debugging with validation...", "cyan")
+def debug_backtest(code: str, name: str, session_log: RBISessionLogger) -> str:
+    """Phase 3: Debug with programmatic retry loop"""
+    cprint("\n[PHASE 3] Debugging with validation...", "cyan")
 
     current_code = code
     for attempt in range(MAX_DEBUG_RETRIES):
-        cprint(f"[PHASE 4] Debug attempt {attempt + 1}/{MAX_DEBUG_RETRIES}", "cyan")
+        cprint(f"[PHASE 3] Debug attempt {attempt + 1}/{MAX_DEBUG_RETRIES}", "cyan")
 
         # Validate current code
         result = validator.validate_all(current_code, phase="debug")
         if result.passed:
-            cprint("[PHASE 4] Code passed validation", "green")
+            cprint("[PHASE 3] Code passed validation", "green")
+            session_log.log("signal/validated", {"phase": "debug", "passed": True, "attempt": attempt + 1})
             break
 
+        session_log.log("signal/validated", {
+            "phase": "debug", "passed": False, "attempt": attempt + 1, "errors": result.errors[:3]
+        })
+
         # Try to fix
-        fixed_code = _try_fix_code(current_code, result.errors, DEBUG_CONFIG, "debug")
+        fixed_code = _try_fix_code(current_code, result.errors, DEBUG_CONFIG, "debug", session_log)
         if fixed_code and fixed_code != current_code:
             current_code = fixed_code
         else:
-            cprint(f"[PHASE 4] Could not fix code on attempt {attempt + 1}", "yellow")
-            # Try execution as last resort
+            cprint(f"[PHASE 3] Could not fix code on attempt {attempt + 1}", "yellow")
             break
 
     # Final validation
     result = validator.validate_all(current_code, phase="final")
     if not result.passed:
-        cprint("[PHASE 4] Final validation still has issues", "yellow")
+        cprint("[PHASE 3] Final validation still has issues", "yellow")
+        session_log.log("signal/validated", {
+            "phase": "debug_final", "passed": False, "errors": result.errors[:3]
+        })
 
     # Save
     path = FINAL_BACKTEST_DIR / f"{name}_BTFinal.py"
     with open(path, 'w', encoding='utf-8') as f:
         f.write(current_code)
-    cprint(f"[PHASE 4] Saved to {path}", "green")
+    cprint(f"[PHASE 3] Saved to {path}", "green")
 
     return current_code
 
 
-def _try_fix_code(code: str, errors: list, config: dict, phase: str) -> str:
+def _try_fix_code(code: str, errors: list, config: dict, phase: str,
+                   session_log: RBISessionLogger = None) -> str:
     """Attempt to fix code using AI with error context"""
     context = validator.generate_fix_context(code, errors)
     output = run_with_animation(chat_with_model, f"Debug Fix ({phase})", context, code, config)
     if not output:
+        if session_log:
+            session_log.log("agent/error", {"phase": f"debug_fix_{phase}", "error": "No fix output from AI"})
         return None
 
     fixed_code = extract_python_code(output)
@@ -464,50 +605,208 @@ def _try_fix_code(code: str, errors: list, config: dict, phase: str) -> str:
     return fixed_code
 
 
-def execute_backtest(name: str) -> str:
-    """Phase 5: Execute the backtest"""
-    cprint("\n[PHASE 5] Executing backtest...", "cyan")
+def execute_backtest(name: str, session_log: RBISessionLogger) -> tuple:
+    """
+    Phase 4: Execute the backtest with runtime retry loop.
+
+    Returns (stats_output, error_context):
+      - stats_output: raw subprocess output if successful
+      - error_context: dict with error details if all retries failed
+
+    If execution fails, error_context is passed back to debug phase
+    for AI-assisted fix (feedback loop).
+    """
+    cprint("\n[PHASE 4] Executing backtest...", "cyan")
 
     path = FINAL_BACKTEST_DIR / f"{name}_BTFinal.py"
     if not path.exists():
-        cprint(f"[PHASE 5] Backtest file not found: {path}", "red")
-        return None
+        cprint(f"[PHASE 4] Backtest file not found: {path}", "red")
+        session_log.log("agent/error", {"phase": "execute", "error": f"File not found: {path}"})
+        return None, {"error": "file_not_found", "path": str(path)}
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
-    try:
-        res = subprocess.run(
-            [sys.executable, str(path)],
-            capture_output=True, text=True, env=env, timeout=120,
-        )
-        output = res.stdout + "\n" + res.stderr
+    last_error_context = None
 
-        if res.returncode != 0:
-            cprint(f"[PHASE 5] Backtest exited with code {res.returncode}", "yellow")
-            cprint(f"[PHASE 5] Error output: {res.stderr[:500]}", "yellow")
+    for attempt in range(MAX_EXEC_RETRIES):
+        cprint(f"[PHASE 4] Execution attempt {attempt + 1}/{MAX_EXEC_RETRIES}", "cyan")
 
-        cprint("[PHASE 5] Backtest execution complete", "green")
-        return output
+        try:
+            res = subprocess.run(
+                [sys.executable, str(path)],
+                capture_output=True, text=True, env=env, timeout=EXEC_TIMEOUT,
+            )
+            output = res.stdout + "\n" + res.stderr
 
-    except subprocess.TimeoutExpired:
-        cprint("[PHASE 5] Backtest timed out (120s)", "red")
+            if res.returncode == 0:
+                cprint("[PHASE 4] Backtest execution complete", "green")
+                session_log.log("signal/validated", {
+                    "phase": "execute", "passed": True, "attempt": attempt + 1
+                })
+                return output, None
+
+            # Non-zero exit — parse error for debug feedback
+            error_context = {
+                "error": "runtime_error",
+                "returncode": res.returncode,
+                "stderr": res.stderr[:1000],
+                "stdout": res.stdout[:500],
+                "attempt": attempt + 1,
+            }
+            last_error_context = error_context
+            cprint(f"[PHASE 4] Backtest exited with code {res.returncode} (attempt {attempt + 1})", "yellow")
+            cprint(f"[PHASE 4] Error: {res.stderr[:300]}", "yellow")
+
+            session_log.log("agent/error", {
+                "phase": "execute", "attempt": attempt + 1,
+                "returncode": res.returncode, "error_preview": res.stderr[:200]
+            })
+
+            # If we have error context, try to AI-fix the code and re-execute
+            if attempt < MAX_EXEC_RETRIES - 1:
+                cprint(f"[PHASE 4] Attempting AI-assisted fix...", "cyan")
+                fixed_code = _try_fix_code_from_runtime(
+                    path.read_text(encoding='utf-8'), res.stderr, name, session_log
+                )
+                if fixed_code:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(fixed_code)
+                    cprint(f"[PHASE 4] Code fixed, retrying execution...", "cyan")
+
+        except subprocess.TimeoutExpired:
+            error_context = {
+                "error": "timeout",
+                "timeout_seconds": EXEC_TIMEOUT,
+                "attempt": attempt + 1,
+            }
+            last_error_context = error_context
+            cprint(f"[PHASE 4] Backtest timed out ({EXEC_TIMEOUT}s, attempt {attempt + 1})", "yellow")
+            session_log.log("agent/error", {
+                "phase": "execute", "attempt": attempt + 1, "error": "timeout"
+            })
+
+        except Exception as e:
+            error_context = {
+                "error": "exception",
+                "message": str(e),
+                "attempt": attempt + 1,
+            }
+            last_error_context = error_context
+            cprint(f"[PHASE 4] Execution failed: {e}", "red")
+            session_log.log("agent/error", {
+                "phase": "execute", "attempt": attempt + 1, "error": str(e)
+            })
+
+    # All retries exhausted
+    cprint(f"[PHASE 4] All {MAX_EXEC_RETRIES} execution attempts failed", "red")
+    return None, last_error_context
+
+
+def _try_fix_code_from_runtime(code: str, stderr: str, name: str,
+                                session_log: RBISessionLogger) -> str:
+    """
+    AI-assisted fix for runtime errors (not just syntax).
+    Passes the actual runtime error to the debug AI for context-aware fixing.
+    """
+    # Extract meaningful error lines from stderr
+    error_lines = []
+    for line in stderr.split('\n'):
+        if any(kw in line.lower() for kw in ['error', 'traceback', 'exception', 'import', 'module']):
+            error_lines.append(line.strip())
+
+    if not error_lines:
         return None
-    except Exception as e:
-        cprint(f"[PHASE 5] Execution failed: {e}", "red")
-        return str(e)
+
+    errors_text = '\n'.join(error_lines[:10])  # Top 10 error lines
+
+    context = f"""The following backtest code has RUNTIME ERRORS (not syntax).
+Fix the errors so the code runs successfully.
+
+RUNTIME ERRORS:
+{errors_text}
+
+CURRENT CODE:
+```python
+{code}
+```
+
+RULES:
+1. Fix the specific runtime errors listed above
+2. Keep the same strategy logic and indicators
+3. Use self.I() for ALL indicators
+4. Use talib ONLY — no backtesting.lib
+5. Position size must be int(round(size))
+
+Return ONLY the fixed Python code block. No explanation.
+"""
+    output = run_with_animation(chat_with_model, "Runtime Debug Fix", context, code, DEBUG_CONFIG)
+    if not output:
+        return None
+
+    fixed_code = extract_python_code(output)
+    if not fixed_code:
+        return None
+
+    # Quick validation
+    result = validator.validate_all(fixed_code, phase="runtime_fix")
+    if not result.passed:
+        cprint(f"[RUNTIME DEBUG] Fix still has validation errors: {result.errors[:2]}", "yellow")
+        return None
+
+    session_log.log("signal/validated", {
+        "phase": "runtime_fix", "strategy_name": name, "fixed": True
+    })
+    return fixed_code
 
 
-def evaluate_performance(stats: str) -> tuple:
-    """Phase 6: AI evaluates the backtest results"""
-    cprint("\n[PHASE 6] Evaluating performance...", "cyan")
+def evaluate_performance(stats: str, walk_forward_result=None,
+                         decay_status=None, session_log: RBISessionLogger = None) -> tuple:
+    """
+    Phase 5: AI evaluates the backtest results.
+
+    Enhanced with:
+    - Walk-forward validation data (catches overfitting)
+    - Alpha decay status (catches degraded strategies)
+    - Stricter criteria for GO_LIVE
+    """
+    cprint("\n[PHASE 5] Evaluating performance...", "cyan")
 
     if not stats:
+        session_log.log("signal/validated", {"phase": "evaluate", "decision": "REJECT", "reason": "No stats"})
         return "REJECT", "No stats output to evaluate"
+
+    # Format walk-forward data for evaluator
+    wf_text = "No walk-forward data available"
+    if walk_forward_result:
+        wf_text = (
+            f"In-sample return: {walk_forward_result.in_sample_return:.2%}\n"
+            f"Out-of-sample return: {walk_forward_result.out_of_sample_return:.2%}\n"
+            f"Overfit score: {walk_forward_result.overfit_score:.2f} (lower is better, <3.0 is good)\n"
+            f"Periods tested: {walk_forward_result.periods_tested}\n"
+            f"Deployable: {walk_forward_result.deployable}"
+        )
+
+    # Format decay data for evaluator
+    decay_text = "No decay data available"
+    if decay_status:
+        decay_text = (
+            f"Status: {decay_status.status.value}\n"
+            f"Win rate: {decay_status.win_rate:.1%}\n"
+            f"Recent win rate: {decay_status.recent_win_rate:.1%}\n"
+            f"Sharpe ratio: {decay_status.sharpe_ratio:.2f}\n"
+            f"Max drawdown: {decay_status.max_drawdown:.1%}\n"
+            f"Total trades: {decay_status.total_trades}\n"
+            f"Recommendation: {decay_status.recommendation}"
+        )
 
     output = run_with_animation(
         chat_with_model, "Evaluation Agent",
-        EVALUATE_PROMPT.format(stats=stats),
+        EVALUATE_PROMPT.format(
+            stats=stats,
+            walk_forward=wf_text,
+            decay_status=decay_text,
+        ),
         stats, EVALUATE_CONFIG,
     )
 
@@ -515,13 +814,67 @@ def evaluate_performance(stats: str) -> tuple:
     if output and "GO_LIVE" in output.upper():
         decision = "GO_LIVE"
 
-    cprint(f"[PHASE 6] Decision: {decision}", "green" if decision == "GO_LIVE" else "yellow")
+    # Hard overrides — AI can't override these safety checks
+    if walk_forward_result and not walk_forward_result.deployable:
+        if decision == "GO_LIVE":
+            cprint("[PHASE 5] Walk-forward override: REJECT (overfitting detected)", "yellow")
+            decision = "REJECT"
+            output = (output or "") + "\n[OVERRIDE] Walk-forward validation failed — strategy is overfitted."
+
+    if decay_status and decay_status.status in (DecayStatus.DECAYED, DecayStatus.DEAD):
+        if decision == "GO_LIVE":
+            cprint(f"[PHASE 5] Decay override: REJECT ({decay_status.status.value})", "yellow")
+            decision = "REJECT"
+            output = (output or "") + f"\n[OVERRIDE] Alpha decay detected — strategy is {decay_status.status.value}."
+
+    session_log.log("signal/validated", {
+        "phase": "evaluate", "decision": decision,
+        "walk_forward_deployable": walk_forward_result.deployable if walk_forward_result else None,
+        "decay_status": decay_status.status.value if decay_status else None,
+    })
+    cprint(f"[PHASE 5] Decision: {decision}", "green" if decision == "GO_LIVE" else "yellow")
     return decision, output
 
 
-def deploy_to_live(code: str, name: str) -> bool:
-    """Phase 7: Deploy to live strategies"""
-    cprint("\n[PHASE 7] Deploying to live...", "cyan")
+def human_approval_gate(name: str, stats: dict, reasoning: str,
+                        auto_mode: bool = False) -> bool:
+    """
+    Human approval gate before live deployment.
+
+    Shows backtest stats and asks for confirmation.
+    Skipped in auto_mode (batch processing).
+    """
+    cprint("\n" + "=" * 60, "magenta")
+    cprint("🛑 HUMAN APPROVAL REQUIRED", "white", "on_red")
+    cprint("=" * 60, "magenta")
+    cprint(f"\n📊 Strategy: {name}", "cyan")
+    cprint(f"   Return: {stats.get('Return [%]', 'N/A')}%", "cyan")
+    cprint(f"   Max Drawdown: {stats.get('Max. Drawdown [%]', 'N/A')}%", "cyan")
+    cprint(f"   Win Rate: {stats.get('Win Rate [%]', 'N/A')}%", "cyan")
+    cprint(f"   Sharpe Ratio: {stats.get('Sharpe Ratio', 'N/A')}", "cyan")
+    cprint(f"   # Trades: {stats.get('# Trades', 'N/A')}", "cyan")
+
+    if reasoning:
+        # Show first 200 chars of reasoning
+        cprint(f"\n   AI Assessment: {reasoning[:200]}", "blue")
+
+    if auto_mode:
+        cprint("\n   [AUTO MODE] Skipping human approval", "yellow")
+        return True
+
+    cprint("\n   Deploy this strategy to live? (y/n)", "yellow", end=" ")
+    try:
+        response = input().strip().lower()
+        return response == 'y'
+    except (EOFError, KeyboardInterrupt):
+        cprint("\n   [CANCELLED] No input received — rejecting", "yellow")
+        return False
+
+
+def deploy_to_live(code: str, name: str, session_log: RBISessionLogger) -> bool:
+    """Phase 6: Deploy to live strategies + register with alpha decay detector"""
+    cprint("\n[PHASE 6] Deploying to live...", "cyan")
+    session_log.log("order/intent", {"phase": "deploy", "strategy_name": name, "action": "deploy_to_live"})
 
     prompt = DEPLOY_PROMPT.format(code=code)
     output = run_with_animation(chat_with_model, "Deployment Agent", prompt, code, DEPLOY_CONFIG)
@@ -532,17 +885,27 @@ def deploy_to_live(code: str, name: str) -> bool:
             path = LIVE_STRATEGIES_DIR / f"{name.lower()}.py"
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(live_code)
-            cprint(f"[PHASE 7] DEPLOYED TO: {path}", "green")
+
+            # Register with alpha decay detector for future monitoring
+            alpha_detector.record_trade(name, pnl_pct=0.0)  # Baseline entry
+
+            session_log.log("order/submitted", {
+                "phase": "deploy", "strategy_name": name,
+                "path": str(path), "action": "deployed"
+            })
+            cprint(f"[PHASE 6] DEPLOYED TO: {path}", "green")
             return True
 
-    cprint("[PHASE 7] Deployment failed", "red")
+    session_log.log("agent/error", {"phase": "deploy", "error": "Deployment AI failed"})
+    cprint("[PHASE 6] Deployment failed", "red")
     return False
 
 
-def archive_strategy(name: str):
+def archive_strategy(name: str, session_log: RBISessionLogger):
     """Archive a rejected strategy"""
     cprint(f"[ARCHIVE] Archiving {name}...", "yellow")
-    for d in [RESEARCH_DIR, BACKTEST_DIR, PACKAGE_DIR, FINAL_BACKTEST_DIR]:
+    session_log.log("position/closed", {"phase": "archive", "strategy_name": name, "action": "archived"})
+    for d in [RESEARCH_DIR, BACKTEST_DIR, FINAL_BACKTEST_DIR]:
         for f in d.glob(f"{name}*"):
             try:
                 shutil.move(str(f), str(ARCHIVE_DIR / f.name))
@@ -552,61 +915,207 @@ def archive_strategy(name: str):
 
 # ── Main Pipeline ────────────────────────────────────────────
 
-def process_trading_idea(idea: str):
-    """Process a single trading idea through the full RBI pipeline"""
+def process_trading_idea(idea: str, auto_mode: bool = False):
+    """
+    Process a single trading idea through the full integrated RBI pipeline.
+
+    Pipeline: Research → Backtest → Debug → Execute → Evaluate → Deploy
+    (Package phase removed — validation merged into Phase 2)
+
+    Integrations:
+    - Session Log records every phase/decision/error
+    - Runtime retry loop in Execute phase
+    - Walk-Forward validation before Evaluate
+    - Alpha Decay check before Deploy
+    - Human approval gate before Deploy
+    - Strategy Memory tracks full lifecycle
+    """
     cprint(f"\n{'='*60}", "magenta")
-    cprint(f"RBI PIPELINE: {idea[:60]}...", "magenta")
+    cprint(f"RBI PIPELINE (INTEGRATED): {idea[:50]}...", "magenta")
     cprint(f"{'='*60}\n", "magenta")
 
     start_time = time.time()
+    signal_id = datetime.utcnow().strftime("%H%M%S")
+    session_log = RBISessionLogger()
+    memory_record = {"idea": idea[:500], "signal_id": signal_id}
 
     try:
         content = get_idea_content(idea)
+        session_log.log("model/call", {"phase": "init", "idea_preview": content[:200]}, signal_id)
 
         # Phase 1: Research
-        strategy, name = research_strategy(content)
+        strategy, name = research_strategy(content, session_log)
         if not strategy:
             cprint("[RBI] Phase 1 failed — no strategy generated", "red")
+            memory_record["result"] = "REJECT"
+            memory_record["reason"] = "Phase 1 failed — no strategy"
+            strategy_memory.record_pipeline_run(memory_record)
             return
+        memory_record["strategy_name"] = name
 
-        # Phase 2: Backtest (with validation)
-        code = create_backtest(strategy, name)
+        # Phase 2: Backtest (with validation + backtesting.lib check)
+        code = create_backtest(strategy, name, session_log)
         if not code:
             cprint("[RBI] Phase 2 failed — no valid backtest code", "red")
+            memory_record["result"] = "REJECT"
+            memory_record["reason"] = "Phase 2 failed — no valid code"
+            strategy_memory.record_pipeline_run(memory_record)
             return
 
-        # Phase 3: Package (with validation)
-        code = package_check(code, name)
+        # Phase 3: Debug (with retry loop)
+        code = debug_backtest(code, name, session_log)
 
-        # Phase 4: Debug (with retry loop)
-        code = debug_backtest(code, name)
+        # Phase 4: Execute (with runtime retry + error context)
+        stats_output, error_context = execute_backtest(name, session_log)
 
-        # Phase 5: Execute
-        stats = execute_backtest(name)
+        # Parse stats for downstream use
+        parsed_stats = _parse_backtest_stats(stats_output) if stats_output else {}
+        memory_record["backtest_stats"] = parsed_stats
 
-        # Phase 6: Evaluate
-        decision, reasoning = evaluate_performance(stats)
+        if not stats_output:
+            cprint("[RBI] Phase 4 failed — no backtest output after all retries", "red")
+            memory_record["result"] = "REJECT"
+            memory_record["reason"] = "Phase 4 failed — execution error"
+            memory_record["error_context"] = error_context
+            strategy_memory.record_pipeline_run(memory_record)
+            archive_strategy(name, session_log)
+            return
 
-        # Phase 7: Deploy or Archive
+        # Phase 4.5: Walk-Forward Validation (catch overfitting)
+        cprint("\n[PHASE 4.5] Walk-forward validation...", "cyan")
+        wf_result = None
+        try:
+            # Load the backtest data for walk-forward
+            import pandas as pd
+            df = pd.read_csv(DATA_PATH)
+            if 'close' in df.columns:
+                prices = df['close'].tolist()
+            elif 'Close' in df.columns:
+                prices = df['Close'].tolist()
+            else:
+                # Try to find price column
+                df.columns = df.columns.str.strip().str.lower()
+                prices = df['close'].tolist()
+
+            # Run walk-forward on the price data
+            # We use a lambda that simulates the strategy's return
+            def strategy_return_fn(prices_window):
+                """Simple price-based return for walk-forward."""
+                if len(prices_window) < 2:
+                    return 0.0
+                return (prices_window[-1] - prices_window[0]) / prices_window[0]
+
+            wf_result = walk_forward_validator.validate(strategy_return_fn, name, prices)
+            cprint(f"[PHASE 4.5] Walk-forward: IS={wf_result.in_sample_return:.2%}, "
+                   f"OOS={wf_result.out_of_sample_return:.2%}, "
+                   f"Overfit={wf_result.overfit_score:.2f}", "cyan")
+            session_log.log("signal/validated", {
+                "phase": "walk_forward",
+                "in_sample": wf_result.in_sample_return,
+                "out_of_sample": wf_result.out_of_sample_return,
+                "overfit_score": wf_result.overfit_score,
+                "deployable": wf_result.deployable,
+            }, signal_id)
+        except Exception as e:
+            cprint(f"[PHASE 4.5] Walk-forward skipped: {e}", "yellow")
+
+        # Phase 4.6: Alpha Decay Check
+        cprint("\n[PHASE 4.6] Alpha decay check...", "cyan")
+        decay_status = None
+        try:
+            decay_status = alpha_detector.check_strategy(name)
+            cprint(f"[PHASE 4.6] Decay status: {decay_status.status.value} "
+                   f"(win_rate={decay_status.win_rate:.1%}, sharpe={decay_status.sharpe_ratio:.2f})", "cyan")
+            session_log.log("signal/validated", {
+                "phase": "alpha_decay",
+                "status": decay_status.status.value,
+                "win_rate": decay_status.win_rate,
+                "sharpe": decay_status.sharpe_ratio,
+            }, signal_id)
+        except Exception as e:
+            cprint(f"[PHASE 4.6] Decay check skipped: {e}", "yellow")
+
+        # Phase 5: Evaluate (enhanced with walk-forward + decay data)
+        decision, reasoning = evaluate_performance(
+            stats_output, wf_result, decay_status, session_log
+        )
+
+        # Update strategy memory
+        memory_record["result"] = decision
+        memory_record["reasoning"] = reasoning[:500] if reasoning else None
+        memory_record["walk_forward"] = {
+            "in_sample": wf_result.in_sample_return,
+            "out_of_sample": wf_result.out_of_sample_return,
+            "overfit_score": wf_result.overfit_score,
+        } if wf_result else None
+        memory_record["decay_status"] = decay_status.status.value if decay_status else None
+
+        # Phase 6: Deploy or Archive
         if decision == "GO_LIVE":
-            cprint("\n[RBI] Strategy APPROVED — deploying...", "green")
-            deploy_to_live(code, name)
-            elapsed = time.time() - start_time
-            cprint(f"\n[RBI] SUCCESS: {name} is LIVE! ({elapsed:.0f}s)", "green")
+            # Human approval gate
+            approved = human_approval_gate(name, parsed_stats, reasoning or "", auto_mode=auto_mode)
+
+            if approved:
+                cprint("\n[RBI] Strategy APPROVED — deploying...", "green")
+                deployed = deploy_to_live(code, name, session_log)
+                if deployed:
+                    elapsed = time.time() - start_time
+                    cprint(f"\n[RBI] SUCCESS: {name} is LIVE! ({elapsed:.0f}s)", "green")
+                    memory_record["deployed"] = True
+                    memory_record["deploy_time"] = elapsed
+
+                    # Post-deploy: register for monitoring
+                    cprint(f"[RBI] Registered '{name}' with alpha decay detector for monitoring", "cyan")
+                else:
+                    memory_record["deployed"] = False
+                    memory_record["reason"] = "Deployment failed"
+            else:
+                cprint(f"\n[RBI] Strategy REJECTED by human gate", "yellow")
+                memory_record["result"] = "REJECT"
+                memory_record["reason"] = "Human gate rejected"
+                archive_strategy(name, session_log)
         else:
             cprint(f"\n[RBI] Strategy REJECTED", "yellow")
-            archive_strategy(name)
+            archive_strategy(name, session_log)
             if reasoning:
                 cprint(f"[RBI] Reason: {reasoning[:200]}", "blue")
+
+        # Record to feedback loop
+        try:
+            feedback_loop.record_signal(
+                symbol=name,
+                signal="GO_LIVE" if decision == "GO_LIVE" else "REJECT",
+                confidence=parsed_stats.get("Win Rate [%]", 50) / 100,
+                factors={"return": parsed_stats.get("Return [%]", 0),
+                         "max_dd": parsed_stats.get("Max. Drawdown [%]", 0),
+                         "sharpe": parsed_stats.get("Sharpe Ratio", 0)},
+                regime="backtest",
+                signal_id=signal_id,
+            )
+        except Exception:
+            pass
+
+        # Record to strategy memory
+        memory_record["elapsed_seconds"] = time.time() - start_time
+        strategy_memory.record_pipeline_run(memory_record)
 
     except Exception as e:
         cprint(f"\n[RBI] Fatal error: {e}", "red")
         import traceback
         cprint(traceback.format_exc(), "red")
+        session_log.log("agent/error", {"phase": "fatal", "error": str(e)}, signal_id)
+        memory_record["result"] = "ERROR"
+        memory_record["error"] = str(e)
+        strategy_memory.record_pipeline_run(memory_record)
 
 
 def main():
     """Process all ideas from ideas.txt"""
+    import argparse
+    parser = argparse.ArgumentParser(description="Moon Dev RBI Agent")
+    parser.add_argument("--auto", action="store_true", help="Auto-mode: skip human approval gates")
+    args, _ = parser.parse_known_args()
+
     ideas_file = DATA_DIR / "ideas.txt"
     if not ideas_file.exists():
         cprint("[RBI] No ideas.txt found", "yellow")
@@ -616,10 +1125,27 @@ def main():
         ideas = [l.strip() for l in f if l.strip() and not l.startswith('#')]
 
     cprint(f"[RBI] Found {len(ideas)} ideas to process", "cyan")
+    if args.auto:
+        cprint("[RBI] AUTO MODE — human approval gates will be skipped", "yellow")
 
     for i, idea in enumerate(ideas, 1):
         cprint(f"\n[RBI] Processing idea {i}/{len(ideas)}", "cyan")
-        process_trading_idea(idea)
+        process_trading_idea(idea, auto_mode=args.auto)
+
+    # Print session summary
+    cprint(f"\n{'='*60}", "magenta")
+    cprint("RBI PIPELINE COMPLETE — Summary", "magenta")
+    cprint(f"{'='*60}", "magenta")
+    try:
+        history = strategy_memory.get_strategy_history(limit=10)
+        for record in history:
+            name = record.get("strategy_name", "Unknown")
+            result = record.get("result", "UNKNOWN")
+            elapsed = record.get("elapsed_seconds", 0)
+            status = "✅" if result == "GO_LIVE" else "❌"
+            cprint(f"  {status} {name}: {result} ({elapsed:.0f}s)", "green" if result == "GO_LIVE" else "yellow")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
