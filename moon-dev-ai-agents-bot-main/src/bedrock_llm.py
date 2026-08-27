@@ -365,6 +365,59 @@ async def ask_ai_json(
         return None
 
 
+# ── Model Fallback ──────────────────────────────────────────
+
+# Cheaper/faster models for simple tasks
+FALLBACK_MODELS = {
+    "classification": "anthropic.claude-3-haiku-20241022-v1:0",  # Fast, cheap
+    "analysis": "qwen.qwen3-coder-next",  # Default
+    "creative": "anthropic.claude-sonnet-4-20250514-v1:0",  # Better quality
+}
+
+
+async def bedrock_chat_with_fallback(
+    messages: List[ChatMessage],
+    options: Optional[ChatOptions] = None,
+    task_type: str = "analysis",
+) -> ChatResponse:
+    """
+    Chat with automatic model fallback.
+
+    If primary model fails (rate limit, unavailable), tries a cheaper fallback.
+
+    Args:
+        messages: Chat messages
+        options: Chat options
+        task_type: 'classification' (cheap/fast), 'analysis' (default), 'creative' (best quality)
+    """
+    primary_model = get_bedrock_model_id()
+    fallback_model = FALLBACK_MODELS.get(task_type, FALLBACK_MODELS["analysis"])
+
+    try:
+        return await bedrock_chat(messages, options)
+    except Exception as primary_error:
+        error_str = str(primary_error).lower()
+
+        # Only fallback on rate limits or model unavailable
+        if "throttl" in error_str or "notready" in error_str or "unavailable" in error_str:
+            if fallback_model != primary_model:
+                # Temporarily switch model
+                old_model = os.environ.get("AWS_BEDROCK_MODEL_ID")
+                os.environ["AWS_BEDROCK_MODEL_ID"] = fallback_model
+                try:
+                    result = await bedrock_chat(messages, options)
+                    return result
+                finally:
+                    # Restore original model
+                    if old_model:
+                        os.environ["AWS_BEDROCK_MODEL_ID"] = old_model
+                    else:
+                        del os.environ["AWS_BEDROCK_MODEL_ID"]
+
+        # Re-raise if fallback didn't help
+        raise primary_error
+
+
 # ── Retry with Backoff ──────────────────────────────────────
 
 async def bedrock_chat_with_retry(
@@ -445,9 +498,11 @@ __all__ = [
     "bedrock_chat",
     "bedrock_chat_sync",
     "bedrock_chat_with_retry",
+    "bedrock_chat_with_fallback",
     "ask_ai",
     "ask_ai_json",
     "is_bedrock_configured",
     "get_bedrock_config",
     "bedrock_health_check",
+    "FALLBACK_MODELS",
 ]
