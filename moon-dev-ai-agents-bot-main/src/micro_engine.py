@@ -19,7 +19,7 @@ from pathlib import Path
 
 from src.token_scanner import TokenScanner, TokenCandidate
 from src.micro_sniper import MicroSniper, TradeSignal
-from src.event_bus import EventBus, Event
+from src.event_bus import EventBus, Events
 from src.session_log import SessionLog
 
 
@@ -158,21 +158,21 @@ class MicroEngine:
             )
             asyncio.create_task(self.event_bus.emit("trade/executed", event))
     
-    async def _handle_candidate_event(self, event: Event):
+    async def _handle_candidate_event(self, event):
         """Handle candidate event."""
         pass  # Already handled in _on_candidate
     
-    async def _handle_signal_event(self, event: Event):
+    async def _handle_signal_event(self, event):
         """Handle signal event."""
         pass  # Already handled in _execute_signal
     
-    async def _handle_trade_event(self, event: Event):
+    async def _handle_trade_event(self, event):
         """Handle trade execution event."""
         pass  # Already logged in _execute_signal
     
-    async def _handle_close_event(self, event: Event):
+    async def _handle_close_event(self, event):
         """Handle trade close event."""
-        data = event.data
+        data = event.get("data", {})
         self.session_log.log("position/closed", {
             "token": data.get("token_address"),
             "symbol": data.get("symbol"),
