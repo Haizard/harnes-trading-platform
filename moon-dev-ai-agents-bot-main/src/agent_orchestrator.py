@@ -94,13 +94,13 @@ class AgentOrchestrator:
         self.session_log = SessionLog()
         self.data_gatherer = DataGatherer()
         # Wire EventBus to SessionLog (DSH pattern)
+        self.event_bus = EventBus()
+        self.execution_tracker = ExecutionTracker()
+        self.feedback_loop = TradeFeedbackLoop()
         async def _log_event(payload):
             await self.session_log.log(payload.get("event_type", "unknown"), payload)
         for evt in [Events.SIGNAL_GENERATED, Events.ORDER_SUBMITTED, Events.ORDER_FILLED, Events.POSITION_OPENED, Events.POSITION_CLOSED]:
             self.event_bus.on(evt, _log_event, mode=DispatchMode.EMIT, tag="session_log")
-        self.event_bus = EventBus()
-        self.execution_tracker = ExecutionTracker()
-        self.feedback_loop = TradeFeedbackLoop()
 
         # Consensus engine (multi-model AI)
         self.consensus = None
