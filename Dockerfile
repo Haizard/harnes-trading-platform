@@ -16,5 +16,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-# Run simple test first
-CMD ["python", "-u", "run_test.py"]
+CMD ["python", "-u", "run_full.py"]

@@ -1,68 +1,68 @@
 """
-Run both the trading engine and web dashboard concurrently.
+Run the trading engine + web dashboard.
+Dashboard MUST be the foreground process (binds to PORT) to keep the container alive.
 """
 import sys
 import os
-import asyncio
 import threading
+import time
 import traceback
+import logging
 
-# Load environment variables
+# Ensure stdout is unbuffered
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Load env
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-sys.path.insert(0, ".")
+sys.path.insert(0, '.')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
-def start_dashboard():
-    """Start the web dashboard in a separate thread."""
-    try:
-        from src.dashboard import run_dashboard
-        run_dashboard(port=8000)
-    except Exception as e:
-        print("[DASHBOARD] Error: " + str(e))
+def log(msg):
+    print(f'[{time.strftime("%H:%M:%S")}] {msg}', flush=True)
 
-def main():
-    print("[STARTUP] Moon Dev Trading Platform starting...")
-    print("[STARTUP] Python " + sys.version)
-    print("[STARTUP] CWD: " + os.getcwd())
-    
-    capital = 25.0
-    if len(sys.argv) > 1:
-        try:
-            capital = float(sys.argv[1])
-        except ValueError:
-            pass
-    
-    # Start dashboard in background thread
+def run_engine():
+    """Run the trading engine in a background thread."""
+    time.sleep(3)  # Let dashboard start first
     try:
-        dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
-        dashboard_thread.start()
-        print("[STARTUP] Dashboard running on http://0.0.0.0:8000")
-    except Exception as e:
-        print("[STARTUP] Dashboard error: " + str(e))
-    
-    # Start trading engine
-    try:
+        log('[ENGINE] Starting micro engine...')
         from src.micro_engine import MicroEngine
+        import asyncio
+        capital = float(os.environ.get('CAPITAL', '25.0'))
         engine = MicroEngine(capital=capital)
         asyncio.run(engine.run())
-    except KeyboardInterrupt:
-        print("[STARTUP] Interrupted")
     except Exception as e:
-        print("[STARTUP] Engine error: " + str(e))
+        log(f'[ENGINE] Error: {e}')
         traceback.print_exc()
-        # Keep dashboard running even if engine fails
-        print("[STARTUP] Keeping dashboard alive...")
+
+def main():
+    port = int(os.environ.get('PORT', '8000'))
+    log(f'[STARTUP] Python {sys.version}')
+    log(f'[STARTUP] CWD: {os.getcwd()}')
+    log(f'[STARTUP] PORT: {port}')
+    
+    # Start trading engine in background
+    t = threading.Thread(target=run_engine, daemon=True)
+    t.start()
+    log('[STARTUP] Engine thread started (background)')
+    
+    # Start dashboard in FOREGROUND (must bind to port to keep container alive)
+    try:
+        from src.dashboard import run_dashboard
+        log(f'[STARTUP] Dashboard starting on 0.0.0.0:{port}')
+        run_dashboard(port=port)
+    except Exception as e:
+        log(f'[STARTUP] Dashboard error: {e}')
+        traceback.print_exc()
+        # If dashboard fails, keep process alive anyway
+        log('[STARTUP] Keeping process alive...')
         while True:
-            try:
-                import time
-                time.sleep(60)
-            except KeyboardInterrupt:
-                break
+            time.sleep(60)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
