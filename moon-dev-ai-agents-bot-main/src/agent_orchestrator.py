@@ -287,10 +287,16 @@ class AgentOrchestrator:
 
     def record_trade_outcome(self, symbol, pnl_usd, pnl_pct, holding_minutes):
         try:
-            self.feedback_loop.record_outcome(
-                symbol=symbol, pnl_usd=pnl_usd,
-                pnl_pct=pnl_pct, holding_minutes=holding_minutes,
-            )
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(
+                    self.feedback_loop.record_outcome(
+                        symbol=symbol, pnl_usd=pnl_usd,
+                        pnl_pct=pnl_pct, holding_minutes=holding_minutes,
+                    )
+                )
+            finally:
+                loop.close()
         except Exception:
             pass
 
