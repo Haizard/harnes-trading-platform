@@ -43,12 +43,17 @@ def get_bedrock_model_id() -> str:
 
 
 def is_bedrock_configured() -> bool:
-    """Check if AWS Bedrock credentials are configured."""
-    return bool(
-        os.environ.get("AWS_ACCESS_KEY_ID")
-        or os.environ.get("AWS_PROFILE")
-        or os.environ.get("AWS_BEDROCK_REGION")
-    )
+    """Check if AWS Bedrock credentials are configured.
+    Requires both access key and secret key (or a profile)."""
+    key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
+    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    profile = os.environ.get("AWS_PROFILE", "").strip()
+    # Must have real values, not placeholders
+    if profile and profile != "your_aws_profile_here":
+        return True
+    if key and secret and not key.startswith("your_") and not secret.startswith("your_"):
+        return True
+    return False
 
 
 def get_bedrock_config() -> dict:
@@ -232,15 +237,24 @@ def _get_client():
 
     # Recreate client if region changed
     if _client is None or _cached_region != region:
-        _client = boto3.client(
-            "bedrock-runtime",
-            region_name=region,
-            config=Config(
+        # Build explicit credentials from env vars (avoids boto3 credential chain issues in Docker)
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        aws_token = os.environ.get("AWS_SESSION_TOKEN")
+        kwargs = {
+            "region_name": region,
+            "config": Config(
                 retries={"max_attempts": 3, "mode": "adaptive"},
                 connect_timeout=10,
                 read_timeout=30,
             ),
-        )
+        }
+        if aws_key and aws_secret:
+            kwargs["aws_access_key_id"] = aws_key
+            kwargs["aws_secret_access_key"] = aws_secret
+            if aws_token:
+                kwargs["aws_session_token"] = aws_token
+        _client = boto3.client("bedrock-runtime", **kwargs)
         _cached_region = region
 
     return _client
