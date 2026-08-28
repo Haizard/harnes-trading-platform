@@ -16,4 +16,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-CMD ["python", "-u", "run_full.py"]
+CMD ["python", "-u", "run_deploy.py"]
