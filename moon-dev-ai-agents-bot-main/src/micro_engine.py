@@ -15,6 +15,7 @@ from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
 from src.event_bus import EventBus, Events, DispatchMode
 from src.agent_orchestrator import AgentOrchestrator
+from src.telegram_reporter import get_telegram_reporter
 
 DEFAULT_CAPITAL = 25.0
 SCAN_INTERVAL = 30
@@ -35,6 +36,7 @@ class MicroEngine:
         self.rug_detector = RugPullDetector()
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
         self.event_bus = self.orchestrator.event_bus
+        self.telegram = get_telegram_reporter()
         self._running = False
         self._scan_count = 0
         self._signals_generated = 0
@@ -111,6 +113,10 @@ class MicroEngine:
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("   Mode: LIVE")
         print("=" * 60)
+        self.telegram.notify_entry(
+            symbol=signal.symbol, amount_usd=signal.amount_usd,
+            score=int(signal.score), mode="live",
+        )
         self._events.append({
             "type": "live/intent",
             "data": {"token": signal.token_address, "symbol": signal.symbol,
@@ -136,6 +142,10 @@ class MicroEngine:
         print("   Amount: $" + "{:.2f}".format(signal.amount_usd))
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("=" * 60)
+        self.telegram.notify_entry(
+            symbol=signal.symbol, amount_usd=signal.amount_usd,
+            score=int(signal.score), mode="paper",
+        )
         self._events.append({
             "type": "paper/intent",
             "data": {"token": signal.token_address, "symbol": signal.symbol,
@@ -161,12 +171,24 @@ class MicroEngine:
             closed = self.sniper.check_exits()
             for pos in closed:
                 self.orchestrator.record_trade_outcome(pos.symbol, pos.pnl_usd, pos.pnl_pct, 0)
+                self.telegram.notify_exit(
+                    symbol=pos.symbol, amount_usd=pos.amount_usd,
+                    pnl_usd=pos.pnl_usd, pnl_pct=pos.pnl_pct,
+                    reason=pos.exit_reason if hasattr(pos, 'exit_reason') else 'exit',
+                    mode="live",
+                )
                 self._events.append({"type": "live/exit", "data": pos.to_dict(),
                     "timestamp": datetime.utcnow().isoformat()})
         else:
             closed = self.paper.check_exits()
             for trade in closed:
                 self.orchestrator.record_trade_outcome(trade.symbol, trade.pnl_usd, trade.pnl_pct, 0)
+                self.telegram.notify_exit(
+                    symbol=trade.symbol, amount_usd=trade.amount_usd,
+                    pnl_usd=trade.pnl_usd, pnl_pct=trade.pnl_pct,
+                    reason=trade.exit_reason if hasattr(trade, 'exit_reason') else 'exit',
+                    mode="paper",
+                )
                 self._events.append({"type": "paper/exit", "data": trade.to_dict(),
                     "timestamp": datetime.utcnow().isoformat()})
 
@@ -190,6 +212,7 @@ class MicroEngine:
         print("   Scan interval: " + str(SCAN_INTERVAL) + "s")
         print("=" * 60)
         print("")
+        self.telegram.send_startup_message(self.capital, self.mode)
         last_exit_check = time.time()
 
         while self._running:
