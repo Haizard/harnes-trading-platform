@@ -19,8 +19,11 @@ import os
 import re
 import json
 import asyncio
+import time
+import random
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Union
+from enum import Enum
 
 # Lazy-loaded AWS Bedrock client
 _client = None
@@ -82,6 +85,133 @@ class ChatOptions:
     top_p: float = 0.85
     system_prompt: str = "You are a helpful assistant."
     keep_json: bool = False  # If True, keep JSON blocks in returned text
+
+
+# ── Error Classification (from deepseek-harness pattern) ────
+
+class LlmErrorType(Enum):
+    """Structured error types for retry routing."""
+    RATE_LIMIT = "rate_limit"          # 429 - retryable
+    TIMEOUT = "timeout"                # Network/timeout - retryable
+    AUTH_ERROR = "auth_error"          # 401/403 - not retryable
+    MODEL_ERROR = "model_error"        # 500/502/503 - retryable
+    INVALID_REQUEST = "invalid_request"  # 400 - not retryable
+    UNKNOWN = "unknown"                # Unknown - retryable with backoff
+
+
+@dataclass
+class LlmError:
+    """Structured error with classification for retry routing."""
+    error_type: LlmErrorType
+    message: str
+    status_code: Optional[int] = None
+    retryable: bool = True
+    retry_after_ms: Optional[int] = None  # Provider-suggested delay
+
+
+def classify_error(error: Exception) -> LlmError:
+    """Classify an error for retry routing."""
+    error_str = str(error).lower()
+    
+    if "rate" in error_str or "throttl" in error_str or "429" in error_str:
+        return LlmError(LlmErrorType.RATE_LIMIT, str(error), 429, True, 1000)
+    elif "timeout" in error_str or "timed out" in error_str:
+        return LlmError(LlmErrorType.TIMEOUT, str(error), None, True)
+    elif "401" in error_str or "403" in error_str or "auth" in error_str:
+        return LlmError(LlmErrorType.AUTH_ERROR, str(error), None, False)
+    elif "500" in error_str or "502" in error_str or "503" in error_str:
+        return LlmError(LlmErrorType.MODEL_ERROR, str(error), None, True)
+    elif "400" in error_str or "invalid" in error_str:
+        return LlmError(LlmErrorType.INVALID_REQUEST, str(error), None, False)
+    else:
+        return LlmError(LlmErrorType.UNKNOWN, str(error), None, True)
+
+
+# ── Token Metering (from deepseek-harness pattern) ──────────
+
+@dataclass
+class TokenUsage:
+    """Track token usage across requests."""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
+    timestamp: float = field(default_factory=time.time)
+    
+    def to_dict(self) -> dict:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "model": self.model,
+            "timestamp": self.timestamp,
+        }
+
+
+# Global token meter
+_token_meter: List[TokenUsage] = []
+
+
+def get_token_usage() -> List[TokenUsage]:
+    """Get all recorded token usage."""
+    return _token_meter.copy()
+
+
+def get_total_tokens() -> int:
+    """Get total tokens used across all requests."""
+    return sum(t.total_tokens for t in _token_meter)
+
+
+def reset_token_meter():
+    """Reset the token meter."""
+    _token_meter.clear()
+
+
+def _record_usage(response_body: dict, model: str):
+    """Extract and record token usage from response."""
+    usage = response_body.get("usage", {})
+    if usage:
+        token_usage = TokenUsage(
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            model=model,
+        )
+        _token_meter.append(token_usage)
+
+
+# ── Retry Policy (from deepseek-harness pattern) ────────────
+
+@dataclass
+class RetryPolicy:
+    """Configurable retry policy with exponential backoff."""
+    max_retries: int = 3
+    base_delay_ms: int = 1000
+    max_delay_ms: int = 30000
+    jitter: bool = True
+    
+    def get_delay(self, attempt: int, error: Optional[LlmError] = None) -> float:
+        """Calculate delay for given attempt with exponential backoff."""
+        # Use provider-suggested delay if available
+        if error and error.retry_after_ms:
+            return error.retry_after_ms / 1000.0
+        
+        # Exponential backoff
+        delay_ms = min(
+            self.base_delay_ms * (2 ** attempt),
+            self.max_delay_ms
+        )
+        
+        # Add jitter (±25%)
+        if self.jitter:
+            jitter_range = delay_ms * 0.25
+            delay_ms += random.uniform(-jitter_range, jitter_range)
+        
+        return delay_ms / 1000.0
+
+
+# Default retry policy
+_default_retry_policy = RetryPolicy()
 
 
 # ── Client Initialization ────────────────────────────────────
