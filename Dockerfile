@@ -22,6 +22,8 @@ RUN mkdir -p src/data/scanner src/data/sniper src/data/paper_trading src/data/mi
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
+# Expose port for dashboard
 EXPOSE 8000
 
-CMD ["python", "run_micro.py"]
+# Run engine + dashboard
+CMD ["python", "run_full.py"]
