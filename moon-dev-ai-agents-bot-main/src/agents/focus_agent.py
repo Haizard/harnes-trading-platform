@@ -27,7 +27,6 @@ from datetime import datetime, timedelta, time
 from google.cloud import speech_v1p1beta1 as speech
 import pyaudio
 import openai
-from anthropic import Anthropic
 from termcolor import cprint
 from dotenv import load_dotenv
 from random import randint, uniform
