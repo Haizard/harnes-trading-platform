@@ -25,6 +25,11 @@ class DataGatherer:
         history = self._get_trading_history(symbol)
         if history:
             data["trading_history"] = history
+        # Per-token sentiment (from lightweight analyzer)
+        token_sent = self._get_token_sentiment(symbol)
+        if token_sent:
+            data["token_sentiment"] = token_sent
+        # Overall market sentiment (from CSV history)
         sentiment = self._get_sentiment_data()
         if sentiment:
             data["market_sentiment"] = sentiment
@@ -35,6 +40,23 @@ class DataGatherer:
         if whale:
             data["whale_data"] = whale
         return data
+
+    def _get_token_sentiment(self, symbol):
+        """Get per-token Twitter sentiment from lightweight analyzer."""
+        if not symbol:
+            return None
+        try:
+            from src.lightweight_sentiment import get_lightweight_sentiment
+            sent = get_lightweight_sentiment()
+            data = sent.get_token_sentiment(symbol)
+            if data:
+                return {"score": data.get("score", 0), "label": data.get("label", "neutral"),
+                        "tweet_count": data.get("tweet_count", 0),
+                        "positive_pct": data.get("positive_pct", 0),
+                        "negative_pct": data.get("negative_pct", 0)}
+        except Exception:
+            pass
+        return None
 
     def _get_birdeye_profile(self, addr):
         if not self.birdeye_key:

@@ -16,6 +16,7 @@ from src.rug_pull_detector import RugPullDetector
 from src.event_bus import EventBus, Events, DispatchMode
 from src.agent_orchestrator import AgentOrchestrator
 from src.telegram_reporter import get_telegram_reporter
+from src.lightweight_sentiment import get_lightweight_sentiment
 
 DEFAULT_CAPITAL = 25.0
 SCAN_INTERVAL = 30
@@ -37,6 +38,7 @@ class MicroEngine:
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
         self.event_bus = self.orchestrator.event_bus
         self.telegram = get_telegram_reporter()
+        self.sentiment = get_lightweight_sentiment()
         self._running = False
         self._scan_count = 0
         self._signals_generated = 0
@@ -75,6 +77,15 @@ class MicroEngine:
             return
 
         print("[RUG] PASSED " + candidate.symbol + " - Risk: " + str(int(report.risk_score)) + "/100")
+
+        # Step 1.5: Quick sentiment check (non-blocking, uses cache)
+        try:
+            sent = self.sentiment.get_token_sentiment(candidate.symbol)
+            if sent and sent.get("tweet_count", 0) > 0:
+                print("[SENTIMENT] " + candidate.symbol + ": " + sent.get("label", "unknown") + 
+                      " (score=" + str(sent.get("score", 0)) + ", tweets=" + str(sent.get("tweet_count", 0)) + ")")
+        except Exception:
+            pass
 
         # Step 2: AI Orchestrator decision (consensus + feedback loop)
         decision = self.orchestrator.analyze_candidate(candidate.to_dict())
