@@ -13,6 +13,7 @@ from src.token_scanner import TokenScanner, TokenCandidate
 from src.micro_sniper import MicroSniper, TradeSignal
 from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
+from src.event_bus import EventBus, Events, DispatchMode
 from src.agent_orchestrator import AgentOrchestrator
 
 DEFAULT_CAPITAL = 25.0
@@ -33,6 +34,7 @@ class MicroEngine:
         self.paper = PaperTrader(capital=capital)
         self.rug_detector = RugPullDetector()
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
+        self.event_bus = self.orchestrator.event_bus
         self._running = False
         self._scan_count = 0
         self._signals_generated = 0

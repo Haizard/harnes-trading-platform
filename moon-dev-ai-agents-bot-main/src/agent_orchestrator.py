@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 # DSH modules — the team
+from src.event_bus import EventBus, Events, DispatchMode
+from src.execution_tracker import ExecutionTracker
 from src.data_gatherer import DataGatherer
 from src.session_log import SessionLog, EventType
 from src.feedback_loop import TradeFeedbackLoop
@@ -91,6 +93,13 @@ class AgentOrchestrator:
         # Initialize team members
         self.session_log = SessionLog()
         self.data_gatherer = DataGatherer()
+        # Wire EventBus to SessionLog (DSH pattern)
+        async def _log_event(payload):
+            await self.session_log.log(payload.get("event_type", "unknown"), payload)
+        for evt in [Events.SIGNAL_GENERATED, Events.ORDER_SUBMITTED, Events.ORDER_FILLED, Events.POSITION_OPENED, Events.POSITION_CLOSED]:
+            self.event_bus.on(evt, _log_event, mode=DispatchMode.EMIT, tag="session_log")
+        self.event_bus = EventBus()
+        self.execution_tracker = ExecutionTracker()
         self.feedback_loop = TradeFeedbackLoop()
 
         # Consensus engine (multi-model AI)
