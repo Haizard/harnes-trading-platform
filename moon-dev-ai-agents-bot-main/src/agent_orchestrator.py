@@ -270,12 +270,18 @@ class AgentOrchestrator:
             if decision.get("ai_analysis"):
                 factors["ai_confidence"] = decision["ai_analysis"].get("confidence", 0)
                 factors["ai_entry_quality"] = decision["ai_analysis"].get("entry_quality", 0)
-            self.feedback_loop.record_signal(
-                symbol=decision["symbol"],
-                signal=decision["action"],
-                confidence=decision["confidence"],
-                factors=factors,
-            )
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(
+                    self.feedback_loop.record_signal(
+                        symbol=decision["symbol"],
+                        signal=decision["action"],
+                        confidence=decision["confidence"],
+                        factors=factors,
+                    )
+                )
+            finally:
+                loop.close()
         except Exception:
             pass
 

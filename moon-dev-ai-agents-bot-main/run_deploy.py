@@ -35,9 +35,17 @@ def start_engine():
     time.sleep(5)
     try:
         sys.path.insert(0, ".")
-        from dotenv import load_dotenv
-        load_dotenv()
+        # In Docker/Northflank, env vars are injected directly.
+        # Only load .env file if it exists (local dev mode).
+        if os.path.exists(".env"):
+            from dotenv import load_dotenv
+            load_dotenv(override=False)  # Don't override injected env vars
         print("[ENGINE] Loading micro engine...", flush=True)
+        # Debug: show which key env vars are set (not their values)
+        for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEDROCK_REGION", 
+                  "BIRDEYE_API_KEY", "RPC_ENDPOINT", "SOLANA_PRIVATE_KEY"]:
+            status = "SET" if os.environ.get(k) else "MISSING"
+            print(f"[ENGINE]   {k}: {status}", flush=True)
         from src.micro_engine import MicroEngine
         import asyncio
         capital = float(os.environ.get("CAPITAL", "25.0"))
