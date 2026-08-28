@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 # DSH modules — the team
+from src.data_gatherer import DataGatherer
 from src.session_log import SessionLog, EventType
 from src.feedback_loop import TradeFeedbackLoop
 
@@ -89,6 +90,7 @@ class AgentOrchestrator:
 
         # Initialize team members
         self.session_log = SessionLog()
+        self.data_gatherer = DataGatherer()
         self.feedback_loop = TradeFeedbackLoop()
 
         # Consensus engine (multi-model AI)
@@ -190,6 +192,8 @@ class AgentOrchestrator:
         try:
             # Build market state for the AI
             market_state = self._build_market_state(candidate_dict)
+            enriched = self.data_gatherer.gather_all(candidate_dict.get("address", ""), candidate_dict.get("symbol", ""))
+            market_state["enriched_data"] = enriched
             prompt = MICRO_CAP_PROMPT.format(token_data=json.dumps(market_state, indent=2))
 
             # Call Bedrock directly (lighter than full ConsensusEngine)
