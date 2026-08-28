@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import sys
 sys.path.insert(0, ".")
 from src.micro_engine import MicroEngine

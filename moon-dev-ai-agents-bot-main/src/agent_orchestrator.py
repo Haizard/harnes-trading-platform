@@ -9,7 +9,7 @@ Every decision flows through the team. No agent works in isolation.
 
 import json
 import time
-import asyncio
+import asyncio, concurrent.futures
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -193,14 +193,15 @@ class AgentOrchestrator:
             prompt = MICRO_CAP_PROMPT.format(token_data=json.dumps(market_state, indent=2))
 
             # Call Bedrock directly (lighter than full ConsensusEngine)
-            response = asyncio.run(bedrock_chat(
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                response = pool.submit(asyncio.run, bedrock_chat(
                 [ChatMessage(role="user", content=prompt)],
                 ChatOptions(
                     system_prompt="You are a Solana memecoin analyst. Respond only in JSON.",
                     max_tokens=500,
                     temperature=0.3,
                 ),
-            ))
+                )).result()
 
             # Parse JSON response
             text = response.text
