@@ -4,8 +4,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y gcc g++ git && rm -rf /var/lib/apt/lists/*
 
-COPY moon-dev-ai-agents-bot-main/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY moon-dev-ai-agents-bot-main/requirements-deploy.txt .
+RUN pip install --no-cache-dir -r requirements-deploy.txt
 
 COPY moon-dev-ai-agents-bot-main/ .
 

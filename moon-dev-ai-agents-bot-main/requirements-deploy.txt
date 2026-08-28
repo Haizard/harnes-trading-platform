@@ -1,0 +1,19 @@
+# === Core (trading engine) ===
+requests>=2.31.0
+python-dotenv>=1.0.0
+solders>=0.21.0
+base58>=2.1.0
+termcolor>=2.3.0
+
+# === AI (Bedrock) ===
+boto3>=1.34.0
+botocore>=1.34.0
+
+# === Data (scanner, gatherer) ===
+pandas>=2.0.0
+numpy>=1.24.0
+
+# === Optional: sentiment agent uses httpx ===
+httpx>=0.27.0
+
+# === No torch, transformers, selenium, moviepy, TA-Lib, etc ===
