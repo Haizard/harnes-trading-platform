@@ -261,6 +261,7 @@ class AgentOrchestrator:
 
     def _record_signal(self, decision, candidate_dict):
         try:
+            import uuid
             factors = {
                 "scanner_score": candidate_dict.get("score", 0),
                 "volume_24h": candidate_dict.get("volume_24h", 0),
@@ -270,33 +271,28 @@ class AgentOrchestrator:
             if decision.get("ai_analysis"):
                 factors["ai_confidence"] = decision["ai_analysis"].get("confidence", 0)
                 factors["ai_entry_quality"] = decision["ai_analysis"].get("entry_quality", 0)
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(
-                    self.feedback_loop.record_signal(
-                        symbol=decision["symbol"],
-                        signal=decision["action"],
-                        confidence=decision["confidence"],
-                        factors=factors,
-                    )
-                )
-            finally:
-                loop.close()
+            record = {
+                "signal_id": str(uuid.uuid4())[:8],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "symbol": decision["symbol"],
+                "signal": decision["action"],
+                "confidence": decision["confidence"],
+                "factors": factors,
+            }
+            self.feedback_loop._append_jsonl(self.feedback_loop.signals_path, record)
         except Exception:
             pass
 
     def record_trade_outcome(self, symbol, pnl_usd, pnl_pct, holding_minutes):
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(
-                    self.feedback_loop.record_outcome(
-                        symbol=symbol, pnl_usd=pnl_usd,
-                        pnl_pct=pnl_pct, holding_minutes=holding_minutes,
-                    )
-                )
-            finally:
-                loop.close()
+            record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "symbol": symbol,
+                "pnl_usd": pnl_usd,
+                "pnl_pct": pnl_pct,
+                "holding_minutes": holding_minutes,
+            }
+            self.feedback_loop._append_jsonl(self.feedback_loop.outcomes_path, record)
         except Exception:
             pass
 
