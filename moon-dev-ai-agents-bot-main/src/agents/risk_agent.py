@@ -3,10 +3,6 @@
 Built with love by Moon Dev 🚀
 """
 
-# Model override settings - Adding DeepSeek support
-MODEL_OVERRIDE = "0"  # Set to "deepseek-chat" or "deepseek-reasoner" to use DeepSeek, "0" to use default
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"  # Base URL for DeepSeek API
-
 # 🛡️ Risk Override Prompt - The Secret Sauce!
 RISK_OVERRIDE_PROMPT = """
 You are Moon Dev's Risk Management AI 🛡️
@@ -41,13 +37,11 @@ or
 RESPECT_LIMIT: <detailed reason for each position>
 """
 
-import anthropic
 import os
 import pandas as pd
 import json
 from termcolor import colored, cprint
 from dotenv import load_dotenv
-import openai
 from src import config
 from src import nice_funcs as n
 from src.data.ohlcv_collector import collect_all_tokens
@@ -55,6 +49,7 @@ from datetime import datetime, timedelta
 import time
 from src.config import *
 from src.agents.base_agent import BaseAgent
+from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 import traceback
 
 # ✨ Data infrastructure integration
@@ -99,28 +94,8 @@ class RiskAgent(BaseAgent):
                 
         load_dotenv()
         
-        # Get API keys
-        openai_key = os.getenv("OPENAI_KEY")
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        deepseek_key = os.getenv("DEEPSEEK_KEY")
-        
-        if not openai_key:
-            raise ValueError("🚨 OPENAI_KEY not found in environment variables!")
-        if not anthropic_key:
-            raise ValueError("🚨 ANTHROPIC_KEY not found in environment variables!")
-            
-        # Initialize OpenAI client for DeepSeek
-        if deepseek_key and MODEL_OVERRIDE.lower() == "deepseek-chat":
-            self.deepseek_client = openai.OpenAI(
-                api_key=deepseek_key,
-                base_url=DEEPSEEK_BASE_URL
-            )
-            print("🚀 DeepSeek model initialized!")
-        else:
-            self.deepseek_client = None
-            
-        # Initialize Anthropic client
-        self.client = anthropic.Anthropic(api_key=anthropic_key)
+        # Bedrock via bedrock_llm.py - no old API keys needed
+        self._ai_model = "deepseek.v3.2"
         
         self.override_active = False
         self.last_override_check = None

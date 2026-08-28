@@ -14,11 +14,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import time
 from dotenv import load_dotenv
-import anthropic
-import openai
 from src import nice_funcs as n
 from src import nice_funcs_hl as hl
 from src.agents.base_agent import BaseAgent
+from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 import traceback
 import base64
 from io import BytesIO
@@ -86,14 +85,8 @@ class ChartAnalysisAgent(BaseAgent):
         load_dotenv()
         
         # Initialize API clients
-        openai_key = os.getenv("OPENAI_KEY")
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        
-        if not openai_key or not anthropic_key:
-            raise ValueError("🚨 API keys not found in environment variables!")
-            
-        self.openai_client = openai.OpenAI(api_key=openai_key)  # For TTS only
-        self.client = anthropic.Anthropic(api_key=anthropic_key)
+        # Bedrock via bedrock_llm.py - no old API keys needed
+        self._ai_model = "deepseek.v3.2"
         
         # Set AI parameters - use config values unless overridden
         self.ai_model = AI_MODEL if AI_MODEL else config.AI_MODEL
@@ -180,15 +173,8 @@ class ChartAnalysisAgent(BaseAgent):
             print(f"\n🤖 Analyzing {symbol} with AI...")
             
             # Get AI analysis using instance settings
-            message = self.client.messages.create(
-                model=self.ai_model,
-                max_tokens=self.ai_max_tokens,
-                temperature=self.ai_temperature,
-                messages=[{
-                    "role": "user",
-                    "content": context
-                }]
-            )
+            response_obj = bedrock_chat_sync([ChatMessage(role="user", content=full_prompt)], ChatOptions(system_prompt="You are Moon Dev's Chart Analysis AI.", temperature=AI_TEMPERATURE, max_tokens=AI_MAX_TOKENS))
+            response = response_obj.text.strip()
             
             if not message or not message.content:
                 print("❌ No response from AI")

@@ -38,7 +38,6 @@ from random import randint
 import pathlib
 import asyncio
 import numpy as np
-import openai
 from pathlib import Path
 
 # --- Lazy Imports for AI & Twitter ---
@@ -51,7 +50,12 @@ pathlib.Path(DATA_FOLDER).mkdir(parents=True, exist_ok=True)
 load_dotenv()
 
 # Get OpenAI key for voice
-openai.api_key = os.getenv("OPENAI_KEY")
+# TTS via OpenAI (optional - graceful fallback if not configured)
+try:
+    import openai as _openai_tts
+    _openai_tts.api_key = os.getenv("OPENAI_KEY")
+except Exception:
+    _openai_tts = None
 
 # Patch httpx
 original_client = httpx.Client
@@ -182,8 +186,11 @@ class SentimentAgent:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             speech_file = self.audio_dir / f"sentiment_audio_{timestamp}.mp3"
             
-            # Generate speech using OpenAI
-            response = openai.audio.speech.create(
+            # Generate speech using OpenAI (optional - needs OPENAI_KEY)
+            if not _openai_tts:
+                cprint("[SENTIMENT] TTS disabled - OPENAI_KEY not configured", "yellow")
+                return
+            response = _openai_tts.audio.speech.create(
                 model=VOICE_MODEL,
                 voice=VOICE_NAME,
                 speed=VOICE_SPEED,

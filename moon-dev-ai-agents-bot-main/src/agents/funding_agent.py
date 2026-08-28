@@ -22,14 +22,13 @@ import time
 from datetime import datetime, timedelta
 from termcolor import colored, cprint
 from dotenv import load_dotenv
-import openai
-import anthropic
 from pathlib import Path
 from src import nice_funcs as n
 from src import nice_funcs_hl as hl
 from src.agents.api import MoonDevAPI
 from collections import deque
 from src.agents.base_agent import BaseAgent
+from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 import traceback
 import numpy as np
 import re
@@ -104,33 +103,7 @@ class FundingAgent(BaseAgent):
         load_dotenv()
         
         # Initialize OpenAI client for voice only
-        openai_key = os.getenv("OPENAI_KEY")
-        if not openai_key:
-            raise ValueError("🚨 OPENAI_KEY not found in environment variables!")
-        openai.api_key = openai_key
-        
-        # Initialize Anthropic for Claude models
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        if not anthropic_key:
-            raise ValueError("🚨 ANTHROPIC_KEY not found in environment variables!")
-        self.anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
-        
-        # Initialize DeepSeek client if needed
-        if "deepseek" in self.active_model.lower():
-            deepseek_key = os.getenv("DEEPSEEK_KEY")
-            if deepseek_key:
-                self.deepseek_client = openai.OpenAI(
-                    api_key=deepseek_key,
-                    base_url=DEEPSEEK_BASE_URL
-                )
-                cprint("🚀 Moon Dev's Funding Agent using DeepSeek override!", "green")
-            else:
-                self.deepseek_client = None
-                cprint("⚠️ DEEPSEEK_KEY not found - DeepSeek model will not be available", "yellow")
-        else:
-            self.deepseek_client = None
-            cprint(f"🎯 Moon Dev's Funding Agent using Claude model: {self.active_model}!", "green")
-        
+        # Bedrock via bedrock_llm.py - no old API keys needed
         self.api = MoonDevAPI()
         
         # Create data directories if they don't exist
@@ -194,35 +167,17 @@ class FundingAgent(BaseAgent):
             
             print(f"\n🤖 Analyzing {symbol} with AI...")
             
-            # Use either DeepSeek or Claude based on active_model
-            if "deepseek" in self.active_model.lower():
-                if not self.deepseek_client:
-                    raise ValueError("🚨 DeepSeek client not initialized - check DEEPSEEK_KEY")
-                    
-                cprint(f"🤖 Using DeepSeek model: {self.active_model}", "cyan")
-                response = self.deepseek_client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=[
-                        {"role": "system", "content": FUNDING_ANALYSIS_PROMPT},
-                        {"role": "user", "content": context}
-                    ],
-                    max_tokens=AI_MAX_TOKENS if AI_MAX_TOKENS > 0 else config.AI_MAX_TOKENS,
+            # Use Bedrock (DeepSeek V3.2)
+            cprint("[FUNDING] Querying Bedrock (DeepSeek V3.2)...", "cyan")
+            response_obj = bedrock_chat_sync(
+                [ChatMessage(role="user", content=context)],
+                ChatOptions(
+                    system_prompt=FUNDING_ANALYSIS_PROMPT,
                     temperature=AI_TEMPERATURE if AI_TEMPERATURE > 0 else config.AI_TEMPERATURE,
-                    stream=False
-                )
-                content = response.choices[0].message.content.strip()
-            else:
-                cprint(f"🤖 Using Claude model: {self.active_model}", "cyan")
-                response = self.anthropic_client.messages.create(
-                    model=self.active_model,
                     max_tokens=AI_MAX_TOKENS if AI_MAX_TOKENS > 0 else config.AI_MAX_TOKENS,
-                    temperature=AI_TEMPERATURE if AI_TEMPERATURE > 0 else config.AI_TEMPERATURE,
-                    system=FUNDING_ANALYSIS_PROMPT,
-                    messages=[
-                        {"role": "user", "content": context}
-                    ]
-                )
-                content = response.content[0].text
+                ),
+            )
+            content = response_obj.text.strip()
             
             # Debug: Print raw response
             print("\n🔍 Raw response:")

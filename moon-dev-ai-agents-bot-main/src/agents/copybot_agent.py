@@ -13,12 +13,12 @@ Need an API key? for a limited time, bootcamp members get free api keys for clau
 
 import os
 import pandas as pd
-import anthropic
 from termcolor import colored, cprint
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import time
 from src.config import *
+from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 from src import nice_funcs as n
 from src.data.ohlcv_collector import collect_all_tokens, collect_token_data
 
@@ -68,7 +68,7 @@ class CopyBotAgent:
     def __init__(self):
         """Initialize the CopyBot agent with LLM"""
         load_dotenv()
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_KEY"))
+        # Bedrock via bedrock_llm.py - no old API keys needed
         self.recommendations_df = pd.DataFrame(columns=['token', 'action', 'confidence', 'reasoning'])
         print("🤖 Moon Dev's CopyBot Agent initialized!")
         

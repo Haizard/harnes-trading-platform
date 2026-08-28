@@ -15,11 +15,10 @@ from pathlib import Path
 import re
 
 import pandas as pd
-from anthropic import Anthropic
 from dotenv import load_dotenv
-import openai
 
 from src.agents.base_agent import BaseAgent
+from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 from src.nice_funcs_hl import get_funding_rates
 from src.config import AI_MODEL, AI_TEMPERATURE, AI_MAX_TOKENS
 
@@ -101,28 +100,8 @@ class FundingArbAgent(BaseAgent):
         load_dotenv()
         
         # Get API keys
-        openai_key = os.getenv("OPENAI_KEY")
-        anthropic_key = os.getenv("ANTHROPIC_KEY")
-        deepseek_key = os.getenv("DEEPSEEK_KEY")
-        
-        if not openai_key:
-            raise ValueError("🚨 OPENAI_KEY not found in environment variables!")
-        if not anthropic_key:
-            raise ValueError("🚨 ANTHROPIC_KEY not found in environment variables!")
-            
-        # Initialize OpenAI client for DeepSeek
-        if deepseek_key and MODEL_OVERRIDE.lower() == "deepseek-chat":
-            self.deepseek_client = openai.OpenAI(
-                api_key=deepseek_key,
-                base_url=DEEPSEEK_BASE_URL
-            )
-            print("🚀 DeepSeek model initialized!")
-        else:
-            self.deepseek_client = None
-            
-        # Initialize other clients
-        openai.api_key = openai_key
-        self.client = Anthropic(api_key=anthropic_key)
+        # Bedrock via bedrock_llm.py - no old API keys needed
+        self._ai_model = "deepseek.v3.2"
         
         # Create data directories
         self.data_dir = Path("src/data/fundingarb")
@@ -150,40 +129,17 @@ class FundingArbAgent(BaseAgent):
             {market_data}
             """
             
-            # Use DeepSeek if configured
-            if self.deepseek_client and MODEL_OVERRIDE.lower() == "deepseek-chat":
-                print("🚀 Using DeepSeek for analysis...")
-                response = self.deepseek_client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=[
-                        {"role": "system", "content": "You are a funding arbitrage analyst. You must respond in exactly 2 lines: ARBITRAGE/SKIP and your reason."},
-                        {"role": "user", "content": FUNDING_ANALYSIS_PROMPT.format(
-                            market_data=context,
-                            threshold=YEARLY_FUNDING_THRESHOLD
-                        )}
-                    ],
-                    max_tokens=self.ai_max_tokens,
+            # Use Bedrock (DeepSeek V3.2)
+            cprint("[FUNDING_ARB] Querying Bedrock (DeepSeek V3.2)...", "cyan")
+            response_obj = bedrock_chat_sync(
+                [ChatMessage(role="user", content=prompt)],
+                ChatOptions(
+                    system_prompt="You are Moon Dev's Funding Arbitrage Analyst.",
                     temperature=self.ai_temperature,
-                    stream=False
-                )
-                content = response.choices[0].message.content.strip()
-            else:
-                # Use Claude as before
-                print("🤖 Using Claude for analysis...")
-                response = self.client.messages.create(
-                    model=self.ai_model,
                     max_tokens=self.ai_max_tokens,
-                    temperature=self.ai_temperature,
-                    system="You are a funding arbitrage analyst. You must respond in exactly 2 lines: ARBITRAGE/SKIP and your reason.",
-                    messages=[{
-                        "role": "user",
-                        "content": FUNDING_ANALYSIS_PROMPT.format(
-                            market_data=context,
-                            threshold=YEARLY_FUNDING_THRESHOLD
-                        )
-                    }]
-                )
-                content = str(response.content)
+                ),
+            )
+            content = response_obj.text.strip()
             
             print(f"\n🤖 Raw AI response:\n{content}")  # Debug print
             
@@ -215,7 +171,7 @@ class FundingArbAgent(BaseAgent):
                 'action': action,
                 'analysis': analysis,
                 'confidence': "Confidence: 100%",  # Default confidence for announcements
-                'model_used': 'deepseek-chat' if self.deepseek_client else self.ai_model
+                'model_used': 'deepseek.v3.2 (Bedrock)'
             }
             print(f"✅ Valid analysis format: {result}")  # Debug print
             return result
