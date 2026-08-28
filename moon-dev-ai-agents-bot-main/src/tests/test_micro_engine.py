@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Import modules under test
 from src.token_scanner import (
-    TokenCandidate, TokenScorer, JupiterChecker, BirdeyeClient, TokenScanner
+    TokenCandidate, TokenScorer, JupiterChecker, DexScreenerSource, TokenScanner
 )
 from src.micro_sniper import (
     Position, TradeSignal, MicroPositionSizer, MicroRiskManager, MicroSniper
@@ -59,23 +59,21 @@ class TestTokenScorer:
     def test_high_volume_high_score(self):
         candidate = TokenCandidate(
             address="test", symbol="TEST", name="Test",
-            volume_1h=60000,
+            volume_24h=60000,
             liquidity_usd=60000,
             price_change_1h=60,
-            holder_count=1500,
             market_cap=50000,
         )
         score = self.scorer.score(candidate)
-        assert score >= 80
+        assert score >= 70
         assert len(candidate.signals) > 0
     
     def test_low_volume_low_score(self):
         candidate = TokenCandidate(
             address="test", symbol="TEST", name="Test",
-            volume_1h=1000,
+            volume_24h=1000,
             liquidity_usd=1000,
             price_change_1h=0,
-            holder_count=10,
             market_cap=1000000,
         )
         score = self.scorer.score(candidate)
@@ -84,10 +82,9 @@ class TestTokenScorer:
     def test_score_capped_at_100(self):
         candidate = TokenCandidate(
             address="test", symbol="TEST", name="Test",
-            volume_1h=100000,
+            volume_24h=100000,
             liquidity_usd=100000,
             price_change_1h=100,
-            holder_count=5000,
             market_cap=10000,
         )
         score = self.scorer.score(candidate)

@@ -6,8 +6,8 @@ from typing import Optional, Dict, List
 from pathlib import Path
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
-JUPITER_QUOTE = "https://quote-api.jup.ag/v6/quote"
-JUPITER_SWAP = "https://quote-api.jup.ag/v6/swap"
+JUPITER_QUOTE = "https://api.jup.ag/swap/v1/quote"
+JUPITER_SWAP = "https://api.jup.ag/swap/v1/swap"
 DEFAULT_CAPITAL = 25.0
 MAX_POSITION_PCT = 50.0
 STOP_LOSS_PCT = 10.0
@@ -64,7 +64,7 @@ class JupiterExecutor:
         return None
     def get_price(self, token_address):
         try:
-            resp = requests.get("https://quote-api.jup.ag/v6/price",
+            resp = requests.get("https://api.jup.ag/price/v2",
                 params={"ids": token_address}, timeout=10)
             if resp.status_code == 200:
                 return float(resp.json().get("data", {}).get(token_address, {}).get("price", 0))
