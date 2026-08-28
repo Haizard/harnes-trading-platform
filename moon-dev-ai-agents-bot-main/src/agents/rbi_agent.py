@@ -83,7 +83,7 @@ DATA_PATH = str(DATA_DIR / "BTC-USD-15m.csv")
 # ── Retry Limits ─────────────────────────────────────────────
 MAX_DEBUG_RETRIES = 3      # Debug phase: AI-fix attempts per validation failure
 MAX_EXEC_RETRIES = 3       # Execute phase: runtime retry attempts
-EXEC_TIMEOUT = 180         # Seconds per backtest execution attempt
+EXEC_TIMEOUT = 180         # Default fallback (dynamic timeout used when possible)
 
 # ── Realistic Backtest Costs ─────────────────────────────────
 # Real Solana/Jupiter trading: ~1% fee each side + ~0.5% slippage + spread
@@ -469,6 +469,153 @@ feedback_loop = TradeFeedbackLoop(history_dir=str(DATA_DIR))
 strategy_memory = StrategyMemory()
 
 
+
+# ── Security: Prompt Injection Sanitization ──────────────────
+_INJECTION_PATTERNS = [
+    r'(?i)ignore\s+(all\s+)?previous\s+instructions',
+    r'(?i)you\s+are\s+now\s+(a|an)\s+',
+    r'(?i)disregard\s+(all\s+)?prior',
+    r'(?i)override\s+(your\s+)?instructions',
+    r'(?i)new\s+instructions?:',
+    r'(?i)system\s*:\s*',
+    r'(?i)<\s*script',
+]
+
+MAX_IDEA_LENGTH = 5000
+
+
+def sanitize_user_input(text: str) -> str:
+    if not text:
+        return text
+    original_length = len(text)
+    text = re.sub(r'[--]', '', text)
+    injection_found = []
+    for pattern in _INJECTION_PATTERNS:
+        matches = re.findall(pattern, text)
+        if matches:
+            injection_found.extend(matches)
+    if injection_found:
+        cprint(f"[SECURITY] Detected {len(injection_found)} potential injection(s)", "red")
+        for pattern in _INJECTION_PATTERNS:
+            text = re.sub(pattern, '[FILTERED]', text)
+    if len(text) > MAX_IDEA_LENGTH:
+        text = text[:MAX_IDEA_LENGTH] + '[TRUNCATED]'
+        cprint(f"[SECURITY] Input truncated from {original_length} to {MAX_IDEA_LENGTH} chars", "yellow")
+    return text
+
+
+# ── Multi-Asset Data Resolver ────────────────────────────────
+ASSET_DATA = {
+    "BTC": str(DATA_DIR / "BTC-USD-15m.csv"),
+    "ETH": str(DATA_DIR / "ETH-USD-15m.csv"),
+    "SOL": str(DATA_DIR / "SOL-USD-15m.csv"),
+}
+
+ASSET_KEYWORDS = {
+    "BTC": ["bitcoin", "btc", "satoshi"],
+    "ETH": ["ethereum", "eth", "vitalik", "gas", "defi"],
+    "SOL": ["solana", "sol", "jupiter", "raydium", "orca", "pump.fun"],
+}
+
+
+def get_strategy_asset_target(strategy_text: str) -> str:
+    text_lower = strategy_text.lower()
+    for asset, keywords in ASSET_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text_lower:
+                return asset
+    return "BTC"
+
+
+def download_asset_data(asset: str) -> str:
+    target_path = ASSET_DATA.get(asset)
+    if not target_path:
+        return None
+    if os.path.exists(target_path):
+        return target_path
+    yf_tickers = {"BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD"}
+    ticker = yf_tickers.get(asset)
+    if not ticker:
+        return None
+    try:
+        import yfinance as yf
+        cprint(f"[DATA] Downloading {asset} data from Yahoo Finance...", "cyan")
+        data = yf.download(ticker, period="2y", interval="15m", progress=False)
+        if data.empty:
+            cprint(f"[DATA] No data returned for {ticker}", "yellow")
+            return None
+        if hasattr(data.columns, 'levels'):
+            data.columns = data.columns.get_level_values(0)
+        data.to_csv(target_path)
+        cprint(f"[DATA] Saved {len(data)} rows to {target_path}", "green")
+        return target_path
+    except ImportError:
+        cprint("[DATA] yfinance not installed", "yellow")
+        return None
+    except Exception as e:
+        cprint(f"[DATA] Download failed for {asset}: {e}", "yellow")
+        return None
+
+
+def resolve_data_path(strategy_text: str) -> str:
+    asset = get_strategy_asset_target(strategy_text)
+    cprint(f"[DATA] Strategy targets: {asset}", "cyan")
+    path = ASSET_DATA.get(asset, DATA_PATH)
+    if os.path.exists(path):
+        return path
+    downloaded = download_asset_data(asset)
+    if downloaded:
+        return downloaded
+    cprint("[DATA] Falling back to BTC data", "yellow")
+    return DATA_PATH
+
+
+# ── Dynamic Timeout Calculator ───────────────────────────────
+BASE_TIMEOUT = 60
+TIMEOUT_PER_10K_ROWS = 15
+MAX_TIMEOUT = 600
+
+
+def calculate_timeout(data_path: str) -> int:
+    try:
+        with open(data_path, "r") as f:
+            row_count = sum(1 for _ in f) - 1
+        timeout = BASE_TIMEOUT + (row_count // 10000) * TIMEOUT_PER_10K_ROWS
+        timeout = min(timeout, MAX_TIMEOUT)
+        timeout = max(timeout, BASE_TIMEOUT)
+        cprint(f"[TIMEOUT] {row_count:,} rows -> {timeout}s timeout", "cyan")
+        return timeout
+    except Exception:
+        return 180
+
+
+# ── Pre-Execution Import Validation ──────────────────────────
+REQUIRED_BACKTEST_IMPORTS = ["pandas", "numpy", "talib", "backtesting"]
+
+
+def validate_backtest_imports(code: str) -> tuple:
+    errors = []
+    needed = set()
+
+    # Find ALL import statements in the code
+    import_pattern = r'(?:^|\s)import\s+(\w+)'
+    from_pattern = r'(?:^|\s)from\s+(\w+)\s+import'
+    for match in re.finditer(import_pattern, code):
+        needed.add(match.group(1))
+    for match in re.finditer(from_pattern, code):
+        needed.add(match.group(1))
+
+    # Try to import each module
+    for module in needed:
+        try:
+            __import__(module)
+        except ImportError as e:
+            errors.append(f"Missing required module '{module}': {e}")
+        except Exception as e:
+            errors.append(f"Error importing '{module}': {e}")
+    return (len(errors) == 0, errors)
+
+
 # ── Phase Functions ──────────────────────────────────────────
 
 def research_strategy(content: str, session_log: RBISessionLogger) -> tuple:
@@ -495,13 +642,16 @@ def research_strategy(content: str, session_log: RBISessionLogger) -> tuple:
     return output, name
 
 
-def create_backtest(strategy: str, name: str, session_log: RBISessionLogger) -> str:
+def create_backtest(strategy: str, name: str, session_log: RBISessionLogger, data_path: str = None) -> str:
     """Phase 2: Generate backtest code with validation + backtesting.lib check (merged from old Phase 3)"""
     cprint("\n[PHASE 2] Generating backtest code...", "cyan")
 
+    # Use resolved data path if provided, otherwise default
+    actual_data_path = data_path or DATA_PATH
+
     prompt = BACKTEST_PROMPT.format(
         strategy=strategy,
-        data_path=DATA_PATH,
+        data_path=actual_data_path,
         cash=BACKTEST_CASH,
         commission=BACKTEST_COMMISSION,
     )
@@ -627,6 +777,22 @@ def execute_backtest(name: str, session_log: RBISessionLogger) -> tuple:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
+    # Pre-execution import validation — catch missing modules before subprocess
+    code_text = path.read_text(encoding='utf-8')
+    imports_ok, import_errors = validate_backtest_imports(code_text)
+    if not imports_ok:
+        cprint(f"[PHASE 4] Import validation failed: {import_errors}", "yellow")
+        session_log.log("agent/error", {
+            "phase": "execute", "error": "import_validation_failed",
+            "details": import_errors
+        })
+        # Don't fail immediately — the subprocess might have different env
+        # Just log the warning and proceed
+
+    # Dynamic timeout based on data file size
+    data_path_for_timeout = DATA_PATH  # Could be made smarter
+    timeout = calculate_timeout(data_path_for_timeout)
+
     last_error_context = None
 
     for attempt in range(MAX_EXEC_RETRIES):
@@ -635,7 +801,7 @@ def execute_backtest(name: str, session_log: RBISessionLogger) -> tuple:
         try:
             res = subprocess.run(
                 [sys.executable, str(path)],
-                capture_output=True, text=True, env=env, timeout=EXEC_TIMEOUT,
+                capture_output=True, text=True, env=env, timeout=timeout,
             )
             output = res.stdout + "\n" + res.stderr
 
@@ -941,6 +1107,10 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
 
     try:
         content = get_idea_content(idea)
+
+        # Security: sanitize user input before passing to AI
+        content = sanitize_user_input(content)
+
         session_log.log("model/call", {"phase": "init", "idea_preview": content[:200]}, signal_id)
 
         # Phase 1: Research
@@ -954,7 +1124,9 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
         memory_record["strategy_name"] = name
 
         # Phase 2: Backtest (with validation + backtesting.lib check)
-        code = create_backtest(strategy, name, session_log)
+        # Resolve appropriate data file based on strategy content
+        data_path = resolve_data_path(strategy)
+        code = create_backtest(strategy, name, session_log, data_path=data_path)
         if not code:
             cprint("[RBI] Phase 2 failed — no valid backtest code", "red")
             memory_record["result"] = "REJECT"
