@@ -35,9 +35,10 @@ SCAN_TERMS = [
     "GUMMY",
 ]
 
-MIN_LIQUIDITY_USD = 5000
-MIN_VOLUME_24H = 1000
+MIN_LIQUIDITY_USD = 50_000       # Real depth — avoid illiquid micro-caps
+MIN_VOLUME_24H = 10_000          # Active trading required
 MIN_HOLDERS = 10
+MAX_MARKET_CAP = 10_000_000      # Exclude blue-chip memecoins (Bonk, POPCAT, etc.)
 SCAN_INTERVAL_SECONDS = 30
 
 
@@ -569,6 +570,8 @@ class TokenScanner:
             if candidate.liquidity_usd < MIN_LIQUIDITY_USD:
                 continue
             if candidate.volume_24h < MIN_VOLUME_24H:
+                continue
+            if candidate.market_cap > MAX_MARKET_CAP:
                 continue
             jup = self.jupiter.check_liquidity(addr)
             if not jup.get("available"):
