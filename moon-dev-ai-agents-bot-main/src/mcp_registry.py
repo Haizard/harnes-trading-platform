@@ -171,37 +171,45 @@ class MCPRegistry:
 
         import time as _time
         start = _time.monotonic()
-        try:
-            if params is None:
-                params = {}
-            # Tool execute_fn is async but uses sync requests internally.
-            # Use asyncio.run() for proper isolation — it creates a new
-            # event loop, runs the coroutine, and closes the loop.
-            data = asyncio.run(tool.execute_fn(**params))
-            latency = (_time.monotonic() - start) * 1000
-            result = ToolResult(success=True, data=data, source=tool.source, latency_ms=latency)
-        except RuntimeError:
-            # asyncio.run() fails if a loop is already running.
-            # Fallback: run in a separate thread with its own event loop.
-            import concurrent.futures
-            def _run_in_thread():
+        if params is None:
+            params = {}
+
+        # Tool execute_fn is async def but uses sync requests internally.
+        # The coroutine must be awaited in an isolated event loop.
+        # We use a dedicated thread + event loop to avoid conflicts
+        # with the container's running event loop.
+        import threading
+        _result = [None]
+        _error = [None]
+        _done = threading.Event()
+
+        def _worker():
+            try:
+                # Create a fresh event loop for this thread, explicitly
+                # detached from any existing loop in the main thread.
                 loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    return loop.run_until_complete(tool.execute_fn(**params))
+                    _result[0] = loop.run_until_complete(tool.execute_fn(**params))
                 finally:
                     loop.close()
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_run_in_thread)
-                    data = future.result(timeout=15)
-                latency = (_time.monotonic() - start) * 1000
-                result = ToolResult(success=True, data=data, source=tool.source, latency_ms=latency)
-            except Exception as e2:
-                latency = (_time.monotonic() - start) * 1000
-                result = ToolResult(success=False, error=str(e2), source=tool.source, latency_ms=latency)
-        except Exception as e:
-            latency = (_time.monotonic() - start) * 1000
-            result = ToolResult(success=False, error=str(e), source=tool.source, latency_ms=latency)
+                    asyncio.set_event_loop(None)
+            except Exception as e:
+                _error[0] = e
+            finally:
+                _done.set()
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout=15)
+
+        latency = (_time.monotonic() - start) * 1000
+        if _error[0]:
+            result = ToolResult(success=False, error=str(_error[0]), source=tool.source, latency_ms=latency)
+        elif _result[0] is not None:
+            result = ToolResult(success=True, data=_result[0], source=tool.source, latency_ms=latency)
+        else:
+            result = ToolResult(success=False, error="Tool call timed out (15s)", source=tool.source, latency_ms=latency)
 
         # Record in call history
         self._call_history.append({
