@@ -263,7 +263,7 @@ class AgentOrchestrator:
             market_state = self._build_market_state(candidate_dict)
             enriched = self.data_gatherer.gather_all(candidate_dict.get("address", ""), candidate_dict.get("symbol", ""))
             market_state["enriched_data"] = enriched
-            prompt = MICRO_CAP_PROMPT.format(token_data=json.dumps(market_state, indent=2))
+            prompt = MICRO_CAP_PROMPT.format(token_data=json.dumps(market_state, indent=2, default=str))
 
             # Call Bedrock directly (lighter than full ConsensusEngine)
             with concurrent.futures.ThreadPoolExecutor() as pool:
