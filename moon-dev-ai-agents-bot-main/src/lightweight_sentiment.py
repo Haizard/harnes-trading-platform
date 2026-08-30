@@ -90,7 +90,7 @@ class LightweightSentiment:
             import asyncio
 
             async def _init():
-                from twikit import EdgeAsyncClient as Client
+                from twikit import Client
                 if not os.path.exists("cookies.json"):
                     print("[SENTIMENT] No cookies.json found — Twitter scraping disabled")
                     return None

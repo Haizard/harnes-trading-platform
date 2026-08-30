@@ -40,10 +40,42 @@ def start_engine():
         if os.path.exists(".env"):
             from dotenv import load_dotenv
             load_dotenv(override=False)  # Don't override injected env vars
+        
+        # === Twitter auto-login (server has clean IP, no Cloudflare) ===
+        twitter_user = os.environ.get("TWITTER_USERNAME", "")
+        twitter_email = os.environ.get("TWITTER_EMAIL", "")
+        twitter_pass = os.environ.get("TWITTER_PASSWORD", "")
+        cookies_path = "cookies.json"
+        
+        if all([twitter_user, twitter_email, twitter_pass]) and not os.path.exists(cookies_path):
+            print("[TWITTER] No cookies.json found, logging in...", flush=True)
+            try:
+                import asyncio as _aio
+                async def _twitter_login():
+                    from twikit import Client
+                    client = Client()
+                    await client.login(
+                        auth_info_1=twitter_user,
+                        auth_info_2=twitter_email,
+                        password=twitter_pass,
+                        cookies_file=cookies_path
+                    )
+                    print("[TWITTER] Login successful! cookies.json saved.", flush=True)
+                    return True
+                _aio.run(_twitter_login())
+            except Exception as e:
+                print(f"[TWITTER] Login failed: {e}", flush=True)
+                print("[TWITTER] Sentiment will be neutral until cookies are set up.", flush=True)
+        elif os.path.exists(cookies_path):
+            print("[TWITTER] cookies.json found - sentiment enabled.", flush=True)
+        else:
+            print("[TWITTER] No credentials in env - sentiment disabled.", flush=True)
+        
         print("[ENGINE] Loading micro engine...", flush=True)
         # Debug: show which key env vars are set (not their values)
         for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEDROCK_REGION", 
-                  "BIRDEYE_API_KEY", "RPC_ENDPOINT", "SOLANA_PRIVATE_KEY"]:
+                  "BIRDEYE_API_KEY", "RPC_ENDPOINT", "SOLANA_PRIVATE_KEY",
+                  "TWITTER_USERNAME", "TELEGRAM_BOT_TOKEN"]:
             status = "SET" if os.environ.get(k) else "MISSING"
             print(f"[ENGINE]   {k}: {status}", flush=True)
         from src.micro_engine import MicroEngine

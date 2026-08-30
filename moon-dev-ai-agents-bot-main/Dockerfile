@@ -26,4 +26,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8000
 
 # Default command - run in paper mode
-CMD ["python", "run_micro.py"]
+CMD ["python", "run_deploy.py"]

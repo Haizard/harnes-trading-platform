@@ -341,7 +341,7 @@ class SentimentAgent:
     async def init_twitter_client(self):
         """Initialize Twitter client using saved cookies (Lazy Load)"""
         try:
-            from twikit import EdgeAsyncClient as Client
+            from twikit import Client
             if not os.path.exists("cookies.json"):
                 cprint("❌ No cookies.json found! Please run twitter_login.py first", "red")
                 return None
