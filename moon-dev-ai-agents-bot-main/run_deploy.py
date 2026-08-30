@@ -95,7 +95,7 @@ def start_engine():
             print(f"[ENGINE]   {k}: {status}", flush=True)
         from src.micro_engine import MicroEngine
         import asyncio
-        capital = float(os.environ.get("CAPITAL", "25.0"))
+        capital = float(os.environ.get("CAPITAL", "100.0"))
         engine = MicroEngine(capital=capital)
         print("[ENGINE] Starting...", flush=True)
         asyncio.run(engine.run())

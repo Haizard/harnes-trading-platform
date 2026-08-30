@@ -33,7 +33,7 @@ def run_engine():
         log('[ENGINE] Starting micro engine...')
         from src.micro_engine import MicroEngine
         import asyncio
-        capital = float(os.environ.get('CAPITAL', '25.0'))
+        capital = float(os.environ.get('CAPITAL', '100.0'))
         engine = MicroEngine(capital=capital)
         asyncio.run(engine.run())
     except Exception as e:

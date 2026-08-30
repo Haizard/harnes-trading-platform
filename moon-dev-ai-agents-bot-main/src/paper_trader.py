@@ -53,7 +53,7 @@ class PaperTrade:
 class PaperTrader:
     """Simulate trades with real market data. No money at risk."""
 
-    def __init__(self, capital=25.0, max_positions=8):
+    def __init__(self, capital=100.0, max_positions=8):
         self.capital = capital
         self.initial_capital = capital
         self.max_positions = max_positions

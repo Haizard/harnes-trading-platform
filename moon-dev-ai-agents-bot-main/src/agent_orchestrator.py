@@ -112,7 +112,7 @@ class AgentOrchestrator:
       Candidate → Consensus AI → Risk Check → Decision → Log → Learn
     """
 
-    def __init__(self, capital=25.0, mode="paper"):
+    def __init__(self, capital=100.0, mode="paper"):
         self.capital = capital
         self.mode = mode
         self.data_dir = Path("src/data/orchestrator")
