@@ -69,6 +69,20 @@ MARKET CONTEXT:
 - If mcp_portfolio is present, consider current open positions and win rate
 - If mcp_risk is present, factor in recent rejection patterns
 
+SMART MONEY / WALLET FLOW:
+- If mcp_smart_money is present, this is CRITICAL signal from tracked profitable wallets
+- wallets_buying = number of scored wallets (score>=40) currently buying this token
+- wallets_selling = number of scored wallets currently selling
+- aggregate_buy_sol = total SOL volume from smart money buys
+- confidence = how confident we are in the signal (0-1)
+- signal = BUY if smart money is accumulating, SELL if distributing, NONE if no activity
+- STRONGLY factor smart money flow into your decision:
+  * BUY signal from 3+ wallets with high confidence is a strong positive confluence
+  * SELL signal means smart money is exiting — high risk of dump
+  * NONE means no smart money interest — rely on other signals
+- If mcp_wallet_activity is present, review recent wallet activity for this token
+- If mcp_wallet_stats is present, consider overall smart money ecosystem health
+
 Respond in EXACTLY this JSON format:
 {{
     "direction": "LONG | NO_TRADE",
@@ -86,6 +100,7 @@ RULES:
 - Only suggest LONG if multiple factors align positively
 - Risk quality 0-100 where 100 = safest possible
 - When uncertain, output NO_TRADE with action SKIP
+- Smart money consensus is one of the strongest signals — weight it heavily
 """
 
 
@@ -311,6 +326,36 @@ class AgentOrchestrator:
                 if risk_data.success and risk_data.data:
                     state["mcp_risk"] = {
                         "rejections_today": risk_data.data.get("rejections_today", 0),
+                    }
+
+                # Smart Money Flow — wallet intelligence signals
+                sm_data = self.mcp_registry.call_tool_sync(
+                    "get_smart_money_flow", {"token_address": address}
+                )
+                if sm_data.success and sm_data.data:
+                    state["mcp_smart_money"] = sm_data.data
+
+                # Wallet activity for this token
+                wa_data = self.mcp_registry.call_tool_sync(
+                    "get_wallet_activity", {"wallet_address": address, "hours": 6}
+                )
+                if wa_data.success and wa_data.data:
+                    state["mcp_wallet_activity"] = {
+                        "activity_count": wa_data.data.get("activity_count", 0),
+                        "buys": wa_data.data.get("buys", 0),
+                        "sells": wa_data.data.get("sells", 0),
+                        "total_buy_sol": wa_data.data.get("total_buy_sol", 0),
+                        "total_sell_sol": wa_data.data.get("total_sell_sol", 0),
+                    }
+
+                # Wallet ecosystem stats
+                ws_data = self.mcp_registry.call_tool_sync("get_wallet_stats", {})
+                if ws_data.success and ws_data.data:
+                    state["mcp_wallet_stats"] = {
+                        "tracked_wallets": ws_data.data.get("tracker", {}).get("tracked_wallets", 0),
+                        "events_24h": ws_data.data.get("tracker", {}).get("events_24h", 0),
+                        "smart_wallets": ws_data.data.get("scorer", {}).get("smart_wallets", 0),
+                        "total_signals": ws_data.data.get("detector", {}).get("total_signals", 0),
                     }
 
             except Exception as e:

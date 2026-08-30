@@ -169,22 +169,38 @@ class MCPRegistry:
         if not tool:
             return ToolResult(success=False, error=f"Unknown tool: {name}")
 
-        import time
-        start = time.monotonic()
+        import time as _time
+        start = _time.monotonic()
         try:
             if params is None:
                 params = {}
-            # Tool execute_fn is async but uses sync requests internally,
-            # so we create a new event loop to run it
-            loop = asyncio.new_event_loop()
-            try:
-                data = loop.run_until_complete(tool.execute_fn(**params))
-            finally:
-                loop.close()
-            latency = (time.monotonic() - start) * 1000
+            # Tool execute_fn is async but uses sync requests internally.
+            # Use asyncio.run() for proper isolation — it creates a new
+            # event loop, runs the coroutine, and closes the loop.
+            data = asyncio.run(tool.execute_fn(**params))
+            latency = (_time.monotonic() - start) * 1000
             result = ToolResult(success=True, data=data, source=tool.source, latency_ms=latency)
+        except RuntimeError:
+            # asyncio.run() fails if a loop is already running.
+            # Fallback: run in a separate thread with its own event loop.
+            import concurrent.futures
+            def _run_in_thread():
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(tool.execute_fn(**params))
+                finally:
+                    loop.close()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_run_in_thread)
+                    data = future.result(timeout=15)
+                latency = (_time.monotonic() - start) * 1000
+                result = ToolResult(success=True, data=data, source=tool.source, latency_ms=latency)
+            except Exception as e2:
+                latency = (_time.monotonic() - start) * 1000
+                result = ToolResult(success=False, error=str(e2), source=tool.source, latency_ms=latency)
         except Exception as e:
-            latency = (time.monotonic() - start) * 1000
+            latency = (_time.monotonic() - start) * 1000
             result = ToolResult(success=False, error=str(e), source=tool.source, latency_ms=latency)
 
         # Record in call history
@@ -637,6 +653,128 @@ async def tool_get_strategy_signals() -> dict:
     }
 
 
+# ── Wallet Intelligence Tool Implementations ─────────────────
+
+async def tool_get_wallet_activity(wallet_address: str, hours: int = 24) -> dict:
+    """Get recent swap activity for a tracked wallet."""
+    try:
+        from src.wallet_tracker import WalletTracker
+        tracker = WalletTracker()
+        activity = tracker.get_wallet_activity(wallet_address, hours=hours)
+        
+        # Enrich with basic stats
+        buys = [a for a in activity if a.get('direction') == 'buy']
+        sells = [a for a in activity if a.get('direction') == 'sell']
+        
+        return {
+            'wallet': wallet_address[:12] + '...',
+            'activity_count': len(activity),
+            'buys': len(buys),
+            'sells': len(sells),
+            'total_buy_sol': round(sum(a.get('amount_sol', 0) for a in buys), 4),
+            'total_sell_sol': round(sum(a.get('amount_sol', 0) for a in sells), 4),
+            'tokens_traded': list(set(a.get('token_address', '') for a in activity)),
+            'recent_activity': activity[-10:],
+            'source': 'wallet_tracker',
+        }
+    except Exception as e:
+        return {'wallet': wallet_address, 'error': str(e)}
+
+
+async def tool_get_wallet_score(wallet_address: str) -> dict:
+    """Get quality score for a wallet."""
+    try:
+        from src.wallet_scorer import WalletScorer
+        scorer = WalletScorer()
+        score = scorer.get_score(wallet_address)
+        
+        if score:
+            return {
+                'wallet': wallet_address[:12] + '...',
+                'score': score.score,
+                'grade': score.grade,
+                'win_rate': score.win_rate,
+                'avg_roi_pct': score.avg_roi_pct,
+                'max_drawdown_pct': score.max_drawdown_pct,
+                'trade_count': score.trade_count,
+                'profit_factor': score.profit_factor,
+                'consistency': score.consistency_score,
+                'confidence': score.confidence,
+                'source': 'wallet_scorer',
+            }
+        else:
+            return {
+                'wallet': wallet_address[:12] + '...',
+                'score': None,
+                'error': 'Insufficient data to score wallet (need 5+ trades)',
+                'source': 'wallet_scorer',
+            }
+    except Exception as e:
+        return {'wallet': wallet_address, 'error': str(e)}
+
+
+async def tool_get_smart_money_flow(token_address: str) -> dict:
+    """Get smart money consensus signals for a token."""
+    try:
+        from src.smart_money_detector import SmartMoneyDetector
+        detector = SmartMoneyDetector()
+        signals = detector.get_token_smart_money(token_address)
+        recent = detector.get_recent_signals(hours=1)
+        
+        # Filter for this token
+        token_signals = [s for s in recent if s.get('token_address') == token_address]
+        
+        if token_signals:
+            latest = token_signals[-1]
+            return {
+                'token': token_address[:8] + '...',
+                'smart_money_buying': latest.get('wallets_buying', 0),
+                'smart_money_selling': latest.get('wallets_selling', 0),
+                'aggregate_buy_sol': latest.get('aggregate_buy_sol', 0),
+                'aggregate_sell_sol': latest.get('aggregate_sell_sol', 0),
+                'avg_wallet_score': latest.get('avg_wallet_score', 0),
+                'confidence': latest.get('confidence', 0),
+                'signal': 'BUY' if latest.get('wallets_buying', 0) > latest.get('wallets_selling', 0) else 'SELL',
+                'source': 'smart_money_detector',
+            }
+        else:
+            return {
+                'token': token_address[:8] + '...',
+                'smart_money_buying': 0,
+                'smart_money_selling': 0,
+                'signal': 'NONE',
+                'message': 'No recent smart money activity for this token',
+                'source': 'smart_money_detector',
+            }
+    except Exception as e:
+        return {'token': token_address, 'error': str(e)}
+
+
+async def tool_get_wallet_stats() -> dict:
+    """Get aggregate wallet tracker statistics."""
+    try:
+        from src.wallet_tracker import WalletTracker
+        from src.wallet_scorer import WalletScorer
+        from src.smart_money_detector import SmartMoneyDetector
+        
+        tracker = WalletTracker()
+        scorer = WalletScorer()
+        detector = SmartMoneyDetector()
+        
+        tracker_stats = tracker.get_stats()
+        scorer_stats = scorer.get_stats()
+        detector_stats = detector.get_stats()
+        
+        return {
+            'tracker': tracker_stats,
+            'scorer': scorer_stats,
+            'detector': detector_stats,
+            'source': 'wallet_intelligence',
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+
 # ── Registry Factory ──────────────────────────────────────────
 
 def create_default_mcp_registry() -> MCPRegistry:
@@ -765,6 +903,46 @@ def create_default_mcp_registry() -> MCPRegistry:
         parameters=[],
         execute_fn=tool_get_market_context,
         source="jupiter+sentiment",
+    ))
+
+    # ── Wallet Intelligence (Smart Money) ─────────────────────
+    registry.register_tool(TradingMCPTool(
+        name="get_wallet_activity",
+        description="Get recent swap activity for a tracked wallet (buys/sells).",
+        parameters=[
+            ToolParameter("wallet_address", "string", True, description="Solana wallet address to query"),
+            ToolParameter("hours", "integer", False, 24, "Lookback hours"),
+        ],
+        execute_fn=tool_get_wallet_activity,
+        source="wallet_tracker",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="get_wallet_score",
+        description="Get the quality score for a wallet (PnL, win rate, drawdown, consistency).",
+        parameters=[
+            ToolParameter("wallet_address", "string", True, description="Solana wallet address"),
+        ],
+        execute_fn=tool_get_wallet_score,
+        source="wallet_scorer",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="get_smart_money_flow",
+        description="Get smart money consensus signals for a token (are profitable wallets buying?).",
+        parameters=[
+            ToolParameter("token_address", "string", True, description="Solana token mint address"),
+        ],
+        execute_fn=tool_get_smart_money_flow,
+        source="smart_money_detector",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="get_wallet_stats",
+        description="Get aggregate wallet tracker stats: total tracked, events 24h, buy/sell ratio.",
+        parameters=[],
+        execute_fn=tool_get_wallet_stats,
+        source="wallet_tracker",
     ))
 
     print("[MCP] Trading MCP Registry initialized with " + str(len(registry.list_tool_names())) + " tools")

@@ -219,9 +219,93 @@ class TestMCPRegistry:
         assert tool.parameters[0].required is True
         assert tool.parameters[0].type == "string"
 
+    def test_wallet_intelligence_tools_exist(self):
+        """Verify wallet intelligence MCP tools are registered."""
+        registry = create_default_mcp_registry()
+        wallet_tools = [t for t in registry.list_tool_names() if 'wallet' in t or 'smart_money' in t]
+        assert len(wallet_tools) >= 3
+        assert "get_wallet_activity" in registry.list_tool_names()
+        assert "get_wallet_score" in registry.list_tool_names()
+        assert "get_smart_money_flow" in registry.list_tool_names()
+
+
+# ── Wallet Tracker Tests ──────────────────────────────────────
+class TestWalletTracker:
+    def test_create_tracker(self):
+        from src.wallet_tracker import WalletTracker
+        tracker = WalletTracker()
+        assert tracker is not None
+        stats = tracker.get_stats()
+        assert "tracked_wallets" in stats
+        assert "events_24h" in stats
+
+    def test_add_wallet(self):
+        from src.wallet_tracker import WalletTracker
+        tracker = WalletTracker()
+        test_addr = "TestWallet11111111111111111111111111111111"
+        tracker.add_wallet(test_addr, label="test_wallet", tags=["test"])
+        wallets = tracker.get_tracked_wallets()
+        assert any(w["address"] == test_addr for w in wallets)
+        # Cleanup
+        tracker.remove_wallet(test_addr)
+
+    def test_wallet_activity_log(self):
+        from src.wallet_tracker import WalletTracker
+        tracker = WalletTracker()
+        activity = tracker.get_recent_activity(hours=24)
+        assert isinstance(activity, list)
+
+    def test_token_activity(self):
+        from src.wallet_tracker import WalletTracker
+        tracker = WalletTracker()
+        activity = tracker.get_token_activity("FakeTokenAddress1111111111111111")
+        assert isinstance(activity, list)
+
+
+class TestWalletScorer:
+    def test_create_scorer(self):
+        from src.wallet_scorer import WalletScorer
+        scorer = WalletScorer()
+        assert scorer is not None
+        stats = scorer.get_stats()
+        assert "total_scored" in stats
+
+    def test_score_wallet_no_data(self):
+        from src.wallet_scorer import WalletScorer
+        scorer = WalletScorer()
+        score = scorer.score_wallet("FakeWallet1111111111111111111111111111")
+        # Should return None for wallet with no activity
+        assert score is None
+
+    def test_get_top_wallets(self):
+        from src.wallet_scorer import WalletScorer
+        scorer = WalletScorer()
+        top = scorer.get_top_wallets(limit=5)
+        assert isinstance(top, list)
+
+
+class TestSmartMoneyDetector:
+    def test_create_detector(self):
+        from src.smart_money_detector import SmartMoneyDetector
+        detector = SmartMoneyDetector()
+        assert detector is not None
+        stats = detector.get_stats()
+        assert "total_signals" in stats
+
+    def test_scan_no_data(self):
+        from src.smart_money_detector import SmartMoneyDetector
+        detector = SmartMoneyDetector()
+        signals = detector.scan(hours=1)
+        assert isinstance(signals, list)
+
+    def test_get_active_consensus(self):
+        from src.smart_money_detector import SmartMoneyDetector
+        detector = SmartMoneyDetector()
+        consensus = detector.get_active_consensus()
+        assert isinstance(consensus, list)
+
 
 # ── Funding Cost Tests ────────────────────────────────────────
-
 class TestFundingCosts:
     def test_record_cost(self):
         tracker = FundingCostTracker()
