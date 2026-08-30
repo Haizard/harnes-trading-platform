@@ -450,6 +450,12 @@ class MicroEngine:
         print("[ENGINE] Mode: " + self.mode)
         print("[ENGINE] Capital: $" + str(self.capital))
 
+        # Send startup notification to Telegram
+        try:
+            self.telegram.send_startup_message(self.capital, self.mode)
+        except Exception as e:
+            print("[TG] Startup notify failed: " + str(e))
+
         # Start the scanner
         self.scanner.start()
 
