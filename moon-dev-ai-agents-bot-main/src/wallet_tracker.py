@@ -40,7 +40,9 @@ SOLANA_RPC = os.getenv("RPC_ENDPOINT", "https://api.mainnet-beta.solana.com")
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
-DATA_DIR = Path("src/data")
+# Use path relative to this file, not CWD (works in Docker)
+_MODULE_DIR = Path(__file__).resolve().parent
+DATA_DIR = _MODULE_DIR.parent / "data"
 WALLETS_CONFIG = DATA_DIR / "tracked_wallets.json"
 WALLET_ACTIVITY_LOG = DATA_DIR / "wallet_tracker" / "wallet_activity.jsonl"
 
@@ -472,17 +474,20 @@ class WalletTracker:
 
     def _load_wallets(self):
         """Load tracked wallets from config."""
-        if WALLETS_CONFIG.exists():
-            try:
-                data = json.loads(WALLETS_CONFIG.read_text())
-                if isinstance(data, list):
-                    for w in data:
-                        if w.get("address"):
-                            self.wallets[w["address"]] = w
-                elif isinstance(data, dict):
-                    self.wallets = data
-            except Exception as e:
-                print(f"[WALLET] Error loading wallets config: {e}")
+        if not WALLETS_CONFIG.exists():
+            print(f"[WALLET] Config not found: {WALLETS_CONFIG}")
+            return
+        try:
+            data = json.loads(WALLETS_CONFIG.read_text())
+            if isinstance(data, list):
+                for w in data:
+                    if w.get("address"):
+                        self.wallets[w["address"]] = w
+            elif isinstance(data, dict):
+                self.wallets = data
+            print(f"[WALLET] Loaded {len(self.wallets)} wallets from {WALLETS_CONFIG}")
+        except Exception as e:
+            print(f"[WALLET] Error loading wallets config: {e}")
 
     def _save_wallets(self):
         """Save tracked wallets to config."""
