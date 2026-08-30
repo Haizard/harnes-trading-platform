@@ -460,6 +460,10 @@ class MicroEngine:
         # Start the scanner
         self.scanner.start()
 
+        # Restore open paper trades from DB (survives deploys)
+        if self.mode == "paper":
+            self.paper.restore_open_trades()
+
         # Start async scheduler for background jobs
         await self.scheduler.start()
 

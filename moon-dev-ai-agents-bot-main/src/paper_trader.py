@@ -217,6 +217,43 @@ class PaperTrader:
         except Exception:
             pass
 
+    def restore_open_trades(self):
+        """Restore open positions from DB after a deploy restart."""
+        try:
+            from src.db_storage import get_trades
+            open_trades = get_trades(status="open", limit=self.max_positions)
+            if not open_trades:
+                return
+            restored = 0
+            for t in open_trades:
+                addr = t.get("token_address", "")
+                if not addr or addr in self.open_positions:
+                    continue
+                trade = PaperTrade(
+                    token_address=addr,
+                    symbol=t.get("symbol", ""),
+                    side=t.get("side", "buy"),
+                    amount_usd=t.get("amount_usd", 0),
+                    entry_price=t.get("entry_price", 0),
+                    token_amount=t.get("token_amount", 0),
+                    slippage_pct=t.get("slippage_pct", 0),
+                    price_impact_pct=t.get("price_impact_pct", 0),
+                    entry_time=t.get("entry_time", ""),
+                    score=t.get("score", 0),
+                    signals=t.get("signals", []) if isinstance(t.get("signals"), list) else [],
+                    category=t.get("category", "unknown") if "category" in t else "unknown",
+                    stop_loss_pct=t.get("stop_loss_pct", 10.0) if "stop_loss_pct" in t else 10.0,
+                    take_profit_pct=t.get("take_profit_pct", 30.0) if "take_profit_pct" in t else 30.0,
+                    max_hold_hours=t.get("max_hold_hours", 12.0) if "max_hold_hours" in t else 12.0,
+                )
+                self.open_positions[addr] = trade
+                restored += 1
+            if restored > 0:
+                print("[PAPER] Restored " + str(restored) + " open trade(s) from DB")
+                self._print_capital_status()
+        except Exception as e:
+            print("[PAPER] Restore error: " + str(e))
+
     def get_stats(self):
         total = len(self.closed_trades)
         wins = sum(1 for t in self.closed_trades if t.pnl_usd > 0)
