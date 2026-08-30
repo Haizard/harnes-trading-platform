@@ -624,51 +624,117 @@ class TrendingAgent(CategoryAgent):
         ]
 
     def score(self, candidate) -> float:
+        """
+        Improved trending token scoring.
+
+        Key insight: trending tokens are momentum plays. We want:
+        1. Strong but not parabolic momentum (sweet spot: 2-15% 1h)
+        2. Volume that's growing, not just high
+        3. Deep liquidity relative to volume (safer exits)
+        4. Strong buy/sell imbalance (conviction)
+        5. Sweet spot market cap ($500K-$5M for maximum upside)
+        """
         s = 0.0
         sigs = []
 
-        # Volume (max 30) — trending = high volume
-        if candidate.volume_24h > 200_000:
-            s += 30; sigs.append("Trending high volume")
-        elif candidate.volume_24h > 50_000:
-            s += 22; sigs.append("Trending strong volume")
+        # --- 1. Momentum Quality (max 25) ---
+        # Sweet spot: 2-15% = sustained, >15% = parabolic (risky)
+        pc = candidate.price_change_1h
+        if 5 < pc < 15:
+            s += 25; sigs.append("Momentum sweet spot (5-15%)")
+        elif 2 < pc <= 5:
+            s += 18; sigs.append("Building momentum (2-5%)")
+        elif 15 <= pc < 25:
+            s += 12; sigs.append("Parabolic momentum (caution)")
+        elif pc >= 25:
+            s += 5; sigs.append("Extreme pump (high risk)")
+        elif 0 < pc <= 2:
+            s += 8; sigs.append("Early momentum forming")
 
-        # Liquidity (max 20)
-        if candidate.liquidity_usd > 300_000:
-            s += 20; sigs.append("Trending deep liquidity")
-        elif candidate.liquidity_usd > 100_000:
-            s += 12; sigs.append("Trending adequate liquidity")
+        # 24h momentum confirms trend (not just 1h spike)
+        if candidate.price_change_24h > 10:
+            s += 5; sigs.append("24h trend confirmed")
 
-        # Sustained momentum (max 20) — not just a spike
-        if 2 < candidate.price_change_1h < 15:
-            s += 20; sigs.append("Trending sustained momentum")
-        elif candidate.price_change_1h > 15:
-            s += 10; sigs.append("Trending parabolic (caution)")
+        # --- 2. Volume Quality (max 20) ---
+        vol = candidate.volume_24h
+        if vol > 500_000:
+            s += 20; sigs.append("Very high volume")
+        elif vol > 200_000:
+            s += 16; sigs.append("High volume")
+        elif vol > 50_000:
+            s += 12; sigs.append("Strong volume")
+        elif vol > 20_000:
+            s += 6; sigs.append("Moderate volume")
 
-        # Buy pressure (max 15)
+        # --- 3. Liquidity Depth Ratio (max 20) ---
+        # Liquidity relative to volume = exit safety
+        # High ratio = deep pool, easy to exit
+        if candidate.liquidity_usd > 0 and vol > 0:
+            liq_ratio = candidate.liquidity_usd / vol
+            if liq_ratio > 5:
+                s += 20; sigs.append("Very deep liquidity pool")
+            elif liq_ratio > 2:
+                s += 15; sigs.append("Deep liquidity")
+            elif liq_ratio > 1:
+                s += 10; sigs.append("Adequate liquidity")
+        elif candidate.liquidity_usd > 200_000:
+            s += 12; sigs.append("High absolute liquidity")
+
+        # --- 4. Buy/Sell Imbalance (max 20) ---
         total = candidate.txns_1h_buys + candidate.txns_1h_sells
-        if total > 20:
+        if total > 0:
             buy_ratio = candidate.txns_1h_buys / total
-            if buy_ratio > 0.6:
-                s += 15; sigs.append("Trending strong buy pressure")
+            buy_skew = buy_ratio - 0.5  # How far from 50/50
+            if buy_skew > 0.3 and total > 30:
+                s += 20; sigs.append("Strong buy conviction (>65%, 30+ txns)")
+            elif buy_skew > 0.2 and total > 15:
+                s += 14; sigs.append("Moderate buy pressure")
+            elif buy_skew > 0.1:
+                s += 8; sigs.append("Slight buy bias")
+            elif buy_skew < -0.2:
+                s -= 5; sigs.append("Sell pressure detected (penalty)")
 
-        # Activity level (max 15)
-        if total > 100:
-            s += 15; sigs.append("Trending very active")
-        elif total > 30:
-            s += 8; sigs.append("Trending active")
+        # --- 5. Transaction Activity (max 10) ---
+        if total > 200:
+            s += 10; sigs.append("Very high activity")
+        elif total > 50:
+            s += 7; sigs.append("High activity")
+        elif total > 20:
+            s += 4; sigs.append("Moderate activity")
+
+        # --- 6. Market Cap Sweet Spot (max 5) ---
+        mcap = candidate.market_cap
+        if 500_000 < mcap < 5_000_000:
+            s += 5; sigs.append("Ideal mcap for trending (500K-5M)")
+        elif 100_000 < mcap <= 500_000:
+            s += 3; sigs.append("Small mcap trending")
+        elif mcap > 10_000_000:
+            s -= 3; sigs.append("Large mcap — limited upside (penalty)")
 
         if hasattr(candidate, 'signals'):
             candidate.signals = sigs
 
-        return min(s, 100)
+        return max(min(s, 100), 0)
 
     def should_trade(self, candidate) -> tuple:
+        """
+        Trending tokens need:
+        - Minimum volume to prove interest
+        - Positive or neutral momentum (not dumping)
+        - Minimum liquidity for safe exit
+        """
         if candidate.volume_24h < 10_000:
             return False, "Trending volume too low"
-        # Trending tokens should have positive momentum
         if candidate.price_change_1h < -10:
             return False, "Trending token dumping"
+        if candidate.liquidity_usd < 30_000:
+            return False, "Trending liquidity too low for safe exit"
+        # Reject if sell pressure dominates
+        total = candidate.txns_1h_buys + candidate.txns_1h_sells
+        if total > 10:
+            buy_ratio = candidate.txns_1h_buys / total
+            if buy_ratio < 0.35:
+                return False, "Trending has strong sell pressure"
         return True, "Trending meets criteria"
 
 
