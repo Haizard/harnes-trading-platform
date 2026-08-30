@@ -28,8 +28,6 @@ binance-connector
 motor
 yfinance
 alpha_vantage
-twikit
-torch
-transformers
+twikit==2.3.3
 httpx
 schedule
