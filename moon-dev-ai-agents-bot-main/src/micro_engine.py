@@ -72,6 +72,9 @@ class MicroEngine:
         except Exception:
             pass
 
+        # Restore engine counters from DB
+        self._restore_counters_from_db()
+
         # DSH AsyncScheduler — non-blocking background jobs
         self.scheduler = AsyncScheduler()
 
@@ -100,6 +103,32 @@ class MicroEngine:
                 print("[ENGINE] Wallet Intelligence ENABLED — tracking " + str(wallet_count) + " wallets")
             except Exception as e:
                 print("[ENGINE] Wallet Intelligence unavailable: " + str(e))
+
+    def _restore_counters_from_db(self):
+        """Restore engine counters from DB after deploy."""
+        if not self._db_available:
+            return
+        try:
+            from src.db_storage import get_trades
+            trades = get_trades(limit=10000)
+            self._trades_executed = len([t for t in trades if t.get("status") != "open"])
+            self._safe_trades = self._trades_executed
+            print("[ENGINE] Restored counters: " + str(self._trades_executed) + " past trades")
+        except Exception:
+            pass
+
+    def _persist_counters(self):
+        """Save engine counters to DB."""
+        if not self._db_available:
+            return
+        try:
+            from src.db_storage import save_engine_state
+            save_engine_state("engine_trades_executed", str(self._trades_executed))
+            save_engine_state("engine_signals_generated", str(self._signals_generated))
+            save_engine_state("engine_rug_blocked", str(self._rug_blocked))
+            save_engine_state("engine_ai_skipped", str(self._ai_skipped))
+        except Exception:
+            pass
 
     def _emit_event(self, event_name: str, payload: dict):
         """Fire-and-forget event emission. Wraps async emit() with create_task().
@@ -475,9 +504,10 @@ class MicroEngine:
                 if cycle % (EXIT_CHECK_INTERVAL // SCAN_INTERVAL + 1) == 0:
                     self._check_exits()
 
-                # Save portfolio to DB periodically
+                # Save portfolio and counters to DB periodically
                 if cycle % 10 == 0:
                     self._save_portfolio_to_db()
+                    self._persist_counters()
 
                 await asyncio.sleep(SCAN_INTERVAL)
             except asyncio.CancelledError:
@@ -492,5 +522,6 @@ class MicroEngine:
     def stop(self):
         """Stop the engine."""
         self._running = False
+        self._persist_counters()
         self.scanner.stop()
         print("[ENGINE] Stopped")

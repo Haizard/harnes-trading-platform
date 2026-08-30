@@ -113,6 +113,8 @@ class WalletTracker:
         self._seen_sigs: Set[str] = set()   # already-processed signatures
         self._load_wallets()
         self._load_seen_sigs()
+        # Load poll state from DB (survives deploys)
+        self._load_poll_state_from_db()
 
     # ── Wallet Management ──────────────────────────────────────
 
@@ -137,6 +139,26 @@ class WalletTracker:
         """List all tracked wallets."""
         return [w for w in self.wallets.values() if w.get("active", True)]
 
+    def _load_poll_state_from_db(self):
+        """Load last poll times from DB (survives deploys)."""
+        try:
+            from src.db_storage import load_wallet_poll_state
+            saved = load_wallet_poll_state()
+            self._last_poll.update(saved)
+            if saved:
+                print("[WALLET] Loaded poll state for " + str(len(saved)) + " wallets from DB")
+        except Exception:
+            pass
+
+    def _save_poll_state_to_db(self):
+        """Save current poll times to DB."""
+        try:
+            from src.db_storage import save_wallet_poll_state
+            for addr, ts in self._last_poll.items():
+                save_wallet_poll_state(addr, ts)
+        except Exception:
+            pass
+
     # ── RPC Polling ────────────────────────────────────────────
 
     def poll_wallets(self, max_wallets: int = 50) -> List[SwapEvent]:
@@ -147,6 +169,7 @@ class WalletTracker:
         """
         new_events = []
         wallets = self.get_tracked_wallets()[:max_wallets]
+        polled_any = False
 
         for wallet_cfg in wallets:
             addr = wallet_cfg["address"]
@@ -160,6 +183,7 @@ class WalletTracker:
                 events = self._poll_single_wallet(addr)
                 new_events.extend(events)
                 self._last_poll[addr] = now
+                polled_any = True
             except Exception as e:
                 print(f"[WALLET] Error polling {wallet_cfg.get('label', addr[:8])}: {e}")
 
@@ -168,6 +192,10 @@ class WalletTracker:
             self._append_events(new_events)
             # Emit to EventBus for DSH listeners (Session Log, Telegram, etc.)
             self._emit_swap_events(new_events)
+
+        # Persist poll state to DB
+        if polled_any:
+            self._save_poll_state_to_db()
 
         return new_events
 

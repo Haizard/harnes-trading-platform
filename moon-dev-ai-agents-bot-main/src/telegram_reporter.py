@@ -42,9 +42,10 @@ class TelegramReporter:
         self.portfolio_path.parent.mkdir(parents=True, exist_ok=True)
         self.portfolio = self._load_portfolio()
 
-        # Capital tracking (set by engine)
+        # Capital tracking (set by engine, restored from DB)
         self.initial_capital = 0.0
         self.current_capital = 0.0
+        self._restore_capital_from_db()
 
         # Command polling
         self._last_update_id = 0
@@ -65,6 +66,28 @@ class TelegramReporter:
         """Update capital info from engine."""
         self.initial_capital = initial
         self.current_capital = current
+        # Persist to DB
+        try:
+            from src.db_storage import save_engine_state
+            save_engine_state("tg_initial_capital", str(initial))
+            save_engine_state("tg_current_capital", str(current))
+        except Exception:
+            pass
+
+    def _restore_capital_from_db(self):
+        """Restore capital from DB after deploy."""
+        try:
+            from src.db_storage import load_engine_state
+            saved_initial = load_engine_state("tg_initial_capital")
+            saved_current = load_engine_state("tg_current_capital")
+            if saved_initial:
+                self.initial_capital = float(saved_initial)
+            if saved_current:
+                self.current_capital = float(saved_current)
+                if self.current_capital > 0:
+                    print("[TG] Restored capital from DB: $" + str(round(self.current_capital, 2)))
+        except Exception:
+            pass
 
     def _load_portfolio(self) -> dict:
         """Load portfolio state from disk."""

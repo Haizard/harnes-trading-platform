@@ -515,6 +515,15 @@ class TokenScanner:
         self._scan_count = 0
         self.data_dir = Path("src/data/scanner")
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        # Load seen tokens from DB (survives deploys)
+        try:
+            from src.db_storage import load_scanner_seen_tokens
+            db_seen = load_scanner_seen_tokens()
+            self._seen_tokens.update(db_seen)
+            if db_seen:
+                print("[SCANNER] Loaded " + str(len(db_seen)) + " seen tokens from DB", flush=True)
+        except Exception:
+            pass
 
     def _maybe_reset_seen_tokens(self):
         """Periodically reset _seen_tokens so tokens get re-evaluated with fresh data."""
@@ -577,10 +586,15 @@ class TokenScanner:
             if not jup.get("available"):
                 print("[SCANNER] " + candidate.symbol + ": No Jupiter liquidity", flush=True)
                 continue
-            self.scorer.score(candidate)
-            if candidate.score >= 30:
+            self.scorer.score(candidate)                if candidate.score >= 30:
                 candidates.append(candidate)
                 self._seen_tokens.add(addr)
+                # Persist to DB (survives deploys)
+                try:
+                    from src.db_storage import save_scanner_seen_token
+                    save_scanner_seen_token(addr)
+                except Exception:
+                    pass
                 self._log_candidate(candidate)
                 self._print_candidate(candidate)
                 if self.callback:

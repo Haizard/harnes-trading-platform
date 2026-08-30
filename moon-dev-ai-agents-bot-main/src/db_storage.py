@@ -232,6 +232,30 @@ def _init_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Scanner seen tokens (persists across deploys)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scanner_seen_tokens (
+                token_address TEXT PRIMARY KEY,
+                first_seen TIMESTAMPTZ DEFAULT NOW(),
+                last_seen TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Wallet poll state (persists last poll times)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_poll_state (
+                wallet_address TEXT PRIMARY KEY,
+                last_poll_time REAL DEFAULT 0,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Engine state (counters, capital, etc.)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS engine_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
         # Indexes
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
@@ -758,3 +782,103 @@ def save_smart_money_signal(token_address: str, token_symbol: str = "",
     except Exception as e:
         print(f"[DB] save_smart_money_signal error: {e}")
         return None
+
+
+# ── Scanner Seen Tokens ──────────────────────────────────────
+
+def save_scanner_seen_token(token_address: str):
+    """Record a token as seen by the scanner."""
+    pool = get_pool()
+    if not pool:
+        return
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO scanner_seen_tokens (token_address, first_seen, last_seen)
+                VALUES (%s, NOW(), NOW())
+                ON CONFLICT (token_address) DO UPDATE SET last_seen = NOW()
+            """, (token_address,))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def load_scanner_seen_tokens() -> set:
+    """Load all recently seen token addresses."""
+    pool = get_pool()
+    if not pool:
+        return set()
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT token_address FROM scanner_seen_tokens WHERE last_seen >= NOW() - INTERVAL '2 hours'"
+            ).fetchall()
+            return {r["token_address"] for r in rows}
+    except Exception:
+        return set()
+
+
+# ── Wallet Poll State ────────────────────────────────────────
+
+def save_wallet_poll_state(wallet_address: str, last_poll_time: float):
+    """Save last poll time for a wallet."""
+    pool = get_pool()
+    if not pool:
+        return
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO wallet_poll_state (wallet_address, last_poll_time, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (wallet_address) DO UPDATE SET last_poll_time = %s, updated_at = NOW()
+            """, (wallet_address, last_poll_time, last_poll_time))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def load_wallet_poll_state() -> dict:
+    """Load last poll times for all wallets."""
+    pool = get_pool()
+    if not pool:
+        return {}
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("SELECT wallet_address, last_poll_time FROM wallet_poll_state").fetchall()
+            return {r["wallet_address"]: r["last_poll_time"] for r in rows}
+    except Exception:
+        return {}
+
+
+# ── Engine State ─────────────────────────────────────────────
+
+def save_engine_state(key: str, value: str):
+    """Save a key-value pair to engine state."""
+    pool = get_pool()
+    if not pool:
+        return
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO engine_state (key, value, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW()
+            """, (key, value, value))
+            conn.commit()
+    except Exception:
+        pass
+
+
+def load_engine_state(key: str, default: str = None) -> str:
+    """Load a value from engine state."""
+    pool = get_pool()
+    if not pool:
+        return default
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM engine_state WHERE key = %s", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+    except Exception:
+        return default
