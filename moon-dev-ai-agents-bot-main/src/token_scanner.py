@@ -555,7 +555,7 @@ class TokenScanner:
         print("     DEX: " + c.dex, flush=True)
         print("     Signals: " + ", ".join(c.signals), flush=True)
         params = get_category_params(c.category)
-        print("     Exit params: SL=" + str(params["stop_loss_pct"]) + "% TP=" + str(params["take_profit_pct"]) + "% Hold=" + str(params["max_hold_hours"]) + "h", flush=True)
+        print("     Exit params: SL=" + str(params.stop_loss_pct) + "% TP=" + str(params.take_profit_pct) + "% Hold=" + str(params.max_hold_hours) + "h", flush=True)
 
     def _log_candidate(self, c):
         log_path = self.data_dir / "scanner_results.jsonl"
