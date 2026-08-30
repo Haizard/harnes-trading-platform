@@ -278,53 +278,39 @@ class AgentOrchestrator:
         }
 
         # Enrich with MCP tools when available
+        # Uses call_tool_sync() to avoid asyncio.run() inside running loop.
         if self.mcp_registry and address:
             try:
-                import concurrent.futures
-                # Fetch security + whale data in parallel via MCP
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-                    sec_future = pool.submit(
-                        asyncio.run,
-                        self.mcp_registry.call_tool("get_token_security", {"token_address": address})
-                    )
-                    whale_future = pool.submit(
-                        asyncio.run,
-                        self.mcp_registry.call_tool("get_whale_data", {"token_address": address})
-                    )
-                    sent_future = pool.submit(
-                        asyncio.run,
-                        self.mcp_registry.call_tool("get_token_sentiment", {"symbol": symbol})
-                    )
-
-                    sec_result = sec_future.result()
-                    whale_result = whale_future.result()
-                    sent_result = sent_future.result()
-
-                if sec_result and sec_result.success and sec_result.data:
-                    state["mcp_security"] = sec_result.data
-                if whale_result and whale_result.success and whale_result.data:
-                    state["mcp_whale_data"] = whale_result.data
-                if sent_result and sent_result.success and sent_result.data:
-                    state["mcp_sentiment"] = sent_result.data
-
-                # Add portfolio context (existing positions)
-                port_result = asyncio.run(
-                    self.mcp_registry.call_tool("get_portfolio_state", {})
+                sec_data = self.mcp_registry.call_tool_sync(
+                    "get_token_security", {"token_address": address}
                 )
-                if port_result and port_result.success and port_result.data:
+                whale_data = self.mcp_registry.call_tool_sync(
+                    "get_whale_data", {"token_address": address}
+                )
+                sent_data = self.mcp_registry.call_tool_sync(
+                    "get_token_sentiment", {"symbol": symbol}
+                )
+
+                if sec_data.success and sec_data.data:
+                    state["mcp_security"] = sec_data.data
+                if whale_data.success and whale_data.data:
+                    state["mcp_whale_data"] = whale_data.data
+                if sent_data.success and sent_data.data:
+                    state["mcp_sentiment"] = sent_data.data
+
+                # Portfolio + risk
+                port_data = self.mcp_registry.call_tool_sync("get_portfolio_state", {})
+                if port_data.success and port_data.data:
                     state["mcp_portfolio"] = {
-                        "open_positions": port_result.data.get("open_count", 0),
-                        "win_rate": port_result.data.get("win_rate", 0),
-                        "total_pnl": port_result.data.get("total_pnl", 0),
+                        "open_positions": port_data.data.get("open_count", 0),
+                        "win_rate": port_data.data.get("win_rate", 0),
+                        "total_pnl": port_data.data.get("total_pnl", 0),
                     }
 
-                # Add risk state
-                risk_result = asyncio.run(
-                    self.mcp_registry.call_tool("get_risk_state", {})
-                )
-                if risk_result and risk_result.success and risk_result.data:
+                risk_data = self.mcp_registry.call_tool_sync("get_risk_state", {})
+                if risk_data.success and risk_data.data:
                     state["mcp_risk"] = {
-                        "rejections_today": risk_result.data.get("rejections_today", 0),
+                        "rejections_today": risk_data.data.get("rejections_today", 0),
                     }
 
             except Exception as e:

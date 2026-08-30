@@ -19,6 +19,7 @@ Trade execution stays behind the deterministic Python risk/execution layer.
 """
 
 import os
+import asyncio
 import json
 import time
 import requests
@@ -140,7 +141,7 @@ class MCPRegistry:
         return list(self._tools.keys())
 
     async def call_tool(self, name: str, params: dict = None) -> ToolResult:
-        """Call a tool by name. Returns standardized ToolResult."""
+        """Call a tool by name (async). Returns standardized ToolResult."""
         tool = self._tools.get(name)
         if not tool:
             return ToolResult(success=False, error=f"Unknown tool: {name}")
@@ -154,6 +155,44 @@ class MCPRegistry:
             'timestamp': datetime.now(timezone.utc).isoformat(),
         })
         # Keep last 100 calls
+        if len(self._call_history) > 100:
+            self._call_history = self._call_history[-100:]
+
+        return result
+
+    def call_tool_sync(self, name: str, params: dict = None) -> ToolResult:
+        """Call a tool by name (sync). For use outside async contexts.
+        Useful when _build_market_state() is called from sync code
+        within an already-running event loop.
+        """
+        tool = self._tools.get(name)
+        if not tool:
+            return ToolResult(success=False, error=f"Unknown tool: {name}")
+
+        import time
+        start = time.monotonic()
+        try:
+            if params is None:
+                params = {}
+            # Tool execute_fn is async but uses sync requests internally,
+            # so we create a new event loop to run it
+            loop = asyncio.new_event_loop()
+            try:
+                data = loop.run_until_complete(tool.execute_fn(**params))
+            finally:
+                loop.close()
+            latency = (time.monotonic() - start) * 1000
+            result = ToolResult(success=True, data=data, source=tool.source, latency_ms=latency)
+        except Exception as e:
+            latency = (time.monotonic() - start) * 1000
+            result = ToolResult(success=False, error=str(e), source=tool.source, latency_ms=latency)
+
+        # Record in call history
+        self._call_history.append({
+            'tool': name, 'params': params,
+            'success': result.success, 'latency_ms': result.latency_ms,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        })
         if len(self._call_history) > 100:
             self._call_history = self._call_history[-100:]
 
