@@ -61,6 +61,25 @@ class MicroEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
 
+        # Wallet Intelligence (smart money tracking)
+        self.wallet_tracker = None
+        self.wallet_scorer = None
+        self.smart_money_detector = None
+        self._last_wallet_poll = 0
+        self.wallet_poll_interval = 60  # seconds
+        if WALLET_INTEL_AVAILABLE:
+            try:
+                self.wallet_tracker = WalletTracker()
+                self.wallet_scorer = WalletScorer()
+                self.smart_money_detector = SmartMoneyDetector(
+                    tracker=self.wallet_tracker,
+                    scorer=self.wallet_scorer,
+                )
+                wallet_count = len(self.wallet_tracker.get_tracked_wallets())
+                print("[ENGINE] Wallet Intelligence ENABLED — tracking " + str(wallet_count) + " wallets")
+            except Exception as e:
+                print("[ENGINE] Wallet Intelligence unavailable: " + str(e))
+
     def _emit_event(self, event_name: str, payload: dict):
         """Fire-and-forget event emission. Wraps async emit() with create_task().
         Safe to call from sync methods within the async run() loop.
@@ -81,26 +100,6 @@ class MicroEngine:
                 finally:
                     loop.close()
             concurrent.futures.ThreadPoolExecutor(max_workers=1).submit(_do_emit)
-
-        # Wallet Intelligence (smart money tracking)
-        self.wallet_tracker = None
-        self.wallet_scorer = None
-        self.smart_money_detector = None
-        self._last_wallet_poll = 0
-        self._last_wallet_score = 0
-        WALLET_POLL_INTERVAL = 60  # seconds
-        if WALLET_INTEL_AVAILABLE:
-            try:
-                self.wallet_tracker = WalletTracker()
-                self.wallet_scorer = WalletScorer()
-                self.smart_money_detector = SmartMoneyDetector(
-                    tracker=self.wallet_tracker,
-                    scorer=self.wallet_scorer,
-                )
-                wallet_count = len(self.wallet_tracker.get_tracked_wallets())
-                print("[ENGINE] Wallet Intelligence ENABLED — tracking " + str(wallet_count) + " wallets")
-            except Exception as e:
-                print("[ENGINE] Wallet Intelligence unavailable: " + str(e))
 
     def _register_telegram_listeners(self):
         """Wire Telegram as event listeners on the bus (DSH pattern)."""
@@ -348,7 +347,7 @@ class MicroEngine:
                     last_exit_check = time.time()
 
                 # Wallet Intelligence: poll tracked wallets for smart money
-                if self.wallet_tracker and (time.time() - self._last_wallet_poll) >= WALLET_POLL_INTERVAL:
+                if self.wallet_tracker and (time.time() - self._last_wallet_poll) >= self.wallet_poll_interval:
                     try:
                         new_events = self.wallet_tracker.poll_wallets()
                         if new_events:
