@@ -609,6 +609,27 @@ class TokenScanner:
         with open(log_path, "a") as f:
             f.write(json.dumps(c.to_dict()) + chr(10))
 
+    def start(self, interval_seconds=30):
+        """Start background scanning thread."""
+        import threading
+        self._stop_event = threading.Event()
+        def _loop():
+            while not self._stop_event.is_set():
+                try:
+                    self.scan_once()
+                except Exception as e:
+                    print("[SCANNER] Error: " + str(e), flush=True)
+                self._stop_event.wait(interval_seconds)
+        self._thread = threading.Thread(target=_loop, daemon=True)
+        self._thread.start()
+        print("[SCANNER] Background scanner started (interval=" + str(interval_seconds) + "s)", flush=True)
+
+    def stop(self):
+        """Stop background scanning thread."""
+        if hasattr(self, '_stop_event'):
+            self._stop_event.set()
+        print("[SCANNER] Background scanner stopped", flush=True)
+
     def get_scan_stats(self):
         return {"total_scans": self._scan_count, "unique_tokens_seen": len(self._seen_tokens)}
 
