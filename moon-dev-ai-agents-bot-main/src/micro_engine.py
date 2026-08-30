@@ -14,6 +14,7 @@ from src.micro_sniper import MicroSniper, TradeSignal
 from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
 from src.event_bus import EventBus, Events, DispatchMode
+from datetime import datetime, timezone
 from src.agent_orchestrator import AgentOrchestrator
 from src.telegram_reporter import get_telegram_reporter
 from src.lightweight_sentiment import get_lightweight_sentiment
@@ -39,6 +40,7 @@ class MicroEngine:
         self.event_bus = self.orchestrator.event_bus
         self.telegram = get_telegram_reporter()
         self.sentiment = get_lightweight_sentiment()
+        self._register_telegram_listeners()
         self._running = False
         self._scan_count = 0
         self._signals_generated = 0
@@ -49,6 +51,39 @@ class MicroEngine:
         self.data_dir = Path("src/data/micro_engine")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
+
+    def _register_telegram_listeners(self):
+        """Wire Telegram as event listeners on the bus (DSH pattern)."""
+        self.event_bus.on(Events.POSITION_OPENED, self._tg_on_entry, mode=DispatchMode.EMIT, tag="telegram")
+        self.event_bus.on(Events.POSITION_CLOSED, self._tg_on_exit, mode=DispatchMode.EMIT, tag="telegram")
+        self.event_bus.on(Events.AGENT_ERROR, self._tg_on_error, mode=DispatchMode.EMIT, tag="telegram")
+
+    def _tg_on_entry(self, payload):
+        """Telegram listener for trade entry events."""
+        self.telegram.notify_entry(
+            symbol=payload.get("symbol", ""),
+            amount_usd=payload.get("amount_usd", 0),
+            score=payload.get("score", 0),
+            mode=payload.get("mode", "paper"),
+        )
+
+    def _tg_on_exit(self, payload):
+        """Telegram listener for trade exit events."""
+        self.telegram.notify_exit(
+            symbol=payload.get("symbol", ""),
+            amount_usd=payload.get("amount_usd", 0),
+            pnl_usd=payload.get("pnl_usd", 0),
+            pnl_pct=payload.get("pnl_pct", 0),
+            reason=payload.get("reason", "exit"),
+            mode=payload.get("mode", "paper"),
+        )
+
+    def _tg_on_error(self, payload):
+        """Telegram listener for error events."""
+        self.telegram.notify_error(
+            error=payload.get("error", "unknown"),
+            context=payload.get("context", ""),
+        )
 
     def _on_candidate(self, candidate):
         self._signals_generated += 1
@@ -124,10 +159,12 @@ class MicroEngine:
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("   Mode: LIVE")
         print("=" * 60)
-        self.telegram.notify_entry(
-            symbol=signal.symbol, amount_usd=signal.amount_usd,
-            score=int(signal.score), mode="live",
-        )
+        self.event_bus.emit(Events.POSITION_OPENED, {
+            "symbol": signal.symbol, "amount_usd": signal.amount_usd,
+            "score": int(signal.score), "mode": "live",
+            "token": signal.token_address, "side": signal.side,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
         self._events.append({
             "type": "live/intent",
             "data": {"token": signal.token_address, "symbol": signal.symbol,
@@ -153,10 +190,12 @@ class MicroEngine:
         print("   Amount: $" + "{:.2f}".format(signal.amount_usd))
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("=" * 60)
-        self.telegram.notify_entry(
-            symbol=signal.symbol, amount_usd=signal.amount_usd,
-            score=int(signal.score), mode="paper",
-        )
+        self.event_bus.emit(Events.POSITION_OPENED, {
+            "symbol": signal.symbol, "amount_usd": signal.amount_usd,
+            "score": int(signal.score), "mode": "paper",
+            "token": signal.token_address, "side": signal.side,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
         self._events.append({
             "type": "paper/intent",
             "data": {"token": signal.token_address, "symbol": signal.symbol,
@@ -182,24 +221,26 @@ class MicroEngine:
             closed = self.sniper.check_exits()
             for pos in closed:
                 self.orchestrator.record_trade_outcome(pos.symbol, pos.pnl_usd, pos.pnl_pct, 0)
-                self.telegram.notify_exit(
-                    symbol=pos.symbol, amount_usd=pos.amount_usd,
-                    pnl_usd=pos.pnl_usd, pnl_pct=pos.pnl_pct,
-                    reason=pos.exit_reason if hasattr(pos, 'exit_reason') else 'exit',
-                    mode="live",
-                )
+                self.event_bus.emit(Events.POSITION_CLOSED, {
+                    "symbol": pos.symbol, "amount_usd": pos.amount_usd,
+                    "pnl_usd": pos.pnl_usd, "pnl_pct": pos.pnl_pct,
+                    "reason": pos.exit_reason if hasattr(pos, 'exit_reason') else 'exit',
+                    "mode": "live", "token": pos.token_address,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
                 self._events.append({"type": "live/exit", "data": pos.to_dict(),
                     "timestamp": datetime.utcnow().isoformat()})
         else:
             closed = self.paper.check_exits()
             for trade in closed:
                 self.orchestrator.record_trade_outcome(trade.symbol, trade.pnl_usd, trade.pnl_pct, 0)
-                self.telegram.notify_exit(
-                    symbol=trade.symbol, amount_usd=trade.amount_usd,
-                    pnl_usd=trade.pnl_usd, pnl_pct=trade.pnl_pct,
-                    reason=trade.exit_reason if hasattr(trade, 'exit_reason') else 'exit',
-                    mode="paper",
-                )
+                self.event_bus.emit(Events.POSITION_CLOSED, {
+                    "symbol": trade.symbol, "amount_usd": trade.amount_usd,
+                    "pnl_usd": trade.pnl_usd, "pnl_pct": trade.pnl_pct,
+                    "reason": trade.exit_reason if hasattr(trade, 'exit_reason') else 'exit',
+                    "mode": "paper", "token": trade.token_address,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
                 self._events.append({"type": "paper/exit", "data": trade.to_dict(),
                     "timestamp": datetime.utcnow().isoformat()})
 
@@ -256,7 +297,10 @@ class MicroEngine:
                 self._running = False
             except Exception as e:
                 print("[ENGINE] Error: " + str(e))
-                self.telegram.notify_error(str(e), "engine_loop")
+                self.event_bus.emit(Events.AGENT_ERROR, {
+                    "error": str(e), "context": "engine_loop",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
                 await asyncio.sleep(5)
 
         self._log_events()
