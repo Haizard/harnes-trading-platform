@@ -9,6 +9,12 @@ from datetime import datetime, timezone
 from typing import List, Optional, Callable, Dict
 from pathlib import Path
 
+# Category agents for discovery, scoring, and trading style
+from src.category_agents import (
+    TokenCategory, TradeParams, get_category_params, get_all_agents,
+    get_agent_for_category, classify_token, CATEGORY_PARAMS,
+)
+
 # -- API Endpoints (all FREE, no API key needed) ---------------
 
 JUPITER_QUOTE = "https://api.jup.ag/swap/v1/quote"
@@ -41,103 +47,8 @@ MIN_HOLDERS = 10
 MAX_MARKET_CAP = 10_000_000      # Exclude blue-chip memecoins (Bonk, POPCAT, etc.)
 SCAN_INTERVAL_SECONDS = 30
 
-
-# -- Token Categories ──────────────────────────────────────────
-
-class TokenCategory(str, Enum):
-    """Categories for token-aware trading logic."""
-    AI_AGENT = "ai_agent"          # AI agent tokens (AI16Z, GOAT, etc.)
-    POLITICAL = "political"        # Political/event-driven tokens
-    MEMECOIN = "memecoin"          # Animal/community memecoins
-    PUMP_FUN = "pump_fun"          # Fresh pump.fun launches
-    TRENDING = "trending"          # Currently trending on DexScreener
-    BOOSTED = "boosted"            # Paid-boosted tokens
-    UNKNOWN = "unknown"
-
-    def __str__(self):
-        return self.value
-
-
-# Per-category exit parameters: (stop_loss%, take_profit%, max_hold_hours)
-CATEGORY_TRADE_PARAMS: Dict[TokenCategory, dict] = {
-    TokenCategory.AI_AGENT: {
-        "stop_loss_pct": 5.0,
-        "take_profit_pct": 50.0,
-        "max_hold_hours": 48.0,
-        "description": "AI agent — let narratives play out",
-    },
-    TokenCategory.POLITICAL: {
-        "stop_loss_pct": 15.0,
-        "take_profit_pct": 20.0,
-        "max_hold_hours": 6.0,
-        "description": "Political — fast in, fast out",
-    },
-    TokenCategory.MEMECOIN: {
-        "stop_loss_pct": 10.0,
-        "take_profit_pct": 30.0,
-        "max_hold_hours": 12.0,
-        "description": "Memecoin — standard defaults",
-    },
-    TokenCategory.PUMP_FUN: {
-        "stop_loss_pct": 20.0,
-        "take_profit_pct": 40.0,
-        "max_hold_hours": 2.0,
-        "description": "Pump.fun — high risk, quick exit",
-    },
-    TokenCategory.TRENDING: {
-        "stop_loss_pct": 10.0,
-        "take_profit_pct": 35.0,
-        "max_hold_hours": 12.0,
-        "description": "Trending — slightly wider TP",
-    },
-    TokenCategory.BOOSTED: {
-        "stop_loss_pct": 12.0,
-        "take_profit_pct": 25.0,
-        "max_hold_hours": 8.0,
-        "description": "Boosted — someone paid to promote, be cautious",
-    },
-    TokenCategory.UNKNOWN: {
-        "stop_loss_pct": 10.0,
-        "take_profit_pct": 30.0,
-        "max_hold_hours": 12.0,
-        "description": "Unknown — standard defaults",
-    },
-}
-
-
-def get_category_params(category: TokenCategory) -> dict:
-    """Get trade parameters for a token category."""
-    return CATEGORY_TRADE_PARAMS.get(category, CATEGORY_TRADE_PARAMS[TokenCategory.UNKNOWN])
-
-
-def classify_token(name: str, symbol: str, description: str = "") -> TokenCategory:
-    """Classify a token into a category based on name/symbol/description."""
-    text = f"{name} {symbol} {description}".lower()
-
-    # AI agent tokens
-    ai_keywords = ["ai", "agent", "gpt", "llm", "openai", "anthropic", "neural",
-                    "robot", "bot", "machine learning", "deepseek", "qwen"]
-    if any(kw in text for kw in ai_keywords):
-        return TokenCategory.AI_AGENT
-
-    # Political tokens
-    political_keywords = ["trump", "biden", "maga", "election", "president",
-                          "vote", "politic", "kamala", "elon", "doge"]
-    if any(kw in text for kw in political_keywords):
-        return TokenCategory.POLITICAL
-
-    # Pump.fun tokens (address ends with "pump" or name contains pump.fun)
-    if "pump" in text or (len(symbol) > 4 and symbol.lower().endswith("pump")):
-        return TokenCategory.PUMP_FUN
-
-    # Memecoins (animal names, emoji references, community tokens)
-    meme_keywords = ["cat", "dog", "bear", "bull", "frog", "ape", "monkey",
-                     "pepe", "wojak", "chad", "retard", "degen", "moon",
-                     "inu", "shib", "bonk", "popcat", "bome", "fart"]
-    if any(kw in text for kw in meme_keywords):
-        return TokenCategory.MEMECOIN
-
-    return TokenCategory.UNKNOWN
+# Legacy compat — old code may reference these
+CATEGORY_TRADE_PARAMS = {k: vars(v) for k, v in CATEGORY_PARAMS.items()}
 
 
 @dataclass
@@ -540,36 +451,43 @@ class TokenScanner:
         self._maybe_reset_seen_tokens()
         print("[SCANNER] Scan #" + str(self._scan_count) + " starting...", flush=True)
 
-        # --- Source 1: Traditional search ---
+        # --- Category Agent Discovery ---
         all_pairs = {}
-        for term in SCAN_TERMS:
-            pairs = self.dexscreener.search(term)
-            for pair in pairs:
-                addr = pair.get("baseToken", {}).get("address", "")
-                if addr and addr not in all_pairs:
-                    all_pairs[addr] = pair
-            time.sleep(0.3)
-        print("[SCANNER] Found " + str(len(all_pairs)) + " unique tokens from DexScreener search", flush=True)
+        agent_sources = {}  # addr -> (agent, source_label)
+        agents = get_all_agents()
 
-        # --- Source 2: Trending categories + boosted tokens ---
+        for agent in agents:
+            try:
+                agent_pairs = agent.discover()
+                for pair in agent_pairs:
+                    addr = pair.get("baseToken", {}).get("address", "")
+                    if addr and addr not in all_pairs:
+                        all_pairs[addr] = pair
+                        agent_sources[addr] = (agent, agent.name)
+                if agent_pairs:
+                    print("[" + agent.name.upper() + "] Found " + str(len(agent_pairs)) + " tokens", flush=True)
+            except Exception as e:
+                print("[" + agent.name.upper() + "] Discovery error: " + str(e), flush=True)
+
+        # --- Also scan legacy trending/boosted sources ---
         trending_pairs = self.trending.discover()
         for pair in trending_pairs:
             addr = pair.get("baseToken", {}).get("address", "")
             if addr and addr not in all_pairs:
                 all_pairs[addr] = pair
-        if trending_pairs:
-            print("[SCANNER] Added " + str(len(trending_pairs)) + " tokens from trending/boosted", flush=True)
+                agent_sources[addr] = (None, "trending")
+
+        print("[SCANNER] Total unique tokens from all sources: " + str(len(all_pairs)), flush=True)
 
         # --- Score and filter all candidates ---
         for addr, pair in all_pairs.items():
             if addr in self._seen_tokens:
                 continue
 
-            # Determine source for this pair
-            is_trending = addr in {p.get("baseToken", {}).get("address", "") for p in trending_pairs}
-            source = "trending" if is_trending else "search"
+            # Determine source and agent for this pair
+            agent, source = agent_sources.get(addr, (None, "search"))
 
-            # Check if it's a boosted token
+            # Check boosted cache
             if addr in self.trending._boosted_cache:
                 source = "boosted"
 
@@ -582,11 +500,29 @@ class TokenScanner:
                 continue
             if candidate.market_cap > MAX_MARKET_CAP:
                 continue
+
+            # Classify and assign category
+            candidate.category = classify_token(candidate.name, candidate.symbol)
+
+            # Use category agent for scoring if available
+            if agent:
+                candidate.score = agent.score(candidate)
+            else:
+                self.scorer.score(candidate)
+
+            # Let agent decide if trade is viable
+            if agent:
+                should_trade, reason = agent.should_trade(candidate)
+                if not should_trade:
+                    print("[" + agent.name.upper() + "] SKIP " + candidate.symbol + ": " + reason, flush=True)
+                    continue
+
             jup = self.jupiter.check_liquidity(addr)
             if not jup.get("available"):
                 print("[SCANNER] " + candidate.symbol + ": No Jupiter liquidity", flush=True)
                 continue
-            self.scorer.score(candidate)                if candidate.score >= 30:
+
+            if candidate.score >= 30:
                 candidates.append(candidate)
                 self._seen_tokens.add(addr)
                 # Persist to DB (survives deploys)

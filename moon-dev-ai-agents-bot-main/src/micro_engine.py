@@ -11,7 +11,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from src.token_scanner import TokenScanner, TokenCandidate, get_category_params
+from src.token_scanner import TokenScanner, TokenCandidate
+from src.category_agents import get_category_params, TokenCategory
 from src.micro_sniper import MicroSniper, TradeSignal
 from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
@@ -353,9 +354,9 @@ class MicroEngine:
             candidate.address, candidate.symbol,
             candidate.score, candidate.liquidity_usd,
             category=str(candidate.category),
-            stop_loss_pct=cat_params["stop_loss_pct"],
-            take_profit_pct=cat_params["take_profit_pct"],
-            max_hold_hours=cat_params["max_hold_hours"],
+            stop_loss_pct=cat_params.stop_loss_pct,
+            take_profit_pct=cat_params.take_profit_pct,
+            max_hold_hours=cat_params.max_hold_hours,
         )
         if not signal:
             return
@@ -422,14 +423,13 @@ class MicroEngine:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
-        params = cat_params or {}
         trade = self.paper.buy(
             token_address=signal.token_address, symbol=signal.symbol,
             amount_usd=signal.amount_usd, score=signal.score,
             signals=candidate.signals, category=str(candidate.category),
-            stop_loss_pct=params.get("stop_loss_pct", 10.0),
-            take_profit_pct=params.get("take_profit_pct", 30.0),
-            max_hold_hours=params.get("max_hold_hours", 12.0),
+            stop_loss_pct=cat_params.stop_loss_pct if cat_params else 10.0,
+            take_profit_pct=cat_params.take_profit_pct if cat_params else 30.0,
+            max_hold_hours=cat_params.max_hold_hours if cat_params else 12.0,
         )
         if trade:
             self._trades_executed += 1
