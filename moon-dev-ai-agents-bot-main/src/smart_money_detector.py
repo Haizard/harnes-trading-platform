@@ -72,10 +72,11 @@ class SmartMoneyDetector:
         signals = detector.scan()
     """
 
-    def __init__(self, tracker=None, scorer=None, data_dir: Path = None):
+    def __init__(self, tracker=None, scorer=None, data_dir: Path = None, event_bus=None):
         self.data_dir = data_dir or DATA_DIR
         self.tracker = tracker
         self.scorer = scorer
+        self.event_bus = event_bus  # Optional EventBus for DSH event emission
         self.min_wallet_score = 40.0
         self.time_window_seconds = 120  # 2 minutes
         self.min_wallets = 2
@@ -142,6 +143,8 @@ class SmartMoneyDetector:
 
         if new_signals:
             self._append_signals(new_signals)
+            # Emit to EventBus for DSH listeners
+            self._emit_consensus_events(new_signals)
 
         return new_signals
 
@@ -265,6 +268,38 @@ class SmartMoneyDetector:
         with open(SMART_MONEY_LOG, "a") as f:
             for sig in signals:
                 f.write(json.dumps(sig.to_dict(), default=str) + "\n")
+
+    def _emit_consensus_events(self, signals: List[SmartMoneySignal]):
+        """Emit consensus events to EventBus for DSH listeners."""
+        if not self.event_bus:
+            return
+        try:
+            import asyncio
+            from src.event_bus import Events
+            for sig in signals:
+                payload = {
+                    "token_address": sig.token_address,
+                    "wallets_buying": sig.wallets_buying,
+                    "wallets_selling": sig.wallets_selling,
+                    "aggregate_buy_sol": sig.aggregate_buy_sol,
+                    "aggregate_sell_sol": sig.aggregate_sell_sol,
+                    "avg_wallet_score": sig.avg_wallet_score,
+                    "confidence": sig.confidence,
+                    "signal": "BUY" if sig.wallets_buying > sig.wallets_selling else "SELL",
+                    "timestamp": sig.timestamp,
+                }
+                # Emit consensus event
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(self.event_bus.emit(Events.SMART_MONEY_CONSENSUS, payload))
+                        # High-confidence signals get a separate alert event
+                        if sig.confidence >= 0.5 and sig.wallets_buying >= 3:
+                            asyncio.ensure_future(self.event_bus.emit(Events.SMART_MONEY_ALERT, payload))
+                except RuntimeError:
+                    pass
+        except Exception:
+            pass
 
     # ── Stats ──────────────────────────────────────────────────
 

@@ -127,7 +127,12 @@ class AgentOrchestrator:
         self.feedback_loop = TradeFeedbackLoop()
         async def _log_event(payload):
             await self.session_log.log(payload.get("event_type", "unknown"), payload)
-        for evt in [Events.SIGNAL_GENERATED, Events.ORDER_SUBMITTED, Events.ORDER_FILLED, Events.POSITION_OPENED, Events.POSITION_CLOSED]:
+        for evt in [
+            Events.SIGNAL_GENERATED, Events.ORDER_SUBMITTED, Events.ORDER_FILLED,
+            Events.POSITION_OPENED, Events.POSITION_CLOSED,
+            Events.WALLET_SWAP_DETECTED, Events.WALLET_SCORED,
+            Events.SMART_MONEY_CONSENSUS, Events.SMART_MONEY_ALERT,
+        ]:
             self.event_bus.on(evt, _log_event, mode=DispatchMode.EMIT, tag="session_log")
 
         # Consensus engine (multi-model AI)

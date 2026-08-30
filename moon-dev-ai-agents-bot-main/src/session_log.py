@@ -52,6 +52,12 @@ class EventType(str, Enum):
     RISK_APPROVED = "risk/approved"
     RISK_DENIED = "risk/denied"
 
+    # Wallet Intelligence
+    WALLET_SWAP_DETECTED = "wallet/swap_detected"
+    WALLET_SCORED = "wallet/scored"
+    SMART_MONEY_CONSENSUS = "wallet/smart_money"
+    SMART_MONEY_ALERT = "wallet/smart_money_alert"
+
     # System
     AGENT_ERROR = "agent/error"
     MODEL_CALL = "model/call"
@@ -74,6 +80,10 @@ EVENT_DESCRIPTIONS = {
     EventType.PREDICTION_SCORE: "PredictionEngine output",
     EventType.RISK_APPROVED: "Risk guard approved order",
     EventType.RISK_DENIED: "Risk guard denied order",
+    EventType.WALLET_SWAP_DETECTED: "Tracked wallet executed a swap",
+    EventType.WALLET_SCORED: "Wallet scored by WalletScorer",
+    EventType.SMART_MONEY_CONSENSUS: "Multiple wallets buying same token",
+    EventType.SMART_MONEY_ALERT: "High-confidence smart money consensus",
     EventType.AGENT_ERROR: "Agent encountered an error",
     EventType.MODEL_CALL: "LLM API call made",
 }

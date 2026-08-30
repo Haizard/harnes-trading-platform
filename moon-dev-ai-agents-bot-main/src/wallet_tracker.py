@@ -102,9 +102,10 @@ class WalletTracker:
         events = tracker.poll_wallets()  # returns new SwapEvents
     """
 
-    def __init__(self, rpc_url: str = None, data_dir: Path = None):
+    def __init__(self, rpc_url: str = None, data_dir: Path = None, event_bus=None):
         self.rpc_url = rpc_url or SOLANA_RPC
         self.data_dir = data_dir or DATA_DIR
+        self.event_bus = event_bus  # Optional EventBus for DSH event emission
         self.wallets: Dict[str, dict] = {}  # address -> config
         self._last_poll: Dict[str, float] = {}  # address -> last poll time
         self._seen_sigs: Set[str] = set()   # already-processed signatures
@@ -163,6 +164,8 @@ class WalletTracker:
         # Persist new events
         if new_events:
             self._append_events(new_events)
+            # Emit to EventBus for DSH listeners (Session Log, Telegram, etc.)
+            self._emit_swap_events(new_events)
 
         return new_events
 
@@ -401,6 +404,35 @@ class WalletTracker:
         with open(WALLET_ACTIVITY_LOG, "a") as f:
             for event in events:
                 f.write(json.dumps(event.to_dict(), default=str) + "\n")
+
+    def _emit_swap_events(self, events: List[SwapEvent]):
+        """Emit swap events to EventBus for DSH listeners."""
+        if not self.event_bus:
+            return
+        try:
+            import asyncio
+            from src.event_bus import Events
+            for event in events:
+                payload = {
+                    "wallet": event.wallet[:12] + "...",
+                    "token_address": event.token_address,
+                    "direction": event.direction,
+                    "amount_sol": event.amount_sol,
+                    "amount_usd": event.amount_usd,
+                    "price_usd": event.price_usd,
+                    "program": event.program,
+                    "tx_signature": event.tx_signature,
+                    "timestamp": event.timestamp,
+                }
+                # Fire-and-forget via ensure_future
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(self.event_bus.emit(Events.WALLET_SWAP_DETECTED, payload))
+                except RuntimeError:
+                    pass  # No running loop — skip emit
+        except Exception:
+            pass  # Never crash on event emission
 
     def get_recent_activity(self, hours: int = 24, wallet: str = "", token: str = "") -> List[dict]:
         """Read recent activity from the log."""

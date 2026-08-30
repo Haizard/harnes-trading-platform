@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from src.agent_orchestrator import AgentOrchestrator
 from src.telegram_reporter import get_telegram_reporter
 from src.lightweight_sentiment import get_lightweight_sentiment
+from src.async_scheduler import AsyncScheduler, JobStatus
 
 # Wallet Intelligence (smart money tracking)
 try:
@@ -61,19 +62,29 @@ class MicroEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
 
+        # DSH AsyncScheduler — non-blocking background jobs
+        self.scheduler = AsyncScheduler()
+
         # Wallet Intelligence (smart money tracking)
         self.wallet_tracker = None
         self.wallet_scorer = None
         self.smart_money_detector = None
-        self._last_wallet_poll = 0
-        self.wallet_poll_interval = 60  # seconds
         if WALLET_INTEL_AVAILABLE:
             try:
-                self.wallet_tracker = WalletTracker()
+                self.wallet_tracker = WalletTracker(event_bus=self.event_bus)
                 self.wallet_scorer = WalletScorer()
                 self.smart_money_detector = SmartMoneyDetector(
                     tracker=self.wallet_tracker,
                     scorer=self.wallet_scorer,
+                    event_bus=self.event_bus,
+                )
+                # Register wallet event listeners (DSH pattern)
+                self._register_wallet_listeners()
+                # Register wallet polling as DSH BackgroundJob
+                self.scheduler.register(
+                    name="wallet_poll",
+                    fn=self._poll_wallets,
+                    interval_seconds=60,
                 )
                 wallet_count = len(self.wallet_tracker.get_tracked_wallets())
                 print("[ENGINE] Wallet Intelligence ENABLED — tracking " + str(wallet_count) + " wallets")
@@ -106,6 +117,13 @@ class MicroEngine:
         self.event_bus.on(Events.POSITION_OPENED, self._tg_on_entry, mode=DispatchMode.EMIT, tag="telegram")
         self.event_bus.on(Events.POSITION_CLOSED, self._tg_on_exit, mode=DispatchMode.EMIT, tag="telegram")
         self.event_bus.on(Events.AGENT_ERROR, self._tg_on_error, mode=DispatchMode.EMIT, tag="telegram")
+
+    def _register_wallet_listeners(self):
+        """Wire wallet intelligence events to Telegram (DSH pattern)."""
+        if self.smart_money_detector:
+            self.event_bus.on(Events.SMART_MONEY_ALERT, self._tg_on_smart_money, mode=DispatchMode.EMIT, tag="telegram")
+        self.event_bus.on(Events.WALLET_SWAP_DETECTED, self._on_wallet_swap, mode=DispatchMode.EMIT, tag="wallet_log")
+        self.event_bus.on(Events.SMART_MONEY_CONSENSUS, self._on_smart_money_consensus, mode=DispatchMode.EMIT, tag="wallet_log")
 
     def _tg_on_entry(self, payload):
         """Telegram listener for trade entry events."""
@@ -149,6 +167,64 @@ class MicroEngine:
             error=payload.get("error", "unknown"),
             context=payload.get("context", ""),
         )
+
+    def _tg_on_smart_money(self, payload):
+        """Telegram listener for high-confidence smart money alerts."""
+        try:
+            token = payload.get("token_address", "")[:8]
+            wallets = payload.get("wallets_buying", 0)
+            sol = payload.get("aggregate_buy_sol", 0)
+            conf = payload.get("confidence", 0)
+            self.telegram.notify_error(
+                error="SMART MONEY ALERT",
+                context=f"{wallets} wallets buying {token}... ({sol:.2f} SOL, conf={conf:.2f})",
+            )
+        except Exception:
+            pass
+
+    def _on_wallet_swap(self, payload):
+        """Log wallet swap events to engine events."""
+        self._events.append({
+            "type": "wallet/swap",
+            "data": payload,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _on_smart_money_consensus(self, payload):
+        """Log smart money consensus events to engine events."""
+        self._events.append({
+            "type": "wallet/smart_money",
+            "data": payload,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _poll_wallets(self):
+        """DSH BackgroundJob: poll tracked wallets for smart money swaps.
+        Called by AsyncScheduler every 60s. Handles errors gracefully.
+        """
+        if not self.wallet_tracker:
+            return
+        try:
+            new_events = self.wallet_tracker.poll_wallets()
+            if new_events:
+                print("[WALLET] Detected " + str(len(new_events)) + " new swap events from tracked wallets")
+                for evt in new_events:
+                    print("[WALLET]   " + evt.get('wallet', '')[:8] + "... " +
+                          evt.get('direction', '').upper() + " " +
+                          evt.get('token_address', '')[:8] + "... " +
+                          str(round(evt.get('amount_sol', 0), 4)) + " SOL")
+            # Check for smart money consensus signals
+            if self.smart_money_detector:
+                signals = self.smart_money_detector.scan(hours=1)
+                if signals:
+                    for sig in signals:
+                        print("[SMART MONEY] CONSENSUS DETECTED!")
+                        print("[SMART MONEY]   Token: " + sig.token_address[:8] + "...")
+                        print("[SMART MONEY]   Wallets buying: " + str(sig.wallets_buying))
+                        print("[SMART MONEY]   Aggregate volume: " + str(round(sig.aggregate_buy_sol, 4)) + " SOL")
+                        print("[SMART MONEY]   Confidence: " + str(round(sig.confidence, 3)))
+        except Exception as e:
+            print("[ENGINE] Wallet poll error: " + str(e))
 
     def _on_candidate(self, candidate):
         self._signals_generated += 1
@@ -336,6 +412,10 @@ class MicroEngine:
         last_heartbeat = time.time()
         HEARTBEAT_INTERVAL = 1800  # 30 minutes
 
+        # Start DSH AsyncScheduler (background jobs)
+        await self.scheduler.start()
+        print("[ENGINE] Background jobs started (wallet_poll every 60s)")
+
         while self._running:
             try:
                 candidates = self.scanner.scan_once()
@@ -345,31 +425,6 @@ class MicroEngine:
                 if time.time() - last_exit_check >= EXIT_CHECK_INTERVAL:
                     self._check_exits()
                     last_exit_check = time.time()
-
-                # Wallet Intelligence: poll tracked wallets for smart money
-                if self.wallet_tracker and (time.time() - self._last_wallet_poll) >= self.wallet_poll_interval:
-                    try:
-                        new_events = self.wallet_tracker.poll_wallets()
-                        if new_events:
-                            print("[WALLET] Detected " + str(len(new_events)) + " new swap events from tracked wallets")
-                            for evt in new_events:
-                                print("[WALLET]   " + evt.get('wallet', '')[:8] + "... " +
-                                      evt.get('direction', '').upper() + " " +
-                                      evt.get('token_address', '')[:8] + "... " +
-                                      str(round(evt.get('amount_sol', 0), 4)) + " SOL")
-                        # Check for smart money consensus signals
-                        if self.smart_money_detector:
-                            signals = self.smart_money_detector.scan(hours=1)
-                            if signals:
-                                for sig in signals:
-                                    print("[SMART MONEY] CONSENSUS DETECTED!")
-                                    print("[SMART MONEY]   Token: " + sig.token_address[:8] + "...")
-                                    print("[SMART MONEY]   Wallets buying: " + str(sig.wallets_buying))
-                                    print("[SMART MONEY]   Aggregate volume: " + str(round(sig.aggregate_buy_sol, 4)) + " SOL")
-                                    print("[SMART MONEY]   Confidence: " + str(round(sig.confidence, 3)))
-                    except Exception as e:
-                        print("[ENGINE] Wallet poll error: " + str(e))
-                    self._last_wallet_poll = time.time()
 
                 # Update capital in telegram and DB
                 self.telegram.set_capital(self.capital, self.paper.capital)
@@ -395,6 +450,8 @@ class MicroEngine:
                 })
                 await asyncio.sleep(5)
 
+        # Stop DSH AsyncScheduler
+        await self.scheduler.stop()
         self._log_events()
         self._print_stats()
         if self.mode == "paper":
@@ -426,6 +483,9 @@ class MicroEngine:
             print("  Wallets tracked: " + str(wt_stats.get("tracked_wallets", 0)))
             print("  Wallet events 24h: " + str(wt_stats.get("events_24h", 0)))
             print("  Smart money signals: " + str(self.smart_money_detector.get_stats().get("total_signals", 0) if self.smart_money_detector else 0))
+        scheduler_stats = self.scheduler.get_status()
+        for job_name, job_info in scheduler_stats.items():
+            print("  Job " + job_name + ": " + job_info.get("status", "unknown") + " (" + str(job_info.get("runs", 0)) + " runs)")
         print("--- End Stats ---")
 
 

@@ -510,6 +510,12 @@ class Events:
     RISK_APPROVED = "risk/approved"
     RISK_DENIED = "risk/denied"
 
+    # Wallet Intelligence
+    WALLET_SWAP_DETECTED = "wallet/swap_detected"       # A tracked wallet made a swap
+    WALLET_SCORED = "wallet/scored"                     # A wallet was scored
+    SMART_MONEY_CONSENSUS = "wallet/smart_money"        # Multiple wallets buying same token
+    SMART_MONEY_ALERT = "wallet/smart_money_alert"      # High-confidence consensus signal
+
     # System
     AGENT_ERROR = "agent/error"
     MODEL_CALL = "model/call"
