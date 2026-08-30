@@ -225,21 +225,22 @@ class MicroEngine:
             if new_events:
                 print("[WALLET] Detected " + str(len(new_events)) + " new swap events from tracked wallets")
                 for evt in new_events:
-                    print("[WALLET]   " + evt.get('wallet', '')[:8] + "... " +
-                          evt.get('direction', '').upper() + " " +
-                          evt.get('token_address', '')[:8] + "... " +
-                          str(round(evt.get('amount_sol', 0), 4)) + " SOL")
+                    # SwapEvent is a dataclass — use attribute access
+                    print("[WALLET]   " + evt.wallet[:8] + "... " +
+                          evt.direction.upper() + " " +
+                          evt.token_address[:8] + "... " +
+                          str(round(evt.amount_sol, 4)) + " SOL")
                     # Save wallet event to DB
                     if self._db_available:
                         try:
                             from src.db_storage import save_wallet_event
                             save_wallet_event(
                                 event_type="wallet/swap",
-                                wallet=evt.get('wallet', ''),
-                                token_address=evt.get('token_address', ''),
-                                direction=evt.get('direction', ''),
-                                amount_sol=evt.get('amount_sol', 0),
-                                data=evt,
+                                wallet=evt.wallet,
+                                token_address=evt.token_address,
+                                direction=evt.direction,
+                                amount_sol=evt.amount_sol,
+                                data=evt.to_dict(),
                             )
                         except Exception:
                             pass
