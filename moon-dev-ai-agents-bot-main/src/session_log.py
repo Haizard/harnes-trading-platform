@@ -292,7 +292,7 @@ class CSVStorage:
             return True
         if 'event_type' in filters and event.event_type != filters['event_type']:
             return False
-        if 'token' in filters and filters['token'] not in json.dumps(event.data):
+        if 'token' in filters and filters['token'] not in json.dumps(event.data, default=str):
             return False
         if 'session_id' in filters and event.session_id != filters['session_id']:
             return False
@@ -325,7 +325,7 @@ class InMemoryStorage:
             return True
         if 'event_type' in filters and event.event_type != filters['event_type']:
             return False
-        if 'token' in filters and filters['token'] not in json.dumps(event.data):
+        if 'token' in filters and filters['token'] not in json.dumps(event.data, default=str):
             return False
         if 'session_id' in filters and event.session_id != filters['session_id']:
             return False
