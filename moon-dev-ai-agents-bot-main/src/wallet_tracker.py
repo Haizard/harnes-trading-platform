@@ -42,7 +42,7 @@ USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 # Use path relative to this file, not CWD (works in Docker)
 _MODULE_DIR = Path(__file__).resolve().parent
-DATA_DIR = _MODULE_DIR.parent / "data"
+DATA_DIR = _MODULE_DIR / "data"
 WALLETS_CONFIG = DATA_DIR / "tracked_wallets.json"
 WALLET_ACTIVITY_LOG = DATA_DIR / "wallet_tracker" / "wallet_activity.jsonl"
 
