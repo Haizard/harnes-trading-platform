@@ -213,6 +213,25 @@ def _init_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Smart money consensus signals
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS smart_money_signals (
+                id SERIAL PRIMARY KEY,
+                token_address TEXT NOT NULL,
+                token_symbol TEXT DEFAULT '',
+                wallets_buying INTEGER DEFAULT 0,
+                wallets_selling INTEGER DEFAULT 0,
+                aggregate_buy_sol REAL DEFAULT 0,
+                aggregate_sell_sol REAL DEFAULT 0,
+                avg_wallet_score REAL DEFAULT 0,
+                weighted_quality REAL DEFAULT 0,
+                confidence REAL DEFAULT 0,
+                time_window_seconds INTEGER DEFAULT 0,
+                data JSONB DEFAULT '{}',
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
         # Indexes
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
@@ -704,3 +723,38 @@ def get_scanner_results(hours: int = 24, min_score: float = 0, limit: int = 1000
     except Exception as e:
         print(f"[DB] get_scanner_results error: {e}")
         return []
+
+
+# ── Smart Money Signal Operations ────────────────────────────
+
+def save_smart_money_signal(token_address: str, token_symbol: str = "",
+                            wallets_buying: int = 0, wallets_selling: int = 0,
+                            aggregate_buy_sol: float = 0.0, aggregate_sell_sol: float = 0.0,
+                            avg_wallet_score: float = 0.0, weighted_quality: float = 0.0,
+                            confidence: float = 0.0, time_window_seconds: int = 0,
+                            data: dict = None, timestamp: str = None):
+    """Save a smart money consensus signal to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO smart_money_signals (
+                    token_address, token_symbol, wallets_buying, wallets_selling,
+                    aggregate_buy_sol, aggregate_sell_sol, avg_wallet_score,
+                    weighted_quality, confidence, time_window_seconds, data, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                token_address, token_symbol, wallets_buying, wallets_selling,
+                aggregate_buy_sol, aggregate_sell_sol, avg_wallet_score,
+                weighted_quality, confidence, time_window_seconds,
+                json.dumps(data or {}, default=str),
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_smart_money_signal error: {e}")
+        return None

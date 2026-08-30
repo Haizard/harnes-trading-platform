@@ -263,11 +263,31 @@ class SmartMoneyDetector:
                 pass
 
     def _append_signals(self, signals: List[SmartMoneySignal]):
-        """Append new signals to log."""
+        """Append new signals to log (JSONL + DB)."""
         SMART_MONEY_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(SMART_MONEY_LOG, "a") as f:
             for sig in signals:
                 f.write(json.dumps(sig.to_dict(), default=str) + "\n")
+        # Save to DB
+        try:
+            from src.db_storage import save_smart_money_signal
+            for sig in signals:
+                save_smart_money_signal(
+                    token_address=sig.token_address,
+                    token_symbol=sig.token_symbol,
+                    wallets_buying=sig.wallets_buying,
+                    wallets_selling=sig.wallets_selling,
+                    aggregate_buy_sol=sig.aggregate_buy_sol,
+                    aggregate_sell_sol=sig.aggregate_sell_sol,
+                    avg_wallet_score=sig.avg_wallet_score,
+                    weighted_quality=sig.weighted_quality,
+                    confidence=sig.confidence,
+                    time_window_seconds=sig.time_window_seconds,
+                    data=sig.to_dict(),
+                    timestamp=sig.timestamp,
+                )
+        except Exception:
+            pass
 
     def _emit_consensus_events(self, signals: List[SmartMoneySignal]):
         """Emit consensus events to EventBus for DSH listeners."""
