@@ -44,13 +44,14 @@ class MicroEngine:
     def __init__(self, capital=DEFAULT_CAPITAL, mode="paper", rpc_url=None):
         self.capital = capital
         self.mode = mode
-        self.scanner = TokenScanner(callback=self._on_candidate)
         self.sniper = MicroSniper(capital=capital, mode=mode, rpc_url=rpc_url)
         self.mode = self.sniper.mode  # Sync mode (may fallback from live to paper)
         self.paper = PaperTrader(capital=capital)
         self.rug_detector = RugPullDetector()
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
         self.event_bus = self.orchestrator.event_bus
+        # Scanner gets event_bus for DSH category agents
+        self.scanner = TokenScanner(callback=self._on_candidate, event_bus=self.event_bus)
         self.telegram = get_telegram_reporter()
         self.sentiment = get_lightweight_sentiment()
         self._register_telegram_listeners()
@@ -492,6 +493,17 @@ class MicroEngine:
         # Restore open paper trades from DB (survives deploys)
         if self.mode == "paper":
             self.paper.restore_open_trades()
+
+        # Register category agents as DSH background jobs
+        from src.category_agents import get_all_agents
+        self.category_agents = get_all_agents(event_bus=self.event_bus, scheduler=self.scheduler)
+        for agent in self.category_agents:
+            self.scheduler.register(
+                name="agent_" + agent.name,
+                fn=agent.discover,
+                interval_seconds=120,  # Each agent discovers every 2 min
+            )
+            print("[AGENT] Registered " + agent.name + " as background job", flush=True)
 
         # Start async scheduler for background jobs
         await self.scheduler.start()

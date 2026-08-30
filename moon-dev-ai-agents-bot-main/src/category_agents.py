@@ -1,6 +1,12 @@
 """
 Category Agents — Each Solana token category gets its own agent.
 
+DSH Architecture:
+  - Each agent emits events via EventBus (AGENT_DISCOVERY, AGENT_SCORED, AGENT_TRADE_SIGNAL)
+  - Each agent is registered as a scheduled job in AsyncScheduler
+  - Agent decisions flow through the event bus to the orchestrator
+  - SessionLog records all agent actions for audit trail
+
 Each agent handles:
   - Discovery: how to find tokens in this category
   - Scoring: what makes a good token in this category
@@ -20,6 +26,8 @@ Security: READ-ONLY discovery. Never executes trades.
 """
 
 import time
+import json
+import asyncio
 import requests
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -108,19 +116,63 @@ class CategoryAgent(ABC):
     """
     Base class for all category agents.
 
+    DSH Architecture:
+      - Emits events via EventBus (AGENT_DISCOVERY, AGENT_SCORED, AGENT_TRADE_SIGNAL)
+      - Registered as scheduled jobs in AsyncScheduler
+      - Decisions flow through event bus to orchestrator
+      - SessionLog records all actions for audit trail
+
     Each agent discovers, scores, and trades tokens in its category
     with its own personality and rules.
     """
 
-    def __init__(self, category: TokenCategory):
+    def __init__(self, category: TokenCategory, event_bus=None, scheduler=None):
         self.category = category
         self.params = get_category_params(category)
         self._search_cache: Dict[str, float] = {}  # query -> last search time
         self._search_cache_ttl = 300  # 5 min cache
+        # DSH components
+        self.event_bus = event_bus
+        self.scheduler = scheduler
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
 
     @property
     def name(self) -> str:
         return self.category.value
+
+    # ── DSH Event Emission ────────────────────────────────────
+
+    def _emit_event(self, event_name: str, payload: dict):
+        """Emit event to EventBus (DSH pattern)."""
+        if not self.event_bus:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+            else:
+                loop.run_until_complete(self.event_bus.emit(event_name, payload))
+        except RuntimeError:
+            pass
+
+    def _log_to_db(self, event_type: str, data: dict):
+        """Log event to DB (DSH audit trail)."""
+        if not self._db_available:
+            return
+        try:
+            from src.db_storage import log_event
+            log_event(event_type, data)
+        except Exception:
+            pass
+
+    def _log_session(self, description: str, data: dict = None):
+        """Log to session event log (DSH SessionLog)."""
+        self._log_to_db(self.name + "/" + description, data or {})
 
     # ── Discovery (abstract) ──────────────────────────────────
 
@@ -132,6 +184,7 @@ class CategoryAgent(ABC):
     def discover(self) -> List[dict]:
         """
         Discover tokens via DexScreener search.
+        DSH: Emits AGENT_DISCOVERY event with results.
         Returns list of pair dicts (DexScreener format).
         """
         all_pairs = []
@@ -157,6 +210,20 @@ class CategoryAgent(ABC):
             except Exception as e:
                 print(f"[{self.name.upper()}] Search error for '{term}': {e}", flush=True)
 
+        # DSH: Emit discovery event
+        if all_pairs:
+            self._emit_event("agent/discovery", {
+                "agent": self.name,
+                "category": str(self.category),
+                "tokens_found": len(all_pairs),
+                "search_terms": self.get_search_terms(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self._log_session("discovery", {
+                "agent": self.name,
+                "tokens_found": len(all_pairs),
+            })
+
         return all_pairs
 
     # ── Scoring (abstract) ────────────────────────────────────
@@ -177,9 +244,36 @@ class CategoryAgent(ABC):
     def should_trade(self, candidate) -> tuple:
         """
         Category-specific trade decision.
+        DSH: Emits AGENT_TRADE_SIGNAL when approving.
         Returns (bool, reason).
         """
-        return True, f"{self.name} agent approves"
+        should, reason = True, f"{self.name} agent approves"
+
+        # DSH: Emit trade signal event
+        if should:
+            self._emit_event("agent/trade_signal", {
+                "agent": self.name,
+                "category": str(self.category),
+                "token_address": candidate.address,
+                "symbol": candidate.symbol,
+                "score": candidate.score,
+                "liquidity_usd": candidate.liquidity_usd,
+                "volume_24h": candidate.volume_24h,
+                "market_cap": candidate.market_cap,
+                "trade_params": {
+                    "stop_loss_pct": self.params.stop_loss_pct,
+                    "take_profit_pct": self.params.take_profit_pct,
+                    "max_hold_hours": self.params.max_hold_hours,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self._log_session("trade_signal", {
+                "agent": self.name,
+                "symbol": candidate.symbol,
+                "score": candidate.score,
+            })
+
+        return should, reason
 
     def get_position_size_pct(self, score: float) -> float:
         """
@@ -208,8 +302,8 @@ class AIAgentAgent(CategoryAgent):
     - Prefers tokens with real utility or strong community
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.AI_AGENT)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.AI_AGENT, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -291,8 +385,8 @@ class PoliticalAgent(CategoryAgent):
     - Triggers on news/events
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.POLITICAL)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.POLITICAL, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -364,8 +458,8 @@ class MemecoinAgent(CategoryAgent):
     - Prefers established memecoins with track record
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.MEMECOIN)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.MEMECOIN, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -441,8 +535,8 @@ class PumpFunAgent(CategoryAgent):
     - Looks for early momentum signals
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.PUMP_FUN)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.PUMP_FUN, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -518,8 +612,8 @@ class TrendingAgent(CategoryAgent):
     - Looks for sustained momentum, not just spikes
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.TRENDING)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.TRENDING, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -592,8 +686,8 @@ class BoostedAgent(CategoryAgent):
     - Looks for organic volume behind the boost
     """
 
-    def __init__(self):
-        super().__init__(TokenCategory.BOOSTED)
+    def __init__(self, event_bus=None, scheduler=None):
+        super().__init__(TokenCategory.BOOSTED, event_bus=event_bus, scheduler=scheduler)
 
     def get_search_terms(self) -> str:
         return [
@@ -709,20 +803,20 @@ class BoostedAgent(CategoryAgent):
 
 # ── Agent Registry ───────────────────────────────────────────
 
-def get_all_agents() -> List[CategoryAgent]:
-    """Return all category agents."""
+def get_all_agents(event_bus=None, scheduler=None) -> List[CategoryAgent]:
+    """Return all category agents with DSH components."""
     return [
-        AIAgentAgent(),
-        PoliticalAgent(),
-        MemecoinAgent(),
-        PumpFunAgent(),
-        TrendingAgent(),
-        BoostedAgent(),
+        AIAgentAgent(event_bus=event_bus, scheduler=scheduler),
+        PoliticalAgent(event_bus=event_bus, scheduler=scheduler),
+        MemecoinAgent(event_bus=event_bus, scheduler=scheduler),
+        PumpFunAgent(event_bus=event_bus, scheduler=scheduler),
+        TrendingAgent(event_bus=event_bus, scheduler=scheduler),
+        BoostedAgent(event_bus=event_bus, scheduler=scheduler),
     ]
 
 
-def get_agent_for_category(category: TokenCategory) -> CategoryAgent:
-    """Get the agent for a specific category."""
+def get_agent_for_category(category: TokenCategory, event_bus=None, scheduler=None) -> CategoryAgent:
+    """Get the agent for a specific category with DSH components."""
     agents = {
         TokenCategory.AI_AGENT: AIAgentAgent,
         TokenCategory.POLITICAL: PoliticalAgent,
@@ -733,9 +827,9 @@ def get_agent_for_category(category: TokenCategory) -> CategoryAgent:
     }
     agent_cls = agents.get(category)
     if agent_cls:
-        return agent_cls()
+        return agent_cls(event_bus=event_bus, scheduler=scheduler)
     # Default: use memecoin agent for unknown
-    return MemecoinAgent()
+    return MemecoinAgent(event_bus=event_bus, scheduler=scheduler)
 
 
 def classify_token(name: str, symbol: str, description: str = "") -> TokenCategory:

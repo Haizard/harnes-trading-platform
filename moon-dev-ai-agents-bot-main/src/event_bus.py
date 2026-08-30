@@ -521,6 +521,11 @@ class Events:
     MODEL_CALL = "model/call"
     SESSION_LOG = "session/log"             # Emit: universal logging
 
+    # Category Agent events
+    AGENT_DISCOVERY = "agent/discovery"      # Agent found candidates
+    AGENT_SCORED = "agent/scored"           # Agent scored a candidate
+    AGENT_TRADE_SIGNAL = "agent/trade_signal"  # Agent recommends a trade
+
 
 # ── Integration: Connect Existing Modules ─────────────────────
 

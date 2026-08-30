@@ -415,12 +415,14 @@ SEEN_TOKENS_RESET_SECONDS = 1800  # Reset seen tokens every 30 minutes
 
 
 class TokenScanner:
-    def __init__(self, callback=None):
+    def __init__(self, callback=None, event_bus=None, scheduler=None):
         self.dexscreener = DexScreenerSource()
         self.jupiter = JupiterChecker()
         self.scorer = TokenScorer()
         self.trending = TrendingDiscoverer(self.dexscreener)
         self.callback = callback
+        self.event_bus = event_bus
+        self.scheduler = scheduler
         self._seen_tokens = set()
         self._seen_tokens_last_reset = time.time()
         self._scan_count = 0
@@ -451,10 +453,10 @@ class TokenScanner:
         self._maybe_reset_seen_tokens()
         print("[SCANNER] Scan #" + str(self._scan_count) + " starting...", flush=True)
 
-        # --- Category Agent Discovery ---
+        # --- Category Agent Discovery (DSH: agents get event_bus + scheduler) ---
         all_pairs = {}
         agent_sources = {}  # addr -> (agent, source_label)
-        agents = get_all_agents()
+        agents = get_all_agents(event_bus=self.event_bus, scheduler=self.scheduler)
 
         for agent in agents:
             try:
