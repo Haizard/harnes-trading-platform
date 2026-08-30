@@ -235,6 +235,16 @@ class AgentOrchestrator:
                 decision["action"] = "SKIP"
                 decision["reason"] = "Score too low: " + str(int(algo_score * 100)) + "/100 (min=" + str(int(min_algo_score * 100)) + ")"
 
+        # Step 2b: Paper-mode override — if AI skipped but score is strong,
+        # allow the trade anyway. Paper trading is for learning.
+        if decision["action"] == "SKIP" and self.mode == "paper":
+            algo_score = candidate_dict.get("score", 0) / 100.0
+            if algo_score >= 0.60:
+                decision["action"] = "BUY"
+                decision["confidence"] = algo_score
+                decision["reason"] = "Paper override: AI skipped but score " + str(int(algo_score * 100)) + "/100 is strong enough"
+                decision["source"] = "paper_override"
+
         # Step 3: Log to session + DB
         self._log_decision(decision, candidate_dict)
 
