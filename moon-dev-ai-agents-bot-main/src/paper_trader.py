@@ -108,6 +108,7 @@ class PaperTrader:
         self.capital -= amount_usd
         self.open_positions[token_address] = trade
         self._log_trade(trade, "entry")
+        self._save_to_db(trade, "entry")
         print("[PAPER] BUY " + symbol + " $" + str(round(amount_usd, 2)) + " impact=" + str(round(price_impact, 2)) + "%")
         self._print_capital_status()
         return trade
@@ -132,6 +133,7 @@ class PaperTrader:
         self.closed_trades.append(pos)
         del self.open_positions[token_address]
         self._log_trade(pos, "exit")
+        self._save_to_db(pos, "exit")
         sign = "+" if pnl_usd >= 0 else ""
         print("[PAPER] SELL " + pos.symbol + " " + sign + "$" + str(round(pnl_usd, 4)) + " (" + sign + str(round(pnl_pct, 1)) + "% - " + reason + ")")
         self._print_capital_status()
@@ -159,6 +161,22 @@ class PaperTrader:
             data = {"action": action, "timestamp": datetime.now(timezone.utc).isoformat()}
             data.update(trade.to_dict())
             f.write(json.dumps(data) + chr(10))
+
+    def _save_to_db(self, trade, action):
+        """Save trade to PostgreSQL if available."""
+        try:
+            from src.db_storage import save_trade, update_trade_exit
+            trade_dict = trade.to_dict()
+            trade_dict["mode"] = "paper"
+            if action == "entry":
+                save_trade(trade_dict, mode="paper")
+            elif action == "exit":
+                update_trade_exit(
+                    trade.token_address, trade.exit_price,
+                    trade.pnl_usd, trade.pnl_pct, trade.status,
+                )
+        except Exception:
+            pass
 
     def get_stats(self):
         total = len(self.closed_trades)

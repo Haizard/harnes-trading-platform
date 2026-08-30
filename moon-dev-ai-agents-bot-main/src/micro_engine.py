@@ -78,6 +78,22 @@ class MicroEngine:
             mode=payload.get("mode", "paper"),
         )
 
+    def _save_portfolio_to_db(self):
+        """Save portfolio state to PostgreSQL if available."""
+        try:
+            from src.db_storage import save_portfolio
+            stats = self.paper.get_stats()
+            save_portfolio(
+                initial_capital=stats["initial_capital"],
+                current_capital=stats["current_capital"],
+                total_pnl=stats["total_pnl"],
+                total_trades=stats["total_trades"],
+                wins=stats["wins"],
+                losses=stats["losses"],
+            )
+        except Exception:
+            pass
+
     def _tg_on_error(self, payload):
         """Telegram listener for error events."""
         self.telegram.notify_error(
@@ -280,8 +296,9 @@ class MicroEngine:
                 if time.time() - last_exit_check >= EXIT_CHECK_INTERVAL:
                     self._check_exits()
                     last_exit_check = time.time()
-                # Update capital in telegram
+                # Update capital in telegram and DB
                 self.telegram.set_capital(self.capital, self.paper.capital)
+                self._save_portfolio_to_db()
                 # Heartbeat every 30 min
                 if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
                     self.telegram.notify_heartbeat()
