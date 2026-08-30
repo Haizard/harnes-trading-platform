@@ -71,11 +71,26 @@ def start_engine():
         else:
             print("[TWITTER] No credentials in env - sentiment disabled.", flush=True)
         
+        # === PostgreSQL connection ===
+        db_url = os.environ.get("LUCERIS_DATABASE_URL", "")
+        if db_url:
+            try:
+                from src.db_storage import get_pool
+                pool = get_pool()
+                if pool:
+                    print("[DB] Connected to PostgreSQL", flush=True)
+                else:
+                    print("[DB] PostgreSQL connection failed", flush=True)
+            except Exception as e:
+                print(f"[DB] PostgreSQL error: {e}", flush=True)
+        else:
+            print("[DB] No LUCERIS_DATABASE_URL — using JSON fallback", flush=True)
+
         print("[ENGINE] Loading micro engine...", flush=True)
         # Debug: show which key env vars are set (not their values)
         for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEDROCK_REGION", 
                   "BIRDEYE_API_KEY", "RPC_ENDPOINT", "SOLANA_PRIVATE_KEY",
-                  "TWITTER_USERNAME", "TELEGRAM_BOT_TOKEN"]:
+                  "TWITTER_USERNAME", "TELEGRAM_BOT_TOKEN", "LUCERIS_DATABASE_URL"]:
             status = "SET" if os.environ.get(k) else "MISSING"
             print(f"[ENGINE]   {k}: {status}", flush=True)
         from src.micro_engine import MicroEngine

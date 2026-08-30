@@ -473,10 +473,22 @@ class TelegramReporter:
         """Notify that the engine has started."""
         self.initial_capital = capital
         self.current_capital = capital
+
+        # Check DB status
+        db_status = "OFFLINE"
+        try:
+            from src.db_storage import get_pool
+            pool = get_pool()
+            if pool:
+                db_status = "CONNECTED"
+        except Exception:
+            db_status = "ERROR"
+
         text = (
             f"ENGINE STARTED\n\n"
             f"Capital: ${capital:.2f}\n"
             f"Mode: {mode.upper()}\n"
+            f"Database: {db_status}\n"
             f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
             f"Commands: /status /trades /open /capital /help"
         )
