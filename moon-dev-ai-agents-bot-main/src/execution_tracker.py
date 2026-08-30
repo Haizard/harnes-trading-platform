@@ -42,11 +42,7 @@ class ExecutionTracker:
     """
     Tracks execution quality across all trades.
 
-    Key metrics:
-    - Average slippage per token/side
-    - Fill rate (filled / total intents)
-    - Latency distribution
-    - Cost breakdown (fees, slippage, spread)
+    Stores to PostgreSQL when available, falls back to JSONL.
     """
 
     def __init__(self, history_dir: str = None):
@@ -55,10 +51,18 @@ class ExecutionTracker:
         )
         os.makedirs(self.history_dir, exist_ok=True)
         self.executions_path = os.path.join(self.history_dir, 'execution_history.jsonl')
+        # Check DB availability
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
 
     async def record_intent(self, symbol: str, side: str, amount_usd: float,
                            expected_price: float = 0.0, source: str = ""):
         """Record an order intent (before execution)."""
+        timestamp = datetime.utcnow().isoformat()
         record = ExecutionRecord(
             symbol=symbol,
             side=side,
@@ -66,13 +70,25 @@ class ExecutionTracker:
             expected_price=expected_price,
             source=source,
         )
+
+        if self._db_available:
+            try:
+                from src.db_storage import save_execution
+                save_execution(
+                    symbol=symbol, side=side, amount_usd=amount_usd,
+                    expected_price=expected_price, source=source,
+                    filled=False, timestamp=timestamp,
+                )
+            except Exception:
+                pass
+
         self._append_jsonl(self.executions_path, record.__dict__)
 
     async def record_fill(self, symbol: str, side: str, amount_usd: float,
                          fill_price: float, expected_price: float = 0.0,
                          latency_ms: float = 0.0, source: str = ""):
         """Record a filled order."""
-        # Calculate slippage
+        timestamp = datetime.utcnow().isoformat()
         if expected_price > 0 and fill_price > 0:
             if side == 'buy':
                 slippage_bps = ((fill_price - expected_price) / expected_price) * 10000
@@ -92,11 +108,25 @@ class ExecutionTracker:
             filled=True,
             source=source,
         )
+
+        if self._db_available:
+            try:
+                from src.db_storage import save_execution
+                save_execution(
+                    symbol=symbol, side=side, amount_usd=amount_usd,
+                    expected_price=expected_price, fill_price=fill_price,
+                    slippage_bps=slippage_bps, latency_ms=latency_ms,
+                    filled=True, source=source, timestamp=timestamp,
+                )
+            except Exception:
+                pass
+
         self._append_jsonl(self.executions_path, record.__dict__)
 
     async def record_rejection(self, symbol: str, side: str, amount_usd: float,
                               reason: str = "", source: str = ""):
         """Record a rejected order."""
+        timestamp = datetime.utcnow().isoformat()
         record = {
             'symbol': symbol,
             'side': side,
@@ -104,15 +134,60 @@ class ExecutionTracker:
             'filled': False,
             'reason': reason,
             'source': source,
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': timestamp,
         }
+
+        if self._db_available:
+            try:
+                from src.db_storage import save_execution
+                save_execution(
+                    symbol=symbol, side=side, amount_usd=amount_usd,
+                    filled=False, reason=reason, source=source,
+                    timestamp=timestamp,
+                )
+            except Exception:
+                pass
+
         self._append_jsonl(self.executions_path, record)
 
     async def get_quality_report(self, days: int = 30) -> dict:
         """Generate execution quality report."""
+        # Prefer DB query
+        if self._db_available:
+            try:
+                return await self._report_from_db(days)
+            except Exception:
+                pass
+
+        # Fallback to JSONL
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         records = self._read_jsonl(self.executions_path, cutoff)
+        return self._build_report(records, days)
 
+    async def _report_from_db(self, days: int) -> dict:
+        """Build quality report from PostgreSQL."""
+        from src.db_storage import get_executions
+
+        db_records = get_executions(days=days)
+        records = []
+        for r in db_records:
+            records.append({
+                'symbol': r.get('symbol', ''),
+                'side': r.get('side', ''),
+                'amount_usd': r.get('amount_usd', 0),
+                'expected_price': r.get('expected_price', 0),
+                'fill_price': r.get('fill_price', 0),
+                'slippage_bps': r.get('slippage_bps', 0),
+                'latency_ms': r.get('latency_ms', 0),
+                'filled': r.get('filled', False),
+                'reason': r.get('reason', ''),
+                'source': r.get('source', ''),
+                'timestamp': str(r.get('timestamp', '')),
+            })
+        return self._build_report(records, days)
+
+    def _build_report(self, records: list, days: int) -> dict:
+        """Build quality report from records."""
         if not records:
             return {'total_intents': 0, 'message': 'No execution data'}
 
@@ -120,21 +195,17 @@ class ExecutionTracker:
         filled = [r for r in records if r.get('filled')]
         rejected = [r for r in records if not r.get('filled') and r.get('reason')]
 
-        # Fill rate
         fill_rate = len(filled) / total if total > 0 else 0
 
-        # Slippage analysis
         slippages = [r.get('slippage_bps', 0) for r in filled if r.get('slippage_bps')]
         avg_slippage = sum(slippages) / len(slippages) if slippages else 0
         max_slippage = max(slippages) if slippages else 0
         min_slippage = min(slippages) if slippages else 0
 
-        # Latency analysis
         latencies = [r.get('latency_ms', 0) for r in filled if r.get('latency_ms')]
         avg_latency = sum(latencies) / len(latencies) if latencies else 0
         p95_latency = sorted(latencies)[int(len(latencies) * 0.95)] if latencies else 0
 
-        # By symbol
         by_symbol = {}
         for r in filled:
             sym = r.get('symbol', 'unknown')
@@ -147,11 +218,9 @@ class ExecutionTracker:
         for sym, data in by_symbol.items():
             data['avg_slippage_bps'] = data['total_slippage'] / data['count'] if data['count'] > 0 else 0
 
-        # By side
         buys = [r for r in filled if r.get('side') == 'buy']
         sells = [r for r in filled if r.get('side') == 'sell']
 
-        # Rejection reasons
         rejection_reasons = {}
         for r in rejected:
             reason = r.get('reason', 'unknown')

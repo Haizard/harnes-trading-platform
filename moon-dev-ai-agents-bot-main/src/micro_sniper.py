@@ -3,12 +3,21 @@
 Supports two modes:
   - paper: Simulated trades using real Jupiter quotes (default)
   - live: Real Solana wallet signing + Jupiter swap submission
+
+DSH Pattern: Uses DB for all trade storage instead of JSONL files.
 """
-import os, json, time, base64, requests
+import os, json, time, base64
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Dict, List
 from pathlib import Path
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    import requests
+    HTTPX_AVAILABLE = False
 
 # Jupiter API Endpoints (FREE, no API key needed)
 JUPITER_QUOTE = "https://api.jup.ag/swap/v1/quote"
@@ -43,6 +52,10 @@ class Position:
     pnl_pct: float = 0.0
     status: str = "open"
     tx_signature: str = ""
+    category: str = "unknown"
+    stop_loss_pct: float = STOP_LOSS_PCT
+    take_profit_pct: float = TAKE_PROFIT_PCT
+    max_hold_hours: float = 12.0
     def to_dict(self):
         return {"token_address": self.token_address, "symbol": self.symbol,
                 "side": self.side, "entry_price": self.entry_price,
@@ -51,7 +64,8 @@ class Position:
                 "exit_price": self.exit_price,
                 "exit_time": self.exit_time.isoformat() if self.exit_time else None,
                 "pnl_usd": self.pnl_usd, "pnl_pct": self.pnl_pct,
-                "status": self.status, "tx_signature": self.tx_signature}
+                "status": self.status, "tx_signature": self.tx_signature,
+                "category": self.category}
 
 
 @dataclass
@@ -62,6 +76,8 @@ class TradeSignal:
     amount_usd: float
     stop_loss_pct: float = STOP_LOSS_PCT
     take_profit_pct: float = TAKE_PROFIT_PCT
+    max_hold_hours: float = 12.0
+    category: str = "unknown"
     reason: str = ""
     score: float = 0.0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -100,15 +116,23 @@ class JupiterExecutor:
     def get_quote(self, input_mint, output_mint, amount):
         for attempt in range(MAX_RETRIES):
             try:
-                resp = requests.get(JUPITER_QUOTE, params={
+                params = {
                     "inputMint": input_mint, "outputMint": output_mint,
-                    "amount": str(amount), "slippageBps": SLIPPAGE_BPS}, timeout=15)
-                if resp.status_code == 200:
-                    return resp.json()
-                elif resp.status_code == 429:
-                    time.sleep(RETRY_DELAY * (attempt + 1))
-            except requests.exceptions.Timeout:
-                time.sleep(RETRY_DELAY)
+                    "amount": str(amount), "slippageBps": SLIPPAGE_BPS
+                }
+                if HTTPX_AVAILABLE:
+                    with httpx.Client(timeout=15) as client:
+                        resp = client.get(JUPITER_QUOTE, params=params)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    elif resp.status_code == 429:
+                        time.sleep(RETRY_DELAY * (attempt + 1))
+                else:
+                    resp = requests.get(JUPITER_QUOTE, params=params, timeout=15)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    elif resp.status_code == 429:
+                        time.sleep(RETRY_DELAY * (attempt + 1))
             except Exception as e:
                 print("[SNIPER] Quote error: " + str(e))
                 break
@@ -116,8 +140,13 @@ class JupiterExecutor:
 
     def get_price(self, token_address):
         try:
-            resp = requests.get("https://api.jup.ag/price/v2",
-                params={"ids": token_address}, timeout=10)
+            if HTTPX_AVAILABLE:
+                with httpx.Client(timeout=10) as client:
+                    resp = client.get("https://api.jup.ag/price/v2",
+                        params={"ids": token_address})
+            else:
+                resp = requests.get("https://api.jup.ag/price/v2",
+                    params={"ids": token_address}, timeout=10)
             if resp.status_code == 200:
                 data = resp.json().get("data", {}).get(token_address, {})
                 price = data.get("price")
@@ -162,7 +191,11 @@ class JupiterExecutor:
                         }
                     }
                 }
-                resp = requests.post(JUPITER_SWAP, json=swap_body, timeout=30)
+                if HTTPX_AVAILABLE:
+                    with httpx.Client(timeout=30) as client:
+                        resp = client.post(JUPITER_SWAP, json=swap_body)
+                else:
+                    resp = requests.post(JUPITER_SWAP, json=swap_body, timeout=30)
                 if resp.status_code != 200:
                     print("[SNIPER] Jupiter swap error: " + str(resp.status_code))
                     time.sleep(RETRY_DELAY)
@@ -185,7 +218,11 @@ class JupiterExecutor:
                     "method": "sendTransaction",
                     "params": [signed_b64, {"encoding": "base64", "skipPreflight": True, "maxRetries": 2}]
                 }
-                submit_resp = requests.post(self.rpc_url, json=submit_body, timeout=30)
+                if HTTPX_AVAILABLE:
+                    with httpx.Client(timeout=30) as client:
+                        submit_resp = client.post(self.rpc_url, json=submit_body)
+                else:
+                    submit_resp = requests.post(self.rpc_url, json=submit_body, timeout=30)
                 if submit_resp.status_code == 200:
                     result = submit_resp.json()
                     if "result" in result:
@@ -210,7 +247,11 @@ class JupiterExecutor:
                 body = {"jsonrpc": "2.0", "id": 1,
                     "method": "getSignatureStatuses",
                     "params": [[tx_signature], {"searchTransactionHistory": False}]}
-                resp = requests.post(self.rpc_url, json=body, timeout=10)
+                if HTTPX_AVAILABLE:
+                    with httpx.Client(timeout=10) as client:
+                        resp = client.post(self.rpc_url, json=body)
+                else:
+                    resp = requests.post(self.rpc_url, json=body, timeout=10)
                 if resp.status_code == 200:
                     statuses = resp.json().get("result", {}).get("value", [])
                     if statuses and statuses[0]:
@@ -247,16 +288,19 @@ class MicroRiskManager:
         self.max_daily_loss = total_capital * 0.30
         self.daily_pnl = 0.0
         self.open_positions = []
+        self.max_positions = 8
     def can_trade(self):
         if self.daily_pnl < -self.max_daily_loss: return False, "Daily loss limit"
-        if len(self.open_positions) >= 3: return False, "Max 3 positions"
+        if len(self.open_positions) >= self.max_positions: return False, "Max " + str(self.max_positions) + " positions"
         return True, "OK"
     def check_stop_loss(self, position, current_price):
         if position.entry_price == 0: return False
-        return ((current_price - position.entry_price) / position.entry_price * 100) <= -STOP_LOSS_PCT
+        sl = getattr(position, 'stop_loss_pct', STOP_LOSS_PCT)
+        return ((current_price - position.entry_price) / position.entry_price * 100) <= -sl
     def check_take_profit(self, position, current_price):
         if position.entry_price == 0: return False
-        return ((current_price - position.entry_price) / position.entry_price * 100) >= TAKE_PROFIT_PCT
+        tp = getattr(position, 'take_profit_pct', TAKE_PROFIT_PCT)
+        return ((current_price - position.entry_price) / position.entry_price * 100) >= tp
     def record_trade(self, pnl_usd):
         self.daily_pnl += pnl_usd
 
@@ -272,8 +316,17 @@ class MicroSniper:
         self.history = []
         self.data_dir = Path("src/data/sniper")
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        # DB availability
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
 
-    def evaluate_signal(self, token_address, symbol, score, liquidity):
+    def evaluate_signal(self, token_address, symbol, score, liquidity,
+                        category="unknown", stop_loss_pct=10.0,
+                        take_profit_pct=30.0, max_hold_hours=12.0):
         can, reason = self.risk.can_trade()
         if not can: return None
         if token_address in self.positions: return None
@@ -282,6 +335,8 @@ class MicroSniper:
         if amount < 1.0: return None
         return TradeSignal(token_address=token_address, symbol=symbol,
             side="buy", amount_usd=amount, score=score,
+            category=category, stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct, max_hold_hours=max_hold_hours,
             reason="Score " + str(score) + "/100")
 
     def execute_buy(self, signal):
@@ -298,9 +353,12 @@ class MicroSniper:
         tx_sig = self.executor.execute_swap(quote)
         pos = Position(token_address=signal.token_address, symbol=signal.symbol,
             side="buy", entry_price=price, amount_usd=signal.amount_usd,
-            token_amount=token_amount, tx_signature=tx_sig or "")
+            token_amount=token_amount, tx_signature=tx_sig or "",
+            category=signal.category, stop_loss_pct=signal.stop_loss_pct,
+            take_profit_pct=signal.take_profit_pct, max_hold_hours=signal.max_hold_hours)
         self.positions[signal.token_address] = pos
         self._log_position(pos, "entry")
+        self._save_to_db(pos, "entry")
         if self.mode == "live" and tx_sig and not tx_sig.startswith("paper_"):
             print("[SNIPER] Confirming " + tx_sig[:16] + "...")
             if self.executor.confirm_transaction(tx_sig):
@@ -329,10 +387,16 @@ class MicroSniper:
         for addr, pos in list(self.positions.items()):
             price = self.executor.get_price(addr)
             if not price: continue
+
+            max_hold = getattr(pos, 'max_hold_hours', 12.0)
+            hours_held = (datetime.now(timezone.utc) - pos.entry_time).total_seconds() / 3600
+
             if self.risk.check_stop_loss(pos, price):
                 self.execute_sell(addr, "sl"); closed.append(pos)
             elif self.risk.check_take_profit(pos, price):
                 self.execute_sell(addr, "tp"); closed.append(pos)
+            elif hours_held >= max_hold:
+                self.execute_sell(addr, "stale"); closed.append(pos)
         return closed
 
     def _close_position(self, pos, exit_price, status):
@@ -347,11 +411,31 @@ class MicroSniper:
         if pos.token_address in self.positions:
             del self.positions[pos.token_address]
         self._log_position(pos, "exit")
+        self._save_to_db(pos, "exit")
 
     def _log_position(self, pos, action):
+        # Keep JSONL as backup, but DB is primary
         with open(self.data_dir / "positions.jsonl", "a") as f:
             f.write(json.dumps({"action": action, "timestamp": datetime.now(timezone.utc).isoformat(),
                 "mode": self.mode, **pos.to_dict()}) + chr(10))
+
+    def _save_to_db(self, trade, action):
+        """Save trade to PostgreSQL if available."""
+        if not self._db_available:
+            return
+        try:
+            from src.db_storage import save_trade, update_trade_exit
+            trade_dict = trade.to_dict()
+            trade_dict["mode"] = self.mode
+            if action == "entry":
+                save_trade(trade_dict, mode=self.mode)
+            elif action == "exit":
+                update_trade_exit(
+                    trade.token_address, trade.exit_price,
+                    trade.pnl_usd, trade.pnl_pct, trade.status,
+                )
+        except Exception:
+            pass
 
     def get_stats(self):
         t = len(self.history)

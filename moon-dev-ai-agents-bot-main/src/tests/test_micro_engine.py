@@ -178,14 +178,14 @@ class TestMicroRiskManager:
         assert can is True
     
     def test_max_positions_limit(self):
-        # Add 3 positions
-        for i in range(3):
+        # Add 8 positions (new limit)
+        for i in range(8):
             self.risk.open_positions.append(
                 Position(token_address=f"token_{i}", symbol=f"T{i}", side="buy", entry_price=1.0, amount_usd=5.0)
             )
         can, reason = self.risk.can_trade()
         assert can is False
-        assert "Max 3" in reason
+        assert "Max 8" in reason
     
     def test_daily_loss_limit(self):
         self.risk.daily_pnl = -10.0  # Lost $10 (40% of $25)

@@ -107,7 +107,7 @@ RULES:
 class AgentOrchestrator:
     """
     The Brain — coordinates all agents as a team.
-    
+
     Flow:
       Candidate → Consensus AI → Risk Check → Decision → Log → Learn
     """
@@ -117,6 +117,14 @@ class AgentOrchestrator:
         self.mode = mode
         self.data_dir = Path("src/data/orchestrator")
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        # DB availability
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
 
         # Initialize team members
         self.session_log = SessionLog()
@@ -142,7 +150,8 @@ class AgentOrchestrator:
                 self.consensus = ConsensusEngine()
                 print("[ORCH] Consensus Engine connected")
             except Exception as e:
-                print("[ORCH] Consensus Engine unavailable: " + str(e))# Risk guard
+                print("[ORCH] Consensus Engine unavailable: " + str(e))
+        # Risk guard
         self.risk_guard = None
         if RISK_GUARD_AVAILABLE:
             try:
@@ -160,7 +169,6 @@ class AgentOrchestrator:
             except Exception as e:
                 print("[ORCH] MCP Registry unavailable: " + str(e))
 
-
         # Stats
         self._decisions = 0
         self._ai_approved = 0
@@ -172,7 +180,7 @@ class AgentOrchestrator:
     def analyze_candidate(self, candidate_dict: Dict) -> Dict:
         """
         The main decision pipeline. Takes a token candidate and returns a trade decision.
-        
+
         Returns:
             {
                 "action": "BUY" | "SKIP",
@@ -217,16 +225,17 @@ class AgentOrchestrator:
         else:
             # Step 2: Fallback to algorithmic scoring
             algo_score = candidate_dict.get("score", 0) / 100.0
+            min_algo_score = 0.60
             decision["confidence"] = algo_score
-            if algo_score >= 0.6:
+            if algo_score >= min_algo_score:
                 decision["action"] = "BUY"
                 decision["reason"] = "Algorithmic score " + str(int(algo_score * 100)) + "/100"
                 self._algo_approved += 1
             else:
                 decision["action"] = "SKIP"
-                decision["reason"] = "Score too low: " + str(int(algo_score * 100)) + "/100"
+                decision["reason"] = "Score too low: " + str(int(algo_score * 100)) + "/100 (min=" + str(int(min_algo_score * 100)) + ")"
 
-        # Step 3: Log to session
+        # Step 3: Log to session + DB
         self._log_decision(decision, candidate_dict)
 
         # Step 4: Record signal for feedback loop
@@ -273,7 +282,7 @@ class AgentOrchestrator:
 
     def _build_market_state(self, candidate_dict: Dict) -> Dict:
         """Build a market state dict from candidate data for AI analysis.
-        
+
         Enriches with MCP data: security metrics, whale data, portfolio context,
         sentiment, and market context when MCP is available.
         """
@@ -298,7 +307,6 @@ class AgentOrchestrator:
         }
 
         # Enrich with MCP tools when available
-        # Uses call_tool_sync() to avoid asyncio.run() inside running loop.
         if self.mcp_registry and address:
             try:
                 sec_data = self.mcp_registry.call_tool_sync(
@@ -369,16 +377,28 @@ class AgentOrchestrator:
         return state
 
     def _log_decision(self, decision, candidate_dict):
-        log_path = self.data_dir / "orchestrator_events.jsonl"
+        """Log decision to DB and JSONL fallback."""
         event = {
             "type": "orchestrator/decision",
             "data": decision,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Log to DB
+        if self._db_available:
+            try:
+                from src.db_storage import log_event
+                log_event("orchestrator/decision", event)
+            except Exception:
+                pass
+
+        # Fallback to JSONL
+        log_path = self.data_dir / "orchestrator_events.jsonl"
         with open(log_path, "a") as f:
             f.write(json.dumps(event, default=str) + chr(10))
 
     def _record_signal(self, decision, candidate_dict):
+        """Record signal for feedback loop (DB + JSONL fallback)."""
         try:
             import uuid
             factors = {
@@ -390,28 +410,79 @@ class AgentOrchestrator:
             if decision.get("ai_analysis"):
                 factors["ai_confidence"] = decision["ai_analysis"].get("confidence", 0)
                 factors["ai_entry_quality"] = decision["ai_analysis"].get("entry_quality", 0)
-            record = {
-                "signal_id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "symbol": decision["symbol"],
-                "signal": decision["action"],
-                "confidence": decision["confidence"],
-                "factors": factors,
-            }
-            self.feedback_loop._append_jsonl(self.feedback_loop.signals_path, record)
+
+            # Record via feedback loop (handles DB + JSONL)
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(
+                        self.feedback_loop.record_signal(
+                            symbol=decision["symbol"],
+                            signal=decision["action"],
+                            confidence=decision["confidence"],
+                            factors=factors,
+                        )
+                    )
+                else:
+                    loop.run_until_complete(
+                        self.feedback_loop.record_signal(
+                            symbol=decision["symbol"],
+                            signal=decision["action"],
+                            confidence=decision["confidence"],
+                            factors=factors,
+                        )
+                    )
+            except RuntimeError:
+                # No event loop — record directly to DB
+                if self._db_available:
+                    try:
+                        from src.db_storage import save_feedback_signal
+                        import uuid
+                        save_feedback_signal(
+                            signal_id=str(uuid.uuid4())[:8],
+                            symbol=decision["symbol"],
+                            signal=decision["action"],
+                            confidence=decision["confidence"],
+                            factors=factors,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
 
     def record_trade_outcome(self, symbol, pnl_usd, pnl_pct, holding_minutes):
+        """Record trade outcome (DB + JSONL fallback)."""
         try:
-            record = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "symbol": symbol,
-                "pnl_usd": pnl_usd,
-                "pnl_pct": pnl_pct,
-                "holding_minutes": holding_minutes,
-            }
-            self.feedback_loop._append_jsonl(self.feedback_loop.outcomes_path, record)
+            # Record via feedback loop
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(
+                        self.feedback_loop.record_outcome(
+                            symbol=symbol, pnl_usd=pnl_usd,
+                            pnl_pct=pnl_pct, holding_minutes=holding_minutes,
+                        )
+                    )
+                else:
+                    loop.run_until_complete(
+                        self.feedback_loop.record_outcome(
+                            symbol=symbol, pnl_usd=pnl_usd,
+                            pnl_pct=pnl_pct, holding_minutes=holding_minutes,
+                        )
+                    )
+            except RuntimeError:
+                if self._db_available:
+                    try:
+                        from src.db_storage import save_feedback_outcome
+                        save_feedback_outcome(
+                            signal_id="", symbol=symbol,
+                            pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+                            holding_minutes=holding_minutes,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
 

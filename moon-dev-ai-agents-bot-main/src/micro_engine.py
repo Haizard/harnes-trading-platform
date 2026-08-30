@@ -1,6 +1,8 @@
 """
 Moon Dev Micro-Cap Trading Engine (Paper + Live + AI Orchestrator)
 DSH Pattern: Scanner -> Safety -> AI Decision -> Trade -> Learn
+
+Uses PostgreSQL for all event logging. EventBus for inter-module communication.
 """
 
 import asyncio
@@ -9,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from src.token_scanner import TokenScanner, TokenCandidate
+from src.token_scanner import TokenScanner, TokenCandidate, get_category_params
 from src.micro_sniper import MicroSniper, TradeSignal
 from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
@@ -62,6 +64,14 @@ class MicroEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
 
+        # DB availability
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
+
         # DSH AsyncScheduler — non-blocking background jobs
         self.scheduler = AsyncScheduler()
 
@@ -95,6 +105,14 @@ class MicroEngine:
         """Fire-and-forget event emission. Wraps async emit() with create_task().
         Safe to call from sync methods within the async run() loop.
         """
+        # Also log to DB
+        if self._db_available:
+            try:
+                from src.db_storage import log_event
+                log_event(event_name, payload)
+            except Exception:
+                pass
+
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -102,7 +120,6 @@ class MicroEngine:
             else:
                 loop.run_until_complete(self.event_bus.emit(event_name, payload))
         except RuntimeError:
-            # No running loop — use a thread
             import concurrent.futures
             def _do_emit():
                 loop = asyncio.new_event_loop()
@@ -183,25 +200,24 @@ class MicroEngine:
             pass
 
     def _on_wallet_swap(self, payload):
-        """Log wallet swap events to engine events."""
-        self._events.append({
-            "type": "wallet/swap",
-            "data": payload,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        """Log wallet swap events to DB."""
+        self._log_event_to_db("wallet/swap", payload)
 
     def _on_smart_money_consensus(self, payload):
-        """Log smart money consensus events to engine events."""
-        self._events.append({
-            "type": "wallet/smart_money",
-            "data": payload,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        """Log smart money consensus events to DB."""
+        self._log_event_to_db("wallet/smart_money", payload)
+
+    def _log_event_to_db(self, event_type: str, data: dict):
+        """Log event to PostgreSQL."""
+        if self._db_available:
+            try:
+                from src.db_storage import log_event
+                log_event(event_type, data)
+            except Exception:
+                pass
 
     def _poll_wallets(self):
-        """DSH BackgroundJob: poll tracked wallets for smart money swaps.
-        Called by AsyncScheduler every 60s. Handles errors gracefully.
-        """
+        """DSH BackgroundJob: poll tracked wallets for smart money swaps."""
         if not self.wallet_tracker:
             return
         try:
@@ -213,6 +229,20 @@ class MicroEngine:
                           evt.get('direction', '').upper() + " " +
                           evt.get('token_address', '')[:8] + "... " +
                           str(round(evt.get('amount_sol', 0), 4)) + " SOL")
+                    # Save wallet event to DB
+                    if self._db_available:
+                        try:
+                            from src.db_storage import save_wallet_event
+                            save_wallet_event(
+                                event_type="wallet/swap",
+                                wallet=evt.get('wallet', ''),
+                                token_address=evt.get('token_address', ''),
+                                direction=evt.get('direction', ''),
+                                amount_sol=evt.get('amount_sol', 0),
+                                data=evt,
+                            )
+                        except Exception:
+                            pass
             # Check for smart money consensus signals
             if self.smart_money_detector:
                 signals = self.smart_money_detector.scan(hours=1)
@@ -228,11 +258,24 @@ class MicroEngine:
 
     def _on_candidate(self, candidate):
         self._signals_generated += 1
-        self._events.append({
-            "type": "token/candidate",
-            "data": candidate.to_dict(),
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+        self._log_event_to_db("token/candidate", candidate.to_dict())
+
+        # Save scanner result to DB
+        if self._db_available:
+            try:
+                from src.db_storage import save_scanner_result
+                save_scanner_result(
+                    token_address=candidate.address,
+                    symbol=candidate.symbol,
+                    score=candidate.score,
+                    liquidity_usd=candidate.liquidity_usd,
+                    volume_24h=candidate.volume_24h,
+                    price_usd=candidate.price_usd,
+                    data=candidate.to_dict(),
+                )
+            except Exception:
+                pass
+
         if candidate.score < MIN_SCORE:
             return
 
@@ -244,11 +287,9 @@ class MicroEngine:
             print("[RUG] BLOCKED " + candidate.symbol + " - Risk: " + str(int(report.risk_score)) + "/100")
             for reason in report.reasons:
                 print("[RUG]   " + reason)
-            self._events.append({
-                "type": "rug/blocked",
-                "data": {"token": candidate.address, "symbol": candidate.symbol,
-                          "risk_score": report.risk_score, "reasons": report.reasons},
-                "timestamp": datetime.utcnow().isoformat(),
+            self._log_event_to_db("rug/blocked", {
+                "token": candidate.address, "symbol": candidate.symbol,
+                "risk_score": report.risk_score, "reasons": report.reasons,
             })
             return
 
@@ -258,7 +299,7 @@ class MicroEngine:
         try:
             sent = self.sentiment.get_token_sentiment(candidate.symbol)
             if sent and sent.get("tweet_count", 0) > 0:
-                print("[SENTIMENT] " + candidate.symbol + ": " + sent.get("label", "unknown") + 
+                print("[SENTIMENT] " + candidate.symbol + ": " + sent.get("label", "unknown") +
                       " (score=" + str(sent.get("score", 0)) + ", tweets=" + str(sent.get("tweet_count", 0)) + ")")
         except Exception:
             pass
@@ -276,21 +317,26 @@ class MicroEngine:
             print("[AI] SKIP " + candidate.symbol + ": " + decision.get("reason", ""))
             return
 
-        # Step 3: Evaluate position sizing
+        # Step 3: Evaluate position sizing with category-aware params
+        cat_params = get_category_params(candidate.category)
         signal = self.sniper.evaluate_signal(
             candidate.address, candidate.symbol,
             candidate.score, candidate.liquidity_usd,
+            category=str(candidate.category),
+            stop_loss_pct=cat_params["stop_loss_pct"],
+            take_profit_pct=cat_params["take_profit_pct"],
+            max_hold_hours=cat_params["max_hold_hours"],
         )
         if not signal:
             return
 
-        # Step 4: Execute trade
+        # Step 4: Execute trade with category-aware params
         if self.mode == "live":
-            self._execute_live_trade(signal, candidate, report)
+            self._execute_live_trade(signal, candidate, report, cat_params)
         else:
-            self._execute_paper_trade(signal, candidate, report)
+            self._execute_paper_trade(signal, candidate, report, cat_params)
 
-    def _execute_live_trade(self, signal, candidate, safety_report):
+    def _execute_live_trade(self, signal, candidate, safety_report, cat_params=None):
         self._safe_trades += 1
         print("")
         print("=" * 60)
@@ -300,29 +346,35 @@ class MicroEngine:
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("   Mode: LIVE")
         print("=" * 60)
-        self._emit_event(Events.POSITION_OPENED, {
+
+        # Emit ORDER_INTENT via EventBus
+        self._emit_event(Events.ORDER_INTENT, {
             "symbol": signal.symbol, "amount_usd": signal.amount_usd,
             "score": int(signal.score), "mode": "live",
             "token": signal.token_address, "side": signal.side,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        self._events.append({
-            "type": "live/intent",
-            "data": {"token": signal.token_address, "symbol": signal.symbol,
-                      "side": signal.side, "amount_usd": signal.amount_usd,
-                      "score": signal.score},
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+
         pos = self.sniper.execute_buy(signal)
         if pos:
             self._trades_executed += 1
-            self._events.append({
-                "type": "live/executed",
-                "data": pos.to_dict(),
-                "timestamp": datetime.utcnow().isoformat(),
+            # Emit ORDER_SUBMITTED and POSITION_OPENED via EventBus
+            self._emit_event(Events.ORDER_SUBMITTED, {
+                "symbol": pos.symbol, "amount_usd": pos.amount_usd,
+                "score": int(signal.score), "mode": "live",
+                "token": pos.token_address, "side": pos.side,
+                "entry_price": pos.entry_price, "token_amount": pos.token_amount,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self._emit_event(Events.POSITION_OPENED, {
+                "symbol": pos.symbol, "amount_usd": pos.amount_usd,
+                "score": int(signal.score), "mode": "live",
+                "token": pos.token_address, "side": pos.side,
+                "entry_price": pos.entry_price,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
-    def _execute_paper_trade(self, signal, candidate, safety_report):
+    def _execute_paper_trade(self, signal, candidate, safety_report, cat_params=None):
         self._safe_trades += 1
         print("")
         print("=" * 60)
@@ -331,30 +383,40 @@ class MicroEngine:
         print("   Amount: $" + "{:.2f}".format(signal.amount_usd))
         print("   Safety: Risk " + str(int(safety_report.risk_score)) + "/100")
         print("=" * 60)
-        self._emit_event(Events.POSITION_OPENED, {
+
+        # Emit ORDER_INTENT via EventBus
+        self._emit_event(Events.ORDER_INTENT, {
             "symbol": signal.symbol, "amount_usd": signal.amount_usd,
             "score": int(signal.score), "mode": "paper",
             "token": signal.token_address, "side": signal.side,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        self._events.append({
-            "type": "paper/intent",
-            "data": {"token": signal.token_address, "symbol": signal.symbol,
-                      "side": signal.side, "amount_usd": signal.amount_usd,
-                      "score": signal.score},
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+
+        params = cat_params or {}
         trade = self.paper.buy(
             token_address=signal.token_address, symbol=signal.symbol,
             amount_usd=signal.amount_usd, score=signal.score,
-            signals=candidate.signals,
+            signals=candidate.signals, category=str(candidate.category),
+            stop_loss_pct=params.get("stop_loss_pct", 10.0),
+            take_profit_pct=params.get("take_profit_pct", 30.0),
+            max_hold_hours=params.get("max_hold_hours", 12.0),
         )
         if trade:
             self._trades_executed += 1
-            self._events.append({
-                "type": "paper/executed",
-                "data": trade.to_dict(),
-                "timestamp": datetime.utcnow().isoformat(),
+            # Emit ORDER_SUBMITTED and POSITION_OPENED via EventBus
+            self._emit_event(Events.ORDER_SUBMITTED, {
+                "symbol": trade.symbol, "amount_usd": trade.amount_usd,
+                "score": int(signal.score), "mode": "paper",
+                "token": trade.token_address, "side": trade.side,
+                "entry_price": trade.entry_price,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self._emit_event(Events.POSITION_OPENED, {
+                "symbol": trade.symbol, "amount_usd": trade.amount_usd,
+                "score": int(signal.score), "mode": "paper",
+                "token": trade.token_address, "side": trade.side,
+                "entry_price": trade.entry_price,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
     def _check_exits(self):
@@ -365,12 +427,10 @@ class MicroEngine:
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": pos.symbol, "amount_usd": pos.amount_usd,
                     "pnl_usd": pos.pnl_usd, "pnl_pct": pos.pnl_pct,
-                    "reason": pos.exit_reason if hasattr(pos, 'exit_reason') else 'exit',
-                    "mode": "live", "token": pos.token_address,
+                    "reason": pos.status, "mode": "live",
+                    "token": pos.token_address,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-                self._events.append({"type": "live/exit", "data": pos.to_dict(),
-                    "timestamp": datetime.utcnow().isoformat()})
         else:
             closed = self.paper.check_exits()
             for trade in closed:
@@ -378,141 +438,48 @@ class MicroEngine:
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": trade.symbol, "amount_usd": trade.amount_usd,
                     "pnl_usd": trade.pnl_usd, "pnl_pct": trade.pnl_pct,
-                    "reason": trade.exit_reason if hasattr(trade, 'exit_reason') else 'exit',
-                    "mode": "paper", "token": trade.token_address,
+                    "reason": trade.status, "mode": "paper",
+                    "token": trade.token_address,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-                self._events.append({"type": "paper/exit", "data": trade.to_dict(),
-                    "timestamp": datetime.utcnow().isoformat()})
-
-    def _log_events(self):
-        log_path = self.data_dir / "engine_events.jsonl"
-        with open(log_path, "a") as f:
-            for event in self._events:
-                f.write(json.dumps(event, default=str) + chr(10))
-        self._events = []
 
     async def run(self):
+        """Main engine loop."""
         self._running = True
-        mode_label = "LIVE" if self.mode == "live" else "PAPER"
-        print("")
-        print("=" * 60)
-        print("MICRO ENGINE (" + mode_label + " + AI ORCHESTRATOR)")
-        print("   Capital: $" + "{:.2f}".format(self.capital))
-        print("   Mode: " + mode_label)
-        print("   Rug-pull protection: ENABLED")
-        print("   AI Orchestrator: " + ("ENABLED" if self.orchestrator.get_stats().get("bedrock_configured") else "FALLBACK (algo only)"))
-        print("   Scan interval: " + str(SCAN_INTERVAL) + "s")
-        print("=" * 60)
-        print("")
-        self.telegram.set_paper_trader(self.paper)
-        self.telegram.set_capital(self.capital, self.capital)
-        self.telegram.send_startup_message(self.capital, self.mode)
-        last_exit_check = time.time()
-        last_heartbeat = time.time()
-        HEARTBEAT_INTERVAL = 1800  # 30 minutes
+        print("[ENGINE] Starting micro-cap trading engine...")
+        print("[ENGINE] Mode: " + self.mode)
+        print("[ENGINE] Capital: $" + str(self.capital))
 
-        # Start DSH AsyncScheduler (background jobs)
+        # Start the scanner
+        self.scanner.start()
+
+        # Start async scheduler for background jobs
         await self.scheduler.start()
-        print("[ENGINE] Background jobs started (wallet_poll every 60s)")
 
+        cycle = 0
         while self._running:
             try:
-                candidates = self.scanner.scan_once()
-                self._scan_count += 1
-                if candidates:
-                    print("[ENGINE] Scan #" + str(self._scan_count) + ": Found " + str(len(candidates)) + " candidates")
-                if time.time() - last_exit_check >= EXIT_CHECK_INTERVAL:
+                cycle += 1
+                # Check exits periodically
+                if cycle % (EXIT_CHECK_INTERVAL // SCAN_INTERVAL + 1) == 0:
                     self._check_exits()
-                    last_exit_check = time.time()
 
-                # Update capital in telegram and DB
-                self.telegram.set_capital(self.capital, self.paper.capital)
-                self._save_portfolio_to_db()
-                # Heartbeat every 30 min
-                if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
-                    self.telegram.notify_heartbeat()
-                    last_heartbeat = time.time()
-                if self._events:
-                    self._log_events()
-                if self._scan_count % 5 == 0:
-                    self._print_stats()
+                # Save portfolio to DB periodically
+                if cycle % 10 == 0:
+                    self._save_portfolio_to_db()
+
                 await asyncio.sleep(SCAN_INTERVAL)
-            except KeyboardInterrupt:
-                print("")
-                print("[ENGINE] Stopping...")
-                self._running = False
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 print("[ENGINE] Error: " + str(e))
                 self._emit_event(Events.AGENT_ERROR, {
-                    "error": str(e), "context": "engine_loop",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "error": str(e), "context": "main_loop",
                 })
                 await asyncio.sleep(5)
 
-        # Stop DSH AsyncScheduler
-        await self.scheduler.stop()
-        self._log_events()
-        self._print_stats()
-        if self.mode == "paper":
-            self.paper.print_summary()
+    def stop(self):
+        """Stop the engine."""
+        self._running = False
+        self.scanner.stop()
         print("[ENGINE] Stopped")
-
-    def _print_stats(self):
-        scanner_stats = self.scanner.get_scan_stats()
-        sniper_stats = self.sniper.get_stats()
-        orch_stats = self.orchestrator.get_stats()
-        print("")
-        print("--- Engine Stats (" + self.mode.upper() + ") ---")
-        print("  Scans: " + str(self._scan_count))
-        print("  Unique tokens: " + str(scanner_stats.get("unique_tokens_seen", 0)))
-        print("  Signals: " + str(self._signals_generated))
-        print("  Safe trades: " + str(self._safe_trades))
-        print("  Rug blocked: " + str(self._rug_blocked))
-        print("  AI skipped: " + str(self._ai_skipped))
-        print("  Executed: " + str(self._trades_executed))
-        print("  AI approved: " + str(orch_stats.get("ai_approved", 0)))
-        print("  AI rejected: " + str(orch_stats.get("ai_rejected", 0)))
-        print("  Bedrock: " + ("ON" if orch_stats.get("bedrock_configured") else "OFF"))
-        print("  Capital: $" + "{:.2f}".format(sniper_stats.get("total_capital", self.capital)))
-        print("  Open positions: " + str(sniper_stats.get("open_positions", 0)))
-        print("  Total PnL: $" + str(sniper_stats.get("total_pnl", 0)))
-        print("  Win rate: " + str(sniper_stats.get("win_rate", 0)) + "%")
-        if self.wallet_tracker:
-            wt_stats = self.wallet_tracker.get_stats()
-            print("  Wallets tracked: " + str(wt_stats.get("tracked_wallets", 0)))
-            print("  Wallet events 24h: " + str(wt_stats.get("events_24h", 0)))
-            print("  Smart money signals: " + str(self.smart_money_detector.get_stats().get("total_signals", 0) if self.smart_money_detector else 0))
-        scheduler_stats = self.scheduler.get_status()
-        for job_name, job_info in scheduler_stats.items():
-            print("  Job " + job_name + ": " + job_info.get("status", "unknown") + " (" + str(job_info.get("runs", 0)) + " runs)")
-        print("--- End Stats ---")
-
-
-def main():
-    import sys
-    import os
-    capital = DEFAULT_CAPITAL
-    mode = "paper"
-    rpc_url = None
-    args = sys.argv[1:]
-    for arg in args:
-        if arg == "--live":
-            mode = "live"
-        elif arg.startswith("--rpc="):
-            rpc_url = arg.split("=", 1)[1]
-        elif not arg.startswith("--"):
-            try:
-                capital = float(arg)
-            except ValueError:
-                pass
-    if mode == "live" and not os.getenv("SOLANA_PRIVATE_KEY"):
-        print("[ENGINE] ERROR: --live requires SOLANA_PRIVATE_KEY env variable")
-        print("[ENGINE] Falling back to paper mode")
-        mode = "paper"
-    engine = MicroEngine(capital=capital, mode=mode, rpc_url=rpc_url)
-    asyncio.run(engine.run())
-
-
-if __name__ == "__main__":
-    main()

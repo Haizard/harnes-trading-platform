@@ -6,7 +6,7 @@ Every decision, model call, and trade is permanently recorded.
 No more print() statements — everything goes through the log.
 
 Usage:
-    log = SessionLog(storage=csv_storage)
+    log = SessionLog(storage=pg_storage)
     await log.log('order/submitted', {'token': 'FART', 'side': 'buy', 'amount_usd': 25.0})
     trades = await log.get_trade_chain('FART', days=30)
     report = await log.get_accuracy_report(days=7)
@@ -126,8 +126,121 @@ class LogEvent:
 
 # ── Storage Backends ───────────────────────────────────────────
 
+class PGStorage:
+    """PostgreSQL storage backend — durable, queryable, production-ready."""
+
+    def __init__(self):
+        self._pool = None
+
+    def _get_pool(self):
+        if self._pool is not None:
+            return self._pool
+        try:
+            from src.db_storage import get_pool
+            self._pool = get_pool()
+            if self._pool:
+                self._init_session_table()
+            return self._pool
+        except Exception:
+            return None
+
+    def _init_session_table(self):
+        pool = self._get_pool()
+        if not pool:
+            return
+        try:
+            with pool.connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS session_events (
+                        id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        description TEXT,
+                        data JSONB,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        session_id TEXT,
+                        signal_id TEXT
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] session_events table init error: {e}")
+
+    async def append(self, event: LogEvent):
+        pool = self._get_pool()
+        if not pool:
+            return
+        try:
+            with pool.connection() as conn:
+                conn.execute("""
+                    INSERT INTO session_events (id, event_type, description, data, timestamp, session_id, signal_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (
+                    event.id,
+                    event.event_type,
+                    EVENT_DESCRIPTIONS.get(event.event_type, 'Unknown'),
+                    json.dumps(event.data, default=str),
+                    event.timestamp,
+                    event.session_id,
+                    event.signal_id or '',
+                ))
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] session_events append error: {e}")
+
+    async def query(self, filters: dict = None, limit: int = 100) -> List[LogEvent]:
+        pool = self._get_pool()
+        if not pool:
+            return []
+        try:
+            with pool.connection() as conn:
+                conditions = ["1=1"]
+                params = []
+
+                if filters:
+                    if 'event_type' in filters:
+                        conditions.append("event_type = %s")
+                        params.append(filters['event_type'])
+                    if 'session_id' in filters:
+                        conditions.append("session_id = %s")
+                        params.append(filters['session_id'])
+                    if 'signal_id' in filters:
+                        conditions.append("signal_id = %s")
+                        params.append(filters['signal_id'])
+                    if 'since' in filters:
+                        conditions.append("timestamp >= %s")
+                        params.append(filters['since'])
+
+                where = " AND ".join(conditions)
+                query = f"SELECT * FROM session_events WHERE {where} ORDER BY timestamp DESC LIMIT %s"
+                params.append(limit)
+
+                rows = conn.execute(query, params).fetchall()
+                events = []
+                for row in rows:
+                    data = row['data']
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    events.append(LogEvent(
+                        id=row['id'],
+                        event_type=row['event_type'],
+                        data=data,
+                        timestamp=str(row['timestamp']),
+                        session_id=row.get('session_id', ''),
+                        signal_id=row.get('signal_id', '') or None,
+                    ))
+                return events
+        except Exception as e:
+            print(f"[DB] session_events query error: {e}")
+            return []
+
+
 class CSVStorage:
-    """Simple CSV file storage — works without MongoDB."""
+    """Simple CSV file storage — works without database."""
 
     def __init__(self, log_dir: str = None):
         self.log_dir = log_dir or os.path.join(os.path.dirname(__file__), 'data')
@@ -135,7 +248,6 @@ class CSVStorage:
         self.log_path = os.path.join(self.log_dir, 'session_log.csv')
 
     async def append(self, event: LogEvent):
-        """Append event to CSV."""
         row = {
             'id': event.id,
             'event_type': event.event_type,
@@ -153,7 +265,6 @@ class CSVStorage:
             writer.writerow(row)
 
     async def query(self, filters: dict = None, limit: int = 100) -> List[LogEvent]:
-        """Query events with optional filters."""
         if not os.path.exists(self.log_path):
             return []
 
@@ -173,35 +284,22 @@ class CSVStorage:
                 if self._matches_filters(event, filters):
                     events.append(event)
 
-        # Sort by timestamp descending (newest first)
         events.sort(key=lambda e: e.timestamp, reverse=True)
         return events[:limit]
 
     def _matches_filters(self, event: LogEvent, filters: dict) -> bool:
-        """Check if an event matches the given filters."""
         if not filters:
             return True
-
-        if 'event_type' in filters:
-            if event.event_type != filters['event_type']:
-                return False
-
-        if 'token' in filters:
-            if filters['token'] not in json.dumps(event.data):
-                return False
-
-        if 'session_id' in filters:
-            if event.session_id != filters['session_id']:
-                return False
-
-        if 'since' in filters:
-            if event.timestamp < filters['since']:
-                return False
-
-        if 'signal_id' in filters:
-            if event.signal_id != filters['signal_id']:
-                return False
-
+        if 'event_type' in filters and event.event_type != filters['event_type']:
+            return False
+        if 'token' in filters and filters['token'] not in json.dumps(event.data):
+            return False
+        if 'session_id' in filters and event.session_id != filters['session_id']:
+            return False
+        if 'since' in filters and event.timestamp < filters['since']:
+            return False
+        if 'signal_id' in filters and event.signal_id != filters['signal_id']:
+            return False
         return True
 
 
@@ -210,11 +308,11 @@ class InMemoryStorage:
 
     def __init__(self):
         self.events: List[LogEvent] = []
-        self._seq = 0  # Monotonic sequence for stable ordering
+        self._seq = 0
 
     async def append(self, event: LogEvent):
         self._seq += 1
-        event._seq = self._seq  # Attach sequence number
+        event._seq = self._seq
         self.events.append(event)
 
     async def query(self, filters: dict = None, limit: int = 100) -> List[LogEvent]:
@@ -243,31 +341,26 @@ class SessionLog:
     DSH-style append-only session log.
 
     Every trading event is permanently recorded and queryable.
-    Supports CSV or in-memory storage (MongoDB optional).
+    Defaults to PostgreSQL when available, falls back to CSV.
     """
 
     def __init__(self, storage=None, session_id: str = None):
-        self.storage = storage or InMemoryStorage()
+        if storage is None:
+            # Auto-select: PostgreSQL > CSV > InMemory
+            pg = PGStorage()
+            if pg._get_pool():
+                self.storage = pg
+            else:
+                self.storage = CSVStorage()
+        else:
+            self.storage = storage
         self.session_id = session_id or str(uuid.uuid4())[:8]
         self._validators: Dict[str, Callable] = {}
 
     def register_validator(self, event_type: str, fn: Callable):
-        """Register a validation function for an event type."""
         self._validators[event_type] = fn
 
     async def log(self, event_type: str, data: dict, signal_id: str = None) -> LogEvent:
-        """
-        Append an event to the log.
-
-        Args:
-            event_type: One of the EventType values
-            data: Event-specific payload
-            signal_id: Optional correlation ID to chain related events
-
-        Returns:
-            The created LogEvent
-        """
-        # Validate event type
         valid_types = [e.value for e in EventType]
         if event_type not in valid_types:
             raise ValueError(
@@ -275,7 +368,6 @@ class SessionLog:
                 f"Valid types: {valid_types}"
             )
 
-        # Run custom validator if registered
         if event_type in self._validators:
             error = await self._validators[event_type](data)
             if error:
@@ -293,7 +385,6 @@ class SessionLog:
 
     async def get_events(self, event_type: str = None, token: str = None,
                          limit: int = 100, since: str = None) -> List[LogEvent]:
-        """Query events with optional filters."""
         filters = {}
         if event_type:
             filters['event_type'] = event_type
@@ -301,32 +392,17 @@ class SessionLog:
             filters['token'] = token
         if since:
             filters['since'] = since
-
         return await self.storage.query(filters=filters, limit=limit)
 
     async def get_trade_chain(self, token: str, days: int = 30) -> List[dict]:
-        """
-        Reconstruct the full decision chain for a token.
-
-        Returns a list of trade narratives, each containing:
-        - entry_signals: What signals triggered the trade
-        - validation: Was the signal validated
-        - risk_approval/denial: Risk guard decisions
-        - order: Order details
-        - exit: Position close details
-        - pnl_usd: Profit/loss
-        - holding_time: How long the position was held
-        """
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         events = await self.storage.query(
             filters={'token': token, 'since': cutoff},
             limit=1000
         )
 
-        # Sort chronologically (oldest first) — use sequence as tiebreaker
         events.sort(key=lambda e: getattr(e, '_seq', 0))
 
-        # Rebuild trade narratives
         trades = []
         current = {}
 
@@ -369,12 +445,6 @@ class SessionLog:
         return trades
 
     async def get_accuracy_report(self, days: int = 30) -> dict:
-        """
-        What actually makes money?
-
-        Returns breakdown by strategy, regime, and overall performance.
-        """
-        # Get all position/close events
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         close_events = await self.storage.query(
             filters={'event_type': EventType.POSITION_CLOSED, 'since': cutoff},
@@ -388,13 +458,6 @@ class SessionLog:
                 'message': 'No closed trades found in this period',
             }
 
-        # Get all signal events for strategy breakdown
-        signal_events = await self.storage.query(
-            filters={'event_type': EventType.SIGNAL_GENERATED, 'since': cutoff},
-            limit=1000
-        )
-
-        # Build trade records
         trades = []
         for event in close_events:
             data = event.data
@@ -409,7 +472,6 @@ class SessionLog:
                 'timestamp': event.timestamp,
             })
 
-        # Calculate stats
         def calc_stats(values):
             if not values:
                 return {'count': 0}
@@ -429,32 +491,27 @@ class SessionLog:
                 ),
             }
 
-        # Overall stats
         all_pnl = [t['pnl_usd'] for t in trades]
         overall = calc_stats(all_pnl)
 
-        # By strategy
         by_strategy = {}
         for t in trades:
             strat = t['strategy']
             by_strategy.setdefault(strat, []).append(t['pnl_usd'])
         by_strategy = {k: calc_stats(v) for k, v in by_strategy.items()}
 
-        # By regime
         by_regime = {}
         for t in trades:
             regime = t['regime']
             by_regime.setdefault(regime, []).append(t['pnl_usd'])
         by_regime = {k: calc_stats(v) for k, v in by_regime.items()}
 
-        # By token
         by_token = {}
         for t in trades:
             token = t['token'][:12] + '...' if len(t['token']) > 12 else t['token']
             by_token.setdefault(token, []).append(t['pnl_usd'])
         by_token = {k: calc_stats(v) for k, v in by_token.items()}
 
-        # Holding time stats
         holding_times = [t['holding_minutes'] for t in trades if t['holding_minutes'] > 0]
         avg_holding = sum(holding_times) / len(holding_times) if holding_times else 0
 
@@ -466,16 +523,14 @@ class SessionLog:
             'by_regime': by_regime,
             'by_token': by_token,
             'avg_holding_minutes': round(avg_holding, 1),
-            'trades': trades[-10:],  # Last 10 trades for reference
+            'trades': trades[-10:],
         }
 
     async def get_recent_activity(self, limit: int = 20) -> List[dict]:
-        """Get the most recent log entries for monitoring."""
         events = await self.storage.query(limit=limit)
         return [e.to_dict() for e in events]
 
     async def get_session_summary(self) -> dict:
-        """Get a summary of the current session's activity."""
         events = await self.storage.query(
             filters={'session_id': self.session_id},
             limit=10000
@@ -497,101 +552,11 @@ class SessionLog:
 # ── Integration Helpers ────────────────────────────────────────
 
 def create_session_log(log_dir: str = None, session_id: str = None) -> SessionLog:
-    """Create a SessionLog with CSV storage (no MongoDB required)."""
-    storage = CSVStorage(log_dir=log_dir)
-    return SessionLog(storage=storage, session_id=session_id)
+    """Create a SessionLog — prefers PostgreSQL, falls back to CSV."""
+    return SessionLog(session_id=session_id)
 
 
 def create_test_session_log(session_id: str = None) -> SessionLog:
     """Create a SessionLog with in-memory storage for testing."""
     storage = InMemoryStorage()
     return SessionLog(storage=storage, session_id=session_id)
-
-
-# ── CLI Interface ──────────────────────────────────────────────
-
-async def main():
-    """Demo the session log."""
-    log = create_test_session_log()
-
-    print("\n📋 Moon Dev Session Log — Demo\n")
-
-    # Simulate a trading cycle
-    signal = await log.log(EventType.SIGNAL_GENERATED, {
-        'token': 'FARTCOIN',
-        'score': 4,
-        'signal': 'BUY',
-        'strategy': 'momentum',
-        'reasons': ['RSI oversold', 'volume spike'],
-    }, signal_id='sig-001')
-
-    await log.log(EventType.SIGNAL_VALIDATED, {
-        'token': 'FARTCOIN',
-        'approved': True,
-        'stage': 'liquidity_check',
-    }, signal_id='sig-001')
-
-    await log.log(EventType.RISK_APPROVED, {
-        'token': 'FARTCOIN',
-        'order': {'side': 'buy', 'amount_usd': 25.0},
-        'guard': 'position_size',
-    }, signal_id='sig-001')
-
-    await log.log(EventType.ORDER_SUBMITTED, {
-        'token': 'FARTCOIN',
-        'side': 'buy',
-        'amount_usd': 25.0,
-        'exchange': 'jupiter',
-    }, signal_id='sig-001')
-
-    await log.log(EventType.ORDER_FILLED, {
-        'token': 'FARTCOIN',
-        'side': 'buy',
-        'amount_usd': 25.0,
-        'fill_price': 0.0042,
-        'slippage': 0.003,
-    }, signal_id='sig-001')
-
-    await log.log(EventType.POSITION_OPENED, {
-        'token': 'FARTCOIN',
-        'side': 'buy',
-        'size_usd': 25.0,
-        'entry_price': 0.0042,
-    }, signal_id='sig-001')
-
-    # Later: position closed
-    await log.log(EventType.POSITION_CLOSED, {
-        'token': 'FARTCOIN',
-        'side': 'sell',
-        'pnl_usd': 3.50,
-        'pnl_pct': 14.0,
-        'holding_minutes': 45,
-        'exit_price': 0.00479,
-        'strategy': 'momentum',
-        'regime': 'trending',
-    }, signal_id='sig-001')
-
-    # Print results
-    print("--- Recent Activity ---")
-    activity = await log.get_recent_activity(limit=5)
-    for entry in activity:
-        print(f"  [{entry['event_type']}] {entry['data']}")
-
-    print("\n--- Session Summary ---")
-    summary = await log.get_session_summary()
-    print(f"  Session: {summary['session_id']}")
-    print(f"  Total events: {summary['total_events']}")
-    print(f"  Events by type: {summary['events_by_type']}")
-
-    print("\n--- Accuracy Report ---")
-    report = await log.get_accuracy_report(days=30)
-    print(f"  Total trades: {report['total_trades']}")
-    if report['total_trades'] > 0:
-        print(f"  Overall win rate: {report['overall']['win_rate']:.0%}")
-        print(f"  Total PnL: ${report['overall']['total_pnl']:.2f}")
-        print(f"  Avg holding: {report['avg_holding_minutes']:.0f} min")
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())

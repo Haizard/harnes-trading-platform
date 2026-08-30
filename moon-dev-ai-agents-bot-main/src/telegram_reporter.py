@@ -470,26 +470,94 @@ class TelegramReporter:
         self.send(text)
 
     def send_startup_message(self, capital: float, mode: str):
-        """Notify that the engine has started."""
+        """Notify that the engine has started with DSH architecture health check."""
         self.initial_capital = capital
         self.current_capital = capital
 
-        # Check DB status
-        db_status = "OFFLINE"
+        # ── DSH Architecture Health Check ──
+        checks = []
+
+        # 1. Database
+        db_ok = False
+        db_tables = 0
         try:
             from src.db_storage import get_pool
             pool = get_pool()
             if pool:
-                db_status = "CONNECTED"
+                db_ok = True
+                with pool.connection() as conn:
+                    sql = "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = 'public'"
+                    row = conn.execute(sql).fetchone()
+                    db_tables = row["cnt"] if row else 0
+                checks.append(f"PostgreSQL: CONNECTED ({db_tables} tables)")
+            else:
+                checks.append("PostgreSQL: OFFLINE (JSON fallback)")
         except Exception:
-            db_status = "ERROR"
+            checks.append("PostgreSQL: ERROR")
+
+        # 2. SessionLog
+        try:
+            from src.session_log import SessionLog, PGStorage
+            pg = PGStorage()
+            if pg._get_pool():
+                checks.append("SessionLog: PostgreSQL backend")
+            else:
+                checks.append("SessionLog: CSV fallback")
+        except Exception:
+            checks.append("SessionLog: ERROR")
+
+        # 3. EventBus
+        try:
+            from src.event_bus import EventBus, Events
+            bus = EventBus()
+            checks.append(f"EventBus: OK ({len(Events.__dict__)-2} event types)")
+        except Exception:
+            checks.append("EventBus: ERROR")
+
+        # 4. AsyncScheduler
+        try:
+            from src.async_scheduler import AsyncScheduler
+            checks.append("AsyncScheduler: OK")
+        except Exception:
+            checks.append("AsyncScheduler: ERROR")
+
+        # 5. FeedbackLoop
+        try:
+            from src.feedback_loop import TradeFeedbackLoop
+            fl = TradeFeedbackLoop()
+            db_status = "DB+JSONL" if fl._db_available else "JSONL only"
+            checks.append(f"FeedbackLoop: {db_status}")
+        except Exception:
+            checks.append("FeedbackLoop: ERROR")
+
+        # 6. ExecutionTracker
+        try:
+            from src.execution_tracker import ExecutionTracker
+            et = ExecutionTracker()
+            db_status = "DB+JSONL" if et._db_available else "JSONL only"
+            checks.append(f"ExecutionTracker: {db_status}")
+        except Exception:
+            checks.append("ExecutionTracker: ERROR")
+
+        # 7. MCP Registry
+        try:
+            from src.mcp_registry import MCPRegistry
+            checks.append("MCP Registry: OK")
+        except Exception:
+            checks.append("MCP Registry: not available")
+
+        # Build message
+        checks_text = "\n".join(f"  {c}" for c in checks)
+        db_icon = "OK" if db_ok else "FALLBACK"
 
         text = (
-            f"ENGINE STARTED\n\n"
+            f"ENGINE STARTED - DSH Architecture Check\n"
+            f"========================================\n\n"
             f"Capital: ${capital:.2f}\n"
             f"Mode: {mode.upper()}\n"
-            f"Database: {db_status}\n"
-            f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"Database: {db_icon}\n\n"
+            f"DSH Components:\n{checks_text}\n\n"
+            f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n"
             f"Commands: /status /trades /open /capital /help"
         )
         self.send(text)

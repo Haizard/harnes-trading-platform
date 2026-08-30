@@ -54,6 +54,8 @@ class TradeFeedbackLoop:
     2. Which regimes are most profitable
     3. Optimal confidence thresholds
     4. Recommended weight adjustments
+
+    Stores to PostgreSQL when available, falls back to JSONL.
     """
 
     def __init__(self, history_dir: str = None):
@@ -63,6 +65,13 @@ class TradeFeedbackLoop:
         os.makedirs(self.history_dir, exist_ok=True)
         self.signals_path = os.path.join(self.history_dir, 'signal_history.jsonl')
         self.outcomes_path = os.path.join(self.history_dir, 'outcome_history.jsonl')
+        # Check DB availability
+        self._db_available = False
+        try:
+            from src.db_storage import get_pool
+            self._db_available = get_pool() is not None
+        except Exception:
+            pass
 
     async def record_signal(self, symbol: str, signal: str, confidence: float,
                            factors: Dict[str, float], regime: str = "unknown",
@@ -70,6 +79,7 @@ class TradeFeedbackLoop:
         """Record a prediction signal. Returns signal_id for linking to outcome."""
         import uuid
         sid = signal_id or str(uuid.uuid4())[:8]
+        timestamp = datetime.utcnow().isoformat()
 
         record = SignalRecord(
             symbol=symbol,
@@ -80,6 +90,19 @@ class TradeFeedbackLoop:
             signal_id=sid,
         )
 
+        # Write to DB if available
+        if self._db_available:
+            try:
+                from src.db_storage import save_feedback_signal
+                save_feedback_signal(
+                    signal_id=sid, symbol=symbol, signal=signal,
+                    confidence=confidence, factors=factors, regime=regime,
+                    timestamp=timestamp,
+                )
+            except Exception:
+                pass
+
+        # Also write to JSONL as fallback
         self._append_jsonl(self.signals_path, record.__dict__)
         return sid
 
@@ -87,6 +110,7 @@ class TradeFeedbackLoop:
                             pnl_pct: float = 0.0, holding_minutes: float = 0.0,
                             signal_id: str = None):
         """Record the outcome of a trade."""
+        timestamp = datetime.utcnow().isoformat()
         record = OutcomeRecord(
             symbol=symbol,
             pnl_usd=pnl_usd,
@@ -95,15 +119,73 @@ class TradeFeedbackLoop:
             signal_id=signal_id or "",
         )
 
+        # Write to DB if available
+        if self._db_available:
+            try:
+                from src.db_storage import save_feedback_outcome
+                save_feedback_outcome(
+                    signal_id=signal_id or "", symbol=symbol,
+                    pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+                    holding_minutes=holding_minutes, timestamp=timestamp,
+                )
+            except Exception:
+                pass
+
         self._append_jsonl(self.outcomes_path, record.__dict__)
 
     async def get_accuracy_report(self, days: int = 30) -> dict:
         """Analyze prediction accuracy and factor effectiveness."""
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        # Prefer DB query
+        if self._db_available:
+            try:
+                return await self._report_from_db(days)
+            except Exception:
+                pass
 
+        # Fallback to JSONL
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         signals = self._read_jsonl(self.signals_path, cutoff)
         outcomes = self._read_jsonl(self.outcomes_path, cutoff)
+        return self._build_report(signals, outcomes, days)
 
+    async def _report_from_db(self, days: int) -> dict:
+        """Build accuracy report from PostgreSQL."""
+        from src.db_storage import get_feedback_signals, get_feedback_outcomes
+
+        signals = get_feedback_signals(days=days)
+        outcomes = get_feedback_outcomes(days=days)
+
+        # Convert DB rows to dict format
+        signals_dicts = []
+        for s in signals:
+            factors = s.get('factors', {})
+            if isinstance(factors, str):
+                factors = json.loads(factors)
+            signals_dicts.append({
+                'signal_id': s.get('signal_id', ''),
+                'symbol': s.get('symbol', ''),
+                'signal': s.get('signal', ''),
+                'confidence': s.get('confidence', 0),
+                'factors': factors,
+                'regime': s.get('regime', 'unknown'),
+                'timestamp': str(s.get('timestamp', '')),
+            })
+
+        outcomes_dicts = []
+        for o in outcomes:
+            outcomes_dicts.append({
+                'signal_id': o.get('signal_id', ''),
+                'symbol': o.get('symbol', ''),
+                'pnl_usd': o.get('pnl_usd', 0),
+                'pnl_pct': o.get('pnl_pct', 0),
+                'holding_minutes': o.get('holding_minutes', 0),
+                'timestamp': str(o.get('timestamp', '')),
+            })
+
+        return self._build_report(signals_dicts, outcomes_dicts, days)
+
+    def _build_report(self, signals: list, outcomes: list, days: int) -> dict:
+        """Build accuracy report from signal/outcome data."""
         if not signals:
             return {'total_signals': 0, 'message': 'No signals recorded'}
 
@@ -140,7 +222,7 @@ class TradeFeedbackLoop:
                 if data['confidences'] else 0
             )
             data['avg_pnl'] = data['total_pnl'] / data['count'] if data['count'] > 0 else 0
-            del data['confidences']  # Clean up
+            del data['confidences']
 
         # Factor effectiveness analysis
         factor_analysis = self._analyze_factors(signals, outcome_map)
@@ -158,22 +240,47 @@ class TradeFeedbackLoop:
         }
 
     async def get_recommended_weights(self, days: int = 30) -> Dict[str, float]:
-        """
-        Recommend weight adjustments based on historical accuracy.
+        """Recommend weight adjustments based on historical accuracy."""
+        if self._db_available:
+            try:
+                return await self._weights_from_db(days)
+            except Exception:
+                pass
 
-        Factors that predict winning trades get higher weights.
-        Factors that predict losing trades get lower weights.
-        """
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         signals = self._read_jsonl(self.signals_path, cutoff)
         outcomes = self._read_jsonl(self.outcomes_path, cutoff)
+        return self._compute_weights(signals, outcomes)
 
+    async def _weights_from_db(self, days: int) -> Dict[str, float]:
+        """Compute recommended weights from DB data."""
+        from src.db_storage import get_feedback_signals, get_feedback_outcomes
+        signals = get_feedback_signals(days=days)
+        outcomes = get_feedback_outcomes(days=days)
+
+        signals_dicts = []
+        for s in signals:
+            factors = s.get('factors', {})
+            if isinstance(factors, str):
+                factors = json.loads(factors)
+            signals_dicts.append({
+                'signal_id': s.get('signal_id', ''),
+                'factors': factors,
+            })
+        outcomes_dicts = [{
+            'signal_id': o.get('signal_id', ''),
+            'pnl_usd': o.get('pnl_usd', 0),
+        } for o in outcomes]
+
+        return self._compute_weights(signals_dicts, outcomes_dicts)
+
+    def _compute_weights(self, signals: list, outcomes: list) -> Dict[str, float]:
+        """Compute recommended weight adjustments."""
         outcome_map = {}
         for o in outcomes:
             if o.get('signal_id'):
                 outcome_map[o['signal_id']] = o
 
-        # Separate winning and losing signals
         winning_factors = {}
         losing_factors = {}
 
@@ -192,7 +299,6 @@ class TradeFeedbackLoop:
                     target[factor] = []
                 target[factor].append(score)
 
-        # Calculate recommended weights
         recommendations = {}
         all_factors = set(list(winning_factors.keys()) + list(losing_factors.keys()))
 
@@ -203,24 +309,21 @@ class TradeFeedbackLoop:
             win_avg = sum(win_scores) / len(win_scores) if win_scores else 0
             lose_avg = sum(lose_scores) / len(lose_scores) if lose_scores else 0
 
-            # If winning trades have higher factor scores, boost weight
-            # If losing trades have higher factor scores, reduce weight
             if win_avg > 0 and lose_avg > 0:
                 ratio = win_avg / lose_avg
                 recommendations[factor] = max(0.5, min(2.0, ratio))
             elif win_avg > 0:
-                recommendations[factor] = 1.2  # Factor appears in wins
+                recommendations[factor] = 1.2
             elif lose_avg > 0:
-                recommendations[factor] = 0.8  # Factor appears in losses
+                recommendations[factor] = 0.8
             else:
-                recommendations[factor] = 1.0  # No data
+                recommendations[factor] = 1.0
 
         return recommendations
 
     # ── Internal ──────────────────────────────────────────────
 
     def _analyze_factors(self, signals: list, outcome_map: dict) -> dict:
-        """Analyze which factors predict profitable trades."""
         factor_wins = {}
         factor_losses = {}
 
@@ -258,7 +361,6 @@ class TradeFeedbackLoop:
         return result
 
     def _analyze_regimes(self, signals: list, outcome_map: dict) -> dict:
-        """Analyze which regimes are most profitable."""
         regime_data = {}
 
         for s in signals:
@@ -283,7 +385,7 @@ class TradeFeedbackLoop:
         return regime_data
 
     def _append_jsonl(self, path: str, data: dict):
-        """Append a JSON line to a file."""
+        """Append a JSON line to a file (fallback storage)."""
         try:
             with open(path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(data, default=str) + '\n')

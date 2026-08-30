@@ -6,10 +6,16 @@ Environment variables:
   LUCERIS_DATABASE_URL=postgres://app:password@cli.luceris.cloud:5432/main?sslmode=require
 
 Tables:
-  trades        - All trade entries and exits
-  portfolio     - Current portfolio state
-  sentiment     - Cached sentiment data
-  engine_events - Event log for audit trail
+  trades            - All trade entries and exits
+  portfolio         - Current portfolio state
+  sentiment         - Cached sentiment data
+  engine_events     - Event log for audit trail
+  session_events    - DSH SessionLog events (append-only audit trail)
+  feedback_signals  - Signals recorded by TradeFeedbackLoop
+  feedback_outcomes - Trade outcomes recorded by TradeFeedbackLoop
+  executions        - Execution quality tracking
+  wallet_events     - Wallet swap events from WalletTracker
+  scanner_results   - Token scanner candidate results
 """
 
 import os
@@ -122,10 +128,110 @@ def _init_tables():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # DSH SessionLog table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                description TEXT,
+                data JSONB,
+                timestamp TIMESTAMPTZ NOT NULL,
+                session_id TEXT,
+                signal_id TEXT
+            )
+        """)
+        # Feedback Loop tables
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feedback_signals (
+                id SERIAL PRIMARY KEY,
+                signal_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                signal TEXT NOT NULL,
+                confidence REAL DEFAULT 0,
+                factors JSONB DEFAULT '{}',
+                regime TEXT DEFAULT 'unknown',
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feedback_outcomes (
+                id SERIAL PRIMARY KEY,
+                signal_id TEXT,
+                symbol TEXT NOT NULL,
+                pnl_usd REAL DEFAULT 0,
+                pnl_pct REAL DEFAULT 0,
+                holding_minutes REAL DEFAULT 0,
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Execution quality tracking
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS executions (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                amount_usd REAL DEFAULT 0,
+                expected_price REAL DEFAULT 0,
+                fill_price REAL DEFAULT 0,
+                slippage_bps REAL DEFAULT 0,
+                latency_ms REAL DEFAULT 0,
+                filled BOOLEAN DEFAULT FALSE,
+                reason TEXT DEFAULT '',
+                source TEXT DEFAULT '',
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Wallet events
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_events (
+                id SERIAL PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                wallet TEXT NOT NULL,
+                token_address TEXT DEFAULT '',
+                direction TEXT DEFAULT '',
+                amount_sol REAL DEFAULT 0,
+                data JSONB DEFAULT '{}',
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Scanner results
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scanner_results (
+                id SERIAL PRIMARY KEY,
+                token_address TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                score REAL DEFAULT 0,
+                liquidity_usd REAL DEFAULT 0,
+                volume_24h REAL DEFAULT 0,
+                price_usd REAL DEFAULT 0,
+                data JSONB DEFAULT '{}',
+                timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Indexes
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON engine_events(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_symbol ON feedback_signals(symbol)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_time ON feedback_signals(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_signal ON feedback_outcomes(signal_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_time ON feedback_outcomes(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_symbol ON executions(symbol)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet ON wallet_events(wallet)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
         conn.commit()
         print("[DB] Tables initialized")
 
@@ -363,4 +469,238 @@ def get_events(event_type: str = None, limit: int = 100) -> List[dict]:
             return [dict(r) for r in rows]
     except Exception as e:
         print(f"[DB] get_events error: {e}")
+        return []
+
+
+# ── Feedback Signal Operations ───────────────────────────────
+
+def save_feedback_signal(signal_id: str, symbol: str, signal: str, confidence: float,
+                         factors: dict, regime: str = "unknown", timestamp: str = None):
+    """Save a feedback signal to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO feedback_signals (signal_id, symbol, signal, confidence, factors, regime, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                signal_id, symbol, signal, confidence,
+                json.dumps(factors, default=str), regime,
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_feedback_signal error: {e}")
+        return None
+
+
+def save_feedback_outcome(signal_id: str, symbol: str, pnl_usd: float,
+                          pnl_pct: float = 0.0, holding_minutes: float = 0.0,
+                          timestamp: str = None):
+    """Save a feedback outcome to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO feedback_outcomes (signal_id, symbol, pnl_usd, pnl_pct, holding_minutes, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                signal_id, symbol, pnl_usd, pnl_pct, holding_minutes,
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_feedback_outcome error: {e}")
+        return None
+
+
+def get_feedback_signals(days: int = 30, limit: int = 1000) -> List[dict]:
+    """Query feedback signals from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM feedback_signals
+                WHERE timestamp >= NOW() - INTERVAL '%s days'
+                ORDER BY timestamp DESC LIMIT %s
+            """, (days, limit)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_feedback_signals error: {e}")
+        return []
+
+
+def get_feedback_outcomes(days: int = 30, limit: int = 1000) -> List[dict]:
+    """Query feedback outcomes from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM feedback_outcomes
+                WHERE timestamp >= NOW() - INTERVAL '%s days'
+                ORDER BY timestamp DESC LIMIT %s
+            """, (days, limit)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_feedback_outcomes error: {e}")
+        return []
+
+
+# ── Execution Operations ─────────────────────────────────────
+
+def save_execution(symbol: str, side: str, amount_usd: float,
+                   expected_price: float = 0.0, fill_price: float = 0.0,
+                   slippage_bps: float = 0.0, latency_ms: float = 0.0,
+                   filled: bool = False, reason: str = "", source: str = "",
+                   timestamp: str = None):
+    """Save an execution record to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO executions (symbol, side, amount_usd, expected_price,
+                    fill_price, slippage_bps, latency_ms, filled, reason, source, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                symbol, side, amount_usd, expected_price,
+                fill_price, slippage_bps, latency_ms, filled, reason, source,
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_execution error: {e}")
+        return None
+
+
+def get_executions(days: int = 30, limit: int = 1000) -> List[dict]:
+    """Query execution records from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM executions
+                WHERE timestamp >= NOW() - INTERVAL '%s days'
+                ORDER BY timestamp DESC LIMIT %s
+            """, (days, limit)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_executions error: {e}")
+        return []
+
+
+# ── Wallet Event Operations ──────────────────────────────────
+
+def save_wallet_event(event_type: str, wallet: str, token_address: str = "",
+                      direction: str = "", amount_sol: float = 0.0,
+                      data: dict = None, timestamp: str = None):
+    """Save a wallet event to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO wallet_events (event_type, wallet, token_address,
+                    direction, amount_sol, data, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                event_type, wallet, token_address, direction, amount_sol,
+                json.dumps(data or {}, default=str),
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_wallet_event error: {e}")
+        return None
+
+
+def get_wallet_events(wallet: str = None, hours: int = 24, limit: int = 1000) -> List[dict]:
+    """Query wallet events from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            conditions = ["timestamp >= NOW() - INTERVAL '%s hours'"]
+            params = [hours]
+            if wallet:
+                conditions.append("wallet = %s")
+                params.append(wallet)
+            where = " AND ".join(conditions)
+            params.append(limit)
+            rows = conn.execute(f"""
+                SELECT * FROM wallet_events
+                WHERE {where}
+                ORDER BY timestamp DESC LIMIT %s
+            """, params).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_wallet_events error: {e}")
+        return []
+
+
+# ── Scanner Result Operations ────────────────────────────────
+
+def save_scanner_result(token_address: str, symbol: str, score: float,
+                        liquidity_usd: float = 0.0, volume_24h: float = 0.0,
+                        price_usd: float = 0.0, data: dict = None,
+                        timestamp: str = None):
+    """Save a scanner result to PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO scanner_results (token_address, symbol, score,
+                    liquidity_usd, volume_24h, price_usd, data, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                token_address, symbol, score, liquidity_usd, volume_24h,
+                price_usd, json.dumps(data or {}, default=str),
+                timestamp or datetime.now(timezone.utc).isoformat(),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_scanner_result error: {e}")
+        return None
+
+
+def get_scanner_results(hours: int = 24, min_score: float = 0, limit: int = 1000) -> List[dict]:
+    """Query scanner results from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM scanner_results
+                WHERE timestamp >= NOW() - INTERVAL '%s hours' AND score >= %s
+                ORDER BY score DESC LIMIT %s
+            """, (hours, min_score, limit)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_scanner_results error: {e}")
         return []

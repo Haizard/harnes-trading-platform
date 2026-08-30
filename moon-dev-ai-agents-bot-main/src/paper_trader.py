@@ -27,6 +27,10 @@ class PaperTrade:
     status: str = "open"
     score: float = 0.0
     signals: list = field(default_factory=list)
+    category: str = "unknown"
+    stop_loss_pct: float = 10.0
+    take_profit_pct: float = 30.0
+    max_hold_hours: float = 12.0
 
     def to_dict(self):
         return {
@@ -39,14 +43,17 @@ class PaperTrade:
             "entry_time": self.entry_time, "exit_time": self.exit_time,
             "pnl_usd": self.pnl_usd, "pnl_pct": self.pnl_pct,
             "status": self.status, "score": self.score,
-            "signals": self.signals,
+            "signals": self.signals, "category": self.category,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
+            "max_hold_hours": self.max_hold_hours,
         }
 
 
 class PaperTrader:
     """Simulate trades with real market data. No money at risk."""
 
-    def __init__(self, capital=25.0, max_positions=3):
+    def __init__(self, capital=25.0, max_positions=8):
         self.capital = capital
         self.initial_capital = capital
         self.max_positions = max_positions
@@ -55,16 +62,21 @@ class PaperTrader:
         self.data_dir = Path("src/data/paper_trading")
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_real_price(self, token_address):
+    def get_real_price(self, token_address, amount_sol=None):
+        """Get current token price from Jupiter.
+        Uses the same SOL amount as buy() by default for consistent pricing.
+        """
+        if amount_sol is None:
+            amount_sol = 1.0  # Standard reference amount for price quotes
         try:
             resp = requests.get(JUPITER_QUOTE, params={
                 "inputMint": SOL_MINT, "outputMint": token_address,
-                "amount": "100000000", "slippageBps": 500}, timeout=10)
+                "amount": str(int(amount_sol * 1e9)), "slippageBps": 500}, timeout=10)
             if resp.status_code == 200:
                 q = resp.json()
                 out = int(q.get("outAmount", 0))
                 if out > 0:
-                    return 15.0 / out
+                    return (amount_sol * 15.0) / out
         except Exception:
             pass
         return None
@@ -80,7 +92,7 @@ class PaperTrader:
             pass
         return None
 
-    def buy(self, token_address, symbol, amount_usd, score=0.0, signals=None):
+    def buy(self, token_address, symbol, amount_usd, score=0.0, signals=None, category="unknown", stop_loss_pct=10.0, take_profit_pct=30.0, max_hold_hours=12.0):
         if len(self.open_positions) >= self.max_positions:
             return None
         if token_address in self.open_positions:
@@ -104,7 +116,9 @@ class PaperTrader:
             slippage_pct=round(slippage * 100, 3),
             price_impact_pct=round(price_impact, 3),
             entry_time=datetime.now(timezone.utc).isoformat(),
-            score=score, signals=signals or [])
+            score=score, signals=signals or [],
+            category=category, stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct, max_hold_hours=max_hold_hours)
         self.capital -= amount_usd
         self.open_positions[token_address] = trade
         self._log_trade(trade, "entry")
@@ -122,7 +136,7 @@ class PaperTrader:
             cur = pos.entry_price
         pnl_pct = ((cur - pos.entry_price) / pos.entry_price * 100) if pos.entry_price > 0 else 0
         pnl_usd = pos.amount_usd * (pnl_pct / 100)
-        status_map = {"stop_loss": "closed_sl", "take_profit": "closed_tp"}
+        status_map = {"stop_loss": "closed_sl", "take_profit": "closed_tp", "stale_exit": "closed_stale"}
         status = status_map.get(reason, "closed_manual")
         pos.exit_price = cur
         pos.exit_time = datetime.now(timezone.utc).isoformat()
@@ -139,19 +153,44 @@ class PaperTrader:
         self._print_capital_status()
         return pos
 
-    def check_exits(self, stop_loss_pct=10.0, take_profit_pct=30.0):
+    def check_exits(self):
+        """Check all open positions for exit conditions.
+        
+        Uses per-category exit parameters stored on each trade.
+        Exits triggered by:
+        1. Stop loss (pnl <= -stop_loss_pct%)
+        2. Take profit (pnl >= take_profit_pct%)
+        3. Stale position (held longer than max_hold_hours)
+        """
         closed = []
         for addr in list(self.open_positions.keys()):
             pos = self.open_positions[addr]
             cur = self.get_real_price(addr)
             if not cur:
                 continue
+
+            # Use per-category params from the trade
+            sl = pos.stop_loss_pct
+            tp = pos.take_profit_pct
+            max_hold = pos.max_hold_hours
+
+            # Force-close stale positions held too long
+            try:
+                entry_dt = datetime.fromisoformat(pos.entry_time.replace("+00:00", "+00:00"))
+                hours_held = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+            except Exception:
+                hours_held = 0
+
             pnl = ((cur - pos.entry_price) / pos.entry_price * 100) if pos.entry_price > 0 else 0
-            if pnl <= -stop_loss_pct:
+
+            if pnl <= -sl:
                 r = self.sell(addr, "stop_loss")
                 if r: closed.append(r)
-            elif pnl >= take_profit_pct:
+            elif pnl >= tp:
                 r = self.sell(addr, "take_profit")
+                if r: closed.append(r)
+            elif hours_held >= max_hold:
+                r = self.sell(addr, "stale_exit")
                 if r: closed.append(r)
         return closed
 
