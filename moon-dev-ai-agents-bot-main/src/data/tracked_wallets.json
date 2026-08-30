@@ -1,0 +1,102 @@
+[
+  {
+    "address": "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+    "label": "Jump_Quant",
+    "tags": [
+      "institutional",
+      "high_frequency"
+    ],
+    "notes": "Jump Trading subsidiary \u2014 known for high-frequency Solana meme coin trading",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "DTxQQd3NX3pEgrMBy4FMNLnp3CvfLKybLBvRvCLvZoCH",
+    "label": "Gigantic_Rebirth",
+    "tags": [
+      "smart_money",
+      "diamond_hands"
+    ],
+    "notes": "Consistently profitable meme coin trader with strong win rate",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "39azUYFWPz3VHgKCf3VChSW44JLjFav5mXW1g8qzLc6i",
+    "label": "Smart_Money_1",
+    "tags": [
+      "smart_money",
+      "early_buyer"
+    ],
+    "notes": "Known for early entries on meme coins before major pumps",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "8KRH9xB7qFfmvJdUAAvEB5jL8YFjq8Zr5TLaULvQzLHA",
+    "label": "Alpha_Hunter",
+    "tags": [
+      "smart_money",
+      "alpha"
+    ],
+    "notes": "Consistent alpha generator across multiple meme coin cycles",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "CwB3SaUxQXi4o8TvWEcCrBnJYxPZNyKiPB7MwBZTxfG8",
+    "label": "DeFi_DeGod",
+    "tags": [
+      "smart_money",
+      "defi"
+    ],
+    "notes": "Active in both meme coins and DeFi protocols",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "4wgfCBf2WwLSRKLef9iW7JXZ2AfkxUxGM4XcKpHm3Sin",
+    "label": "Moon_Dev_Own",
+    "tags": [
+      "own_wallet",
+      "reference"
+    ],
+    "notes": "Your own wallet \u2014 track for P&L comparison",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+    "label": "Whale_NFT_Accumulator",
+    "tags": [
+      "whale",
+      "nft"
+    ],
+    "notes": "Large SOL holder, occasionally rotates into meme coins",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "39gU5GxuzBPN8bMsGzNuZFzGFRzVzPkS7n3MG4GBZa9M",
+    "label": "Momentum_Rider",
+    "tags": [
+      "smart_money",
+      "momentum"
+    ],
+    "notes": "Rides momentum waves on trending meme coins",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "HWfSxr2str2pJPr1D2gEJFKN5hNkCFjKYCdEyfr2APQp",
+    "label": "Early_Bird_SOL",
+    "tags": [
+      "smart_money",
+      "early_buyer"
+    ],
+    "notes": "Specializes in buying tokens within first hour of launch",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  },
+  {
+    "address": "9QjEaVJxEV7Vx4WRap4JYPKbVjTrRECaLc2b6tBcE4zF",
+    "label": "Sniper_Bot_Whale",
+    "tags": [
+      "whale",
+      "sniper"
+    ],
+    "notes": "Known for sniping new token launches with large positions",
+    "added_at": "2026-08-30T18:16:26.753009+00:00"
+  }
+]
