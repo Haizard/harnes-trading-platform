@@ -11,7 +11,7 @@ from src.async_scheduler import AsyncScheduler, JobStatus
 from src.spill_storage import SpillStorage, SpillResult
 from src.session_query import SessionQuery
 from src.trade_planner import TradePlanner, PlanStatus, PlanStep
-from src.mcp_registry import MCPRegistry, MCPTool, create_default_mcp_registry
+from src.mcp_registry import MCPRegistry, TradingMCPTool, ToolParameter, create_default_mcp_registry
 from src.funding_costs import FundingCostTracker
 from src.correlation_manager import CorrelationManager
 from src.walk_forward import WalkForwardValidator, WalkForwardResult
@@ -167,25 +167,57 @@ class TestTradePlanner:
 class TestMCPRegistry:
     def test_create_default(self):
         registry = create_default_mcp_registry()
-        servers = registry.list_servers()
-        assert len(servers) >= 4
-
-    def test_register_tool(self):
-        registry = MCPRegistry()
-        registry.register_server("test", "http://test.com")
-        registry.register_tool("test", MCPTool(name="test/query", description="Test", endpoint="http://test.com/query"))
-        assert registry.get_tool("test/query") is not None
+        tools = registry.list_tool_names()
+        assert len(tools) >= 10
 
     def test_list_tools(self):
         registry = create_default_mcp_registry()
         tools = registry.list_tools()
         assert len(tools) >= 10
+        # Verify each tool has required fields
+        for tool in tools:
+            assert 'name' in tool
+            assert 'description' in tool
+            assert 'source' in tool
+            assert 'parameters' in tool
+
+    def test_get_tool(self):
+        registry = create_default_mcp_registry()
+        tool = registry.get_tool("get_token_price")
+        assert tool is not None
+        assert tool.name == "get_token_price"
+        assert tool.source == "jupiter"
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool(self):
+        registry = create_default_mcp_registry()
+        result = await registry.call_tool("nonexistent_tool")
+        assert result.success is False
+        assert "Unknown tool" in result.error
 
     @pytest.mark.asyncio
     async def test_call_tool(self):
         registry = create_default_mcp_registry()
-        result = await registry.call_tool("coinglass/funding_rates")
-        assert 'status' in result
+        result = await registry.call_tool("get_portfolio_state")
+        assert result.success is True
+        assert result.data is not None
+        assert result.source == "paper_trader"
+
+    @pytest.mark.asyncio
+    async def test_call_history(self):
+        registry = create_default_mcp_registry()
+        await registry.call_tool("get_risk_state")
+        history = registry.get_call_history()
+        assert len(history) >= 1
+        assert history[0]["tool"] == "get_risk_state"
+
+    def test_tool_parameters(self):
+        registry = create_default_mcp_registry()
+        tool = registry.get_tool("get_token_price")
+        assert len(tool.parameters) == 1
+        assert tool.parameters[0].name == "token_address"
+        assert tool.parameters[0].required is True
+        assert tool.parameters[0].type == "string"
 
 
 # ── Funding Cost Tests ────────────────────────────────────────

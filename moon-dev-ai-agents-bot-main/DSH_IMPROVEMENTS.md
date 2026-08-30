@@ -2519,125 +2519,106 @@ class SmartDataPacker:
 
 ---
 
-## 20. MCP Integration — External Services
+## 20. MCP Integration — Internal Trading Data Server
 
-> ✅ **IMPLEMENTED** — See `src/mcp_registry.py` and `src/tests/test_remaining_features.py`
+> ✅ **IMPLEMENTED** — See `src/mcp_registry.py`, `src/mcp_server.py`, and `src/tests/test_remaining_features.py`
 
-**Problem:** Each external data source (CoinGlass, Dune, Birdeye) requires custom API wrappers.
+**Problem:** Each data source required custom wrappers. The AI agent couldn't query platform data through a standard protocol.
 
-**DSH Pattern:** `mcp-client` — register external server tools via Model Context Protocol.
+**DSH Pattern:** `mcp-client` — register tools via Model Context Protocol. The AI agent calls MCP tools to gather data before analysis.
 
-```python
-"""
-DSH-inspired MCP Integration for Trading
-Connect to external services through a standard protocol.
-"""
+### Architecture (v2 — Real Implementations)
 
-from dataclasses import dataclass
-from typing import Dict, List, Callable, Any
-import asyncio
-
-
-@dataclass
-class MCPServer:
-    """An MCP-compatible external service."""
-    name: str
-    description: str
-    tools: Dict[str, Callable]  # tool_name -> async function
-    enabled: bool = True
-
-
-class TradingMCPRegistry:
-    """
-    Registry for external trading services.
-    Based on DSH's mcp-client — register external tools on ctx.tools.
-    """
-
-    def __init__(self):
-        self.servers: Dict[str, MCPServer] = {}
-        self.tools: Dict[str, Callable] = {}
-
-    def register_server(self, server: MCPServer):
-        """Register an MCP server and its tools."""
-        self.servers[server.name] = server
-        for tool_name, tool_fn in server.tools.items():
-            qualified_name = f"{server.name}/{tool_name}"
-            self.tools[qualified_name] = tool_fn
-            print(f"  ✅ Registered MCP tool: {qualified_name}")
-
-    async def call_tool(self, tool_name: str, **kwargs) -> Any:
-        """Call an MCP tool by qualified name."""
-        fn = self.tools.get(tool_name)
-        if not fn:
-            raise ValueError(f"Unknown MCP tool: {tool_name}")
-        return await fn(**kwargs)
-
-    def list_tools(self) -> List[str]:
-        return list(self.tools.keys())
-
-
-# ── MCP Server Definitions ──────────────────────────────────────────
-
-# CoinGlass: Funding rates, open interest, liquidations
-def create_coinglass_server() -> MCPServer:
-    async def get_funding_rates(exchange='binance', symbol='BTCUSDT'):
-        # Real implementation would call CoinGlass API
-        return {'funding_rate': 0.0001, 'next_funding': '4h'}
-
-    async def get_open_interest(symbol='BTC'):
-        return {'oi': 15000000000, 'change_24h': 2.5}
-
-    async def get_liquidations(symbol='BTC', hours=1):
-        return {'liquidations_1h': 50000000, 'long_pct': 65}
-
-    return MCPServer(
-        name='coinglass',
-        description='Funding rates, open interest, liquidations',
-        tools={
-            'funding_rates': get_funding_rates,
-            'open_interest': get_open_interest,
-            'liquidations': get_liquidations,
-        },
-    )
-
-# Birdeye: Solana token analytics
-def create_birdeye_server() -> MCPServer:
-    async def get_token_overview(address):
-        return {'price': 0.0042, 'volume_24h': 500000}
-
-    async def get_top_gainers(chain='solana'):
-        return [{'token': 'FART', 'change': '+45%'}]
-
-    return MCPServer(
-        name='birdeye',
-        description='Solana token analytics and market data',
-        tools={
-            'token_overview': get_token_overview,
-            'top_gainers': get_top_gainers,
-        },
-    )
-
-# DefiLlama: DeFi TVL and protocol data
-def create_defillama_server() -> MCPServer:
-    async def get_protocol_tvl(protocol):
-        return {'tvl': 1000000000, 'change_24h': 3.2}
-
-    return MCPServer(
-        name='defillama',
-        description='DeFi TVL and protocol analytics',
-        tools={
-            'protocol_tvl': get_protocol_tvl,
-        },
-    )
-
-# Setup
-mcp_registry = TradingMCPRegistry()
-mcp_registry.register_server(create_coinglass_server())
-mcp_registry.register_server(create_birdeye_server())
-mcp_registry.register_server(create_defillama_server())
+```
+AI Agent (Bedrock/Qwen3)
+       │
+       │ HTTP POST /mcp/call
+       ▼
+  Trading MCP Server (FastAPI)
+       │
+       ├─ /mcp/call      → Call a tool by name with params
+       ├─ /mcp/tools     → List all available tools
+       ├─ /mcp/history   → Recent tool call history
+       ├─ /mcp/schema    → Tool parameter schemas
+       │
+       └─ 12 Real Tools:
+           ├─ get_token_price       (Jupiter Price API — FREE)
+           ├─ get_token_profile     (Birdeye — needs API key)
+           ├─ get_token_security    (Birdeye — needs API key)
+           ├─ get_whale_data        (Solana RPC — FREE)
+           ├─ get_liquidity_check   (Jupiter Quote — FREE)
+           ├─ get_portfolio_state   (PaperTrader — internal)
+           ├─ get_recent_trades     (paper_trades.jsonl)
+           ├─ get_scanner_results   (TokenScanner results)
+           ├─ get_strategy_signals  (AgentOrchestrator decisions)
+           ├─ get_risk_state        (RiskGuard rejections)
+           ├─ get_token_sentiment   (Twitter sentiment)
+           └─ get_market_context    (BTC/SOL/ETH + sentiment)
 ```
 
-**Why it matters:** Adding a new data source is now a one-function registration. The LLM can call `coinglass/funding_rates` or `birdeye/token_overview` without any custom integration code. The standard MCP protocol means any compatible service plugs in instantly.
+### Key Design Decisions
+
+1. **READ-ONLY** — All tools are data-access only. No execution through MCP.
+   Trade execution stays behind the deterministic Python risk/execution layer.
+
+2. **Real Data Sources** — Each tool calls actual APIs (Jupiter, Birdeye, Solana RPC)
+   or reads from internal data files (paper_trades.jsonl, scanner_results.jsonl).
+
+3. **Standard Protocol** — Uses HTTP REST + JSON, compatible with MCP clients.
+   AI agents can discover tools via GET /mcp/tools and call via POST /mcp/call.
+
+4. **Orchestrator Integration** — AgentOrchestrator._build_market_state() now
+   enriches token data with security metrics, whale data, sentiment, and portfolio
+   context via MCP tools before sending to the LLM.
+
+5. **Bulk Calls** — POST /mcp/bulk executes multiple tool calls in sequence,
+   useful for pre-flight data gathering before AI analysis.
+
+### Tool Implementations
+
+```python
+# Token Market Data (FREE)
+async def tool_get_token_price(token_address: str) -> dict:
+    """Jupiter Price API — no key required."""
+    resp = requests.get(JUPITER_PRICE, params={"ids": token_address})
+    data = resp.json().get("data", {}).get(token_address, {})
+    return {"price_usd": float(data.get("price", 0)), "source": "jupiter"}
+
+# Security Metrics (needs BIRDEYE_API_KEY)
+async def tool_get_token_security(token_address: str) -> dict:
+    """Birdeye security API — holder count, top holder %, creator %."""
+    r = requests.get(BIRDEYE_API + "/defi/v3/token/security",
+        headers={"X-API-KEY": birdeye_key},
+        params={"address": token_address})
+    d = r.json().get("data", {})
+    return {"holder_count": d.get("holderCount", 0),
+            "top_10_holder_pct": d.get("top10HolderPercent", 0)}
+
+# Portfolio State (internal)
+async def tool_get_portfolio_state() -> dict:
+    """Read paper_trades.jsonl — open positions, PnL, win rate."""
+    # Reads directly from data/paper_trading/paper_trades.jsonl
+    # No API needed — just file reads
+```
+
+### MCP Integration with Orchestrator
+
+```python
+# In AgentOrchestrator._build_market_state():
+if self.mcp_registry and address:
+    # Fetch security + whale + sentiment in parallel
+    sec_result = await self.mcp_registry.call_tool("get_token_security", ...)
+    whale_result = await self.mcp_registry.call_tool("get_whale_data", ...)
+    sent_result = await self.mcp_registry.call_tool("get_token_sentiment", ...)
+    state["mcp_security"] = sec_result.data
+    state["mcp_whale_data"] = whale_result.data
+    state["mcp_sentiment"] = sent_result.data
+```
+
+**Why it matters:** The AI agent now has standardized access to ALL platform data
+through a single protocol. Adding new data sources is a one-function registration.
+The HTTP server means any client (Bedrock, local scripts, dashboards) can query
+the platform's data without importing Python modules directly.
 
 ---
 

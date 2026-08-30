@@ -42,6 +42,13 @@ try:
 except ImportError:
     RISK_GUARD_AVAILABLE = False
 
+# MCP — external service connectivity (optional)
+try:
+    from src.mcp_registry import MCPRegistry, create_default_mcp_registry
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
 
 # ── Consensus Prompt for Micro-Cap Tokens ──────────────────────
 MICRO_CAP_PROMPT = """You are a professional Solana memecoin trading analyst.
@@ -55,6 +62,12 @@ MARKET CONTEXT:
 - This is a Solana memecoin discovered by our scanner
 - Trading via Jupiter DEX with ~$10-50 position sizes
 - Focus on: liquidity depth, buy pressure, momentum, safety
+- MCP data includes: security metrics, whale data, sentiment, portfolio state
+- If mcp_security is present, use holder_count and top_10_holder_pct for rug risk
+- If mcp_whale_data is present, use large_holders count for concentration risk
+- If mcp_sentiment is present, factor social sentiment into decision
+- If mcp_portfolio is present, consider current open positions and win rate
+- If mcp_risk is present, factor in recent rejection patterns
 
 Respond in EXACTLY this JSON format:
 {{
@@ -109,9 +122,7 @@ class AgentOrchestrator:
                 self.consensus = ConsensusEngine()
                 print("[ORCH] Consensus Engine connected")
             except Exception as e:
-                print("[ORCH] Consensus Engine unavailable: " + str(e))
-
-        # Risk guard
+                print("[ORCH] Consensus Engine unavailable: " + str(e))# Risk guard
         self.risk_guard = None
         if RISK_GUARD_AVAILABLE:
             try:
@@ -119,6 +130,16 @@ class AgentOrchestrator:
                 print("[ORCH] Risk Guard connected")
             except Exception as e:
                 print("[ORCH] Risk Guard unavailable: " + str(e))
+
+        # MCP — internal trading data tools (read-only)
+        self.mcp_registry = None
+        if MCP_AVAILABLE:
+            try:
+                self.mcp_registry = create_default_mcp_registry()
+                print("[ORCH] MCP Registry connected (" + str(len(self.mcp_registry.list_tool_names())) + " tools)")
+            except Exception as e:
+                print("[ORCH] MCP Registry unavailable: " + str(e))
+
 
         # Stats
         self._decisions = 0
@@ -231,10 +252,17 @@ class AgentOrchestrator:
         return None
 
     def _build_market_state(self, candidate_dict: Dict) -> Dict:
-        """Build a market state dict from candidate data for AI analysis."""
-        return {
-            "symbol": candidate_dict.get("symbol", "UNKNOWN"),
-            "token_address": candidate_dict.get("address", ""),
+        """Build a market state dict from candidate data for AI analysis.
+        
+        Enriches with MCP data: security metrics, whale data, portfolio context,
+        sentiment, and market context when MCP is available.
+        """
+        address = candidate_dict.get("address", "")
+        symbol = candidate_dict.get("symbol", "UNKNOWN")
+
+        state = {
+            "symbol": symbol,
+            "token_address": address,
             "price_usd": candidate_dict.get("price_usd", 0),
             "volume_24h": candidate_dict.get("volume_24h", 0),
             "volume_1h": candidate_dict.get("volume_1h", 0),
@@ -248,6 +276,61 @@ class AgentOrchestrator:
             "scanner_score": candidate_dict.get("score", 0),
             "scanner_signals": candidate_dict.get("signals", []),
         }
+
+        # Enrich with MCP tools when available
+        if self.mcp_registry and address:
+            try:
+                import concurrent.futures
+                # Fetch security + whale data in parallel via MCP
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                    sec_future = pool.submit(
+                        asyncio.run,
+                        self.mcp_registry.call_tool("get_token_security", {"token_address": address})
+                    )
+                    whale_future = pool.submit(
+                        asyncio.run,
+                        self.mcp_registry.call_tool("get_whale_data", {"token_address": address})
+                    )
+                    sent_future = pool.submit(
+                        asyncio.run,
+                        self.mcp_registry.call_tool("get_token_sentiment", {"symbol": symbol})
+                    )
+
+                    sec_result = sec_future.result()
+                    whale_result = whale_future.result()
+                    sent_result = sent_future.result()
+
+                if sec_result and sec_result.success and sec_result.data:
+                    state["mcp_security"] = sec_result.data
+                if whale_result and whale_result.success and whale_result.data:
+                    state["mcp_whale_data"] = whale_result.data
+                if sent_result and sent_result.success and sent_result.data:
+                    state["mcp_sentiment"] = sent_result.data
+
+                # Add portfolio context (existing positions)
+                port_result = asyncio.run(
+                    self.mcp_registry.call_tool("get_portfolio_state", {})
+                )
+                if port_result and port_result.success and port_result.data:
+                    state["mcp_portfolio"] = {
+                        "open_positions": port_result.data.get("open_count", 0),
+                        "win_rate": port_result.data.get("win_rate", 0),
+                        "total_pnl": port_result.data.get("total_pnl", 0),
+                    }
+
+                # Add risk state
+                risk_result = asyncio.run(
+                    self.mcp_registry.call_tool("get_risk_state", {})
+                )
+                if risk_result and risk_result.success and risk_result.data:
+                    state["mcp_risk"] = {
+                        "rejections_today": risk_result.data.get("rejections_today", 0),
+                    }
+
+            except Exception as e:
+                print("[ORCH] MCP enrichment error: " + str(e))
+
+        return state
 
     def _log_decision(self, decision, candidate_dict):
         log_path = self.data_dir / "orchestrator_events.jsonl"
@@ -297,6 +380,11 @@ class AgentOrchestrator:
             pass
 
     def get_stats(self):
+        mcp_tools = 0
+        mcp_calls = 0
+        if self.mcp_registry:
+            mcp_tools = len(self.mcp_registry.list_tool_names())
+            mcp_calls = len(self.mcp_registry.get_call_history())
         return {
             "total_decisions": self._decisions,
             "ai_approved": self._ai_approved,
@@ -305,4 +393,7 @@ class AgentOrchestrator:
             "bedrock_configured": BEDROCK_AVAILABLE and is_bedrock_configured() if BEDROCK_AVAILABLE else False,
             "consensus_available": CONSENSUS_AVAILABLE,
             "risk_guard_available": RISK_GUARD_AVAILABLE,
+            "mcp_available": MCP_AVAILABLE,
+            "mcp_tools": mcp_tools,
+            "mcp_calls": mcp_calls,
         }
