@@ -223,8 +223,12 @@ class MicroEngine:
         print("   Scan interval: " + str(SCAN_INTERVAL) + "s")
         print("=" * 60)
         print("")
+        self.telegram.set_paper_trader(self.paper)
+        self.telegram.set_capital(self.capital, self.capital)
         self.telegram.send_startup_message(self.capital, self.mode)
         last_exit_check = time.time()
+        last_heartbeat = time.time()
+        HEARTBEAT_INTERVAL = 1800  # 30 minutes
 
         while self._running:
             try:
@@ -233,9 +237,14 @@ class MicroEngine:
                 if candidates:
                     print("[ENGINE] Scan #" + str(self._scan_count) + ": Found " + str(len(candidates)) + " candidates")
                 if time.time() - last_exit_check >= EXIT_CHECK_INTERVAL:
-              
                     self._check_exits()
                     last_exit_check = time.time()
+                # Update capital in telegram
+                self.telegram.set_capital(self.capital, self.paper.capital)
+                # Heartbeat every 30 min
+                if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    self.telegram.notify_heartbeat()
+                    last_heartbeat = time.time()
                 if self._events:
                     self._log_events()
                 if self._scan_count % 5 == 0:
@@ -247,6 +256,7 @@ class MicroEngine:
                 self._running = False
             except Exception as e:
                 print("[ENGINE] Error: " + str(e))
+                self.telegram.notify_error(str(e), "engine_loop")
                 await asyncio.sleep(5)
 
         self._log_events()

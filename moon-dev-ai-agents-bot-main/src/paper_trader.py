@@ -109,6 +109,7 @@ class PaperTrader:
         self.open_positions[token_address] = trade
         self._log_trade(trade, "entry")
         print("[PAPER] BUY " + symbol + " $" + str(round(amount_usd, 2)) + " impact=" + str(round(price_impact, 2)) + "%")
+        self._print_capital_status()
         return trade
 
     def sell(self, token_address, reason="manual"):
@@ -133,6 +134,7 @@ class PaperTrader:
         self._log_trade(pos, "exit")
         sign = "+" if pnl_usd >= 0 else ""
         print("[PAPER] SELL " + pos.symbol + " " + sign + "$" + str(round(pnl_usd, 4)) + " (" + sign + str(round(pnl_pct, 1)) + "% - " + reason + ")")
+        self._print_capital_status()
         return pos
 
     def check_exits(self, stop_loss_pct=10.0, take_profit_pct=30.0):
@@ -174,6 +176,21 @@ class PaperTrader:
             "total_pnl": round(total_pnl, 4),
             "profit_factor": round(win_pnl / abs(loss_pnl), 2) if loss_pnl != 0 else 0,
         }
+
+    def _print_capital_status(self):
+        """Print capital status after every trade."""
+        s = self.get_stats()
+        pnl_sign = "+" if s["total_pnl"] >= 0 else ""
+        emoji = "UP" if s["total_pnl"] >= 0 else "DOWN"
+        print("")
+        print("  CAPITAL STATUS: $" + str(round(s["current_capital"], 2)) +
+              " | P&L: " + pnl_sign + "$" + str(round(s["total_pnl"], 2)) +
+              " | Trades: " + str(s["total_trades"]) +
+              " | Win Rate: " + str(s["win_rate"]) + "% | " + emoji)
+        if self.open_positions:
+            for addr, pos in self.open_positions.items():
+                print("    OPEN: " + pos.symbol + " $" + str(round(pos.amount_usd, 2)))
+        print("")
 
     def print_summary(self):
         s = self.get_stats()
