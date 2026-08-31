@@ -256,6 +256,24 @@ def _init_tables():
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # OHLCV candle storage for strategy analysis
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ohlcv_candles (
+                id SERIAL PRIMARY KEY,
+                token_address TEXT NOT NULL,
+                candle_time TIMESTAMPTZ NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL DEFAULT 0,
+                buys INTEGER DEFAULT 0,
+                sells INTEGER DEFAULT 0,
+                source TEXT DEFAULT 'dexscreener',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(token_address, candle_time)
+            )
+        """)
         # Indexes
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
@@ -275,6 +293,9 @@ def _init_tables():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
         conn.commit()
         print("[DB] Tables initialized")
 
@@ -882,3 +903,118 @@ def load_engine_state(key: str, default: str = None) -> str:
             return row["value"] if row else default
     except Exception:
         return default
+
+
+# ── OHLCV Candle Operations ─────────────────────────────────
+
+def save_ohlcv_candle(token_address: str, candle_time: str, open_p: float,
+                       high: float, low: float, close: float, volume: float = 0,
+                       buys: int = 0, sells: int = 0, source: str = "dexscreener"):
+    """Save or update an OHLCV candle. Uses UPSERT to avoid duplicates."""
+    pool = get_pool()
+    if not pool:
+        return
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO ohlcv_candles (token_address, candle_time, open, high, low, close,
+                    volume, buys, sells, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (token_address, candle_time) DO UPDATE SET
+                    high = GREATEST(ohlcv_candles.high, EXCLUDED.high),
+                    low = LEAST(ohlcv_candles.low, EXCLUDED.low),
+                    close = EXCLUDED.close,
+                    volume = ohlcv_candles.volume + EXCLUDED.volume,
+                    buys = ohlcv_candles.buys + EXCLUDED.buys,
+                    sells = ohlcv_candles.sells + EXCLUDED.sells
+            """, (token_address, candle_time, open_p, high, low, close,
+                  volume, buys, sells, source))
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] save_ohlcv_candle error: {e}")
+
+
+def save_ohlcv_candles_bulk(token_address: str, candles: list):
+    """Save multiple OHLCV candles in a single batch. candles = list of dicts."""
+    pool = get_pool()
+    if not pool or not candles:
+        return
+    try:
+        with pool.connection() as conn:
+            for c in candles:
+                conn.execute("""
+                    INSERT INTO ohlcv_candles (token_address, candle_time, open, high, low, close,
+                        volume, buys, sells, source)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (token_address, candle_time) DO UPDATE SET
+                        high = GREATEST(ohlcv_candles.high, EXCLUDED.high),
+                        low = LEAST(ohlcv_candles.low, EXCLUDED.low),
+                        close = EXCLUDED.close,
+                        volume = ohlcv_candles.volume + EXCLUDED.volume,
+                        buys = ohlcv_candles.buys + EXCLUDED.buys,
+                        sells = ohlcv_candles.sells + EXCLUDED.sells
+                """, (
+                    token_address, c["time"], c["open"], c["high"], c["low"], c["close"],
+                    c.get("volume", 0), c.get("buys", 0), c.get("sells", 0),
+                    c.get("source", "dexscreener"),
+                ))
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] save_ohlcv_candles_bulk error: {e}")
+
+
+def get_ohlcv_candles(token_address: str, hours: int = 24, limit: int = 200) -> list:
+    """Get OHLCV candles for a token from PostgreSQL."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT candle_time as "datetime", open as "Open", high as "High",
+                    low as "Low", close as "Close", volume as "Volume",
+                    buys, sells, source
+                FROM ohlcv_candles
+                WHERE token_address = %s
+                    AND candle_time >= NOW() - INTERVAL '%s hours'
+                ORDER BY candle_time ASC
+                LIMIT %s
+            """, (token_address, hours, limit)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_ohlcv_candles error: {e}")
+        return []
+
+
+def cleanup_old_candles(hours: int = 24):
+    """Delete OHLCV candles older than specified hours."""
+    pool = get_pool()
+    if not pool:
+        return
+    try:
+        with pool.connection() as conn:
+            result = conn.execute("""
+                DELETE FROM ohlcv_candles
+                WHERE candle_time < NOW() - INTERVAL '%s hours'
+            """, (hours,))
+            deleted = result.rowcount
+            conn.commit()
+            if deleted > 0:
+                print(f"[DB] Cleaned up {deleted} old OHLCV candles")
+    except Exception as e:
+        print(f"[DB] cleanup_old_candles error: {e}")
+
+
+def get_tracked_token_count() -> int:
+    """Get number of unique tokens with OHLCV data."""
+    pool = get_pool()
+    if not pool:
+        return 0
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT token_address) as count FROM ohlcv_candles"
+            ).fetchone()
+            return row["count"] if row else 0
+    except Exception:
+        return 0

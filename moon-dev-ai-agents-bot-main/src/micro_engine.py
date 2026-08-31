@@ -23,6 +23,20 @@ from src.telegram_reporter import get_telegram_reporter
 from src.lightweight_sentiment import get_lightweight_sentiment
 from src.async_scheduler import AsyncScheduler, JobStatus
 
+# Strategy Bridge — connects backtest strategies to live engine
+try:
+    from src.strategy_bridge import get_strategy_bridge
+    STRATEGY_BRIDGE_AVAILABLE = True
+except ImportError:
+    STRATEGY_BRIDGE_AVAILABLE = False
+
+# OHLCV Collector — builds candle history for strategy analysis
+try:
+    from src.ohlcv_collector import get_ohlcv_collector
+    OHLCV_COLLECTOR_AVAILABLE = True
+except ImportError:
+    OHLCV_COLLECTOR_AVAILABLE = False
+
 # Wallet Intelligence (smart money tracking)
 try:
     from src.wallet_tracker import WalletTracker
@@ -62,6 +76,26 @@ class MicroEngine:
         self._safe_trades = 0
         self._rug_blocked = 0
         self._ai_skipped = 0
+        self._strategy_boosts = 0
+
+        # Strategy Bridge — runs backtest strategies on candidates
+        self.strategy_bridge = None
+        if STRATEGY_BRIDGE_AVAILABLE:
+            try:
+                self.strategy_bridge = get_strategy_bridge()
+                print("[ENGINE] Strategy Bridge connected — backtest strategies active")
+            except Exception as e:
+                print("[ENGINE] Strategy Bridge unavailable: " + str(e))
+
+        # OHLCV Collector — builds candle history for strategy analysis
+        self.ohlcv_collector = None
+        if OHLCV_COLLECTOR_AVAILABLE:
+            try:
+                self.ohlcv_collector = get_ohlcv_collector()
+                print("[ENGINE] OHLCV Collector connected — building candle history")
+            except Exception as e:
+                print("[ENGINE] OHLCV Collector unavailable: " + str(e))
+
         self.data_dir = Path("src/data/micro_engine")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
@@ -327,6 +361,13 @@ class MicroEngine:
 
         print("[RUG] PASSED " + candidate.symbol + " - Risk: " + str(int(report.risk_score)) + "/100")
 
+        # Step 1.3: Register token with OHLCV collector for continuous data building
+        if self.ohlcv_collector:
+            try:
+                self.ohlcv_collector.track_token(candidate.address, candidate.pair_address)
+            except Exception as e:
+                print("[OHLCV] Register error for " + candidate.symbol + ": " + str(e))
+
         # Step 1.5: Quick sentiment check (non-blocking, uses cache)
         try:
             sent = self.sentiment.get_token_sentiment(candidate.symbol)
@@ -336,8 +377,40 @@ class MicroEngine:
         except Exception:
             pass
 
+        # Step 1.7: Strategy Bridge — run backtest strategies on live data
+        strategy_result = None
+        if self.strategy_bridge:
+            try:
+                strategy_result = self.strategy_bridge.analyze(
+                    token_address=candidate.address,
+                    symbol=candidate.symbol,
+                    pair_address=candidate.pair_address,
+                    candidate_metrics=candidate.to_dict(),
+                )
+                if strategy_result.combined_direction != "NEUTRAL":
+                    print("[STRATEGY] " + candidate.symbol + " -> " +
+                          strategy_result.combined_direction +
+                          " (strength=" + str(round(strategy_result.combined_strength, 2)) +
+                          ", conf=" + str(round(strategy_result.combined_confidence, 2)) +
+                          ", signals=" + str(len(strategy_result.signals)) + ")")
+                    # Log strategy event
+                    self._log_event_to_db("strategy/signal", {
+                        "token": candidate.address, "symbol": candidate.symbol,
+                        "direction": strategy_result.combined_direction,
+                        "strength": strategy_result.combined_strength,
+                        "confidence": strategy_result.combined_confidence,
+                        "signals": [s.strategy_name + ":" + s.direction for s in strategy_result.signals],
+                    })
+                    self._strategy_boosts += 1
+            except Exception as e:
+                print("[STRATEGY] Error analyzing " + candidate.symbol + ": " + str(e))
+
         # Step 2: AI Orchestrator decision (consensus + feedback loop)
-        decision = self.orchestrator.analyze_candidate(candidate.to_dict())
+        # Inject strategy signals into candidate data for the orchestrator
+        candidate_dict = candidate.to_dict()
+        if strategy_result:
+            candidate_dict["strategy_signals"] = strategy_result.to_dict()
+        decision = self.orchestrator.analyze_candidate(candidate_dict)
         ai_source = decision.get("source", "algorithmic")
         ai_action = decision.get("action", "SKIP")
         ai_confidence = decision.get("confidence", 0)
@@ -504,6 +577,15 @@ class MicroEngine:
                 interval_seconds=120,  # Each agent discovers every 2 min
             )
             print("[AGENT] Registered " + agent.name + " as background job", flush=True)
+
+        # Register OHLCV collector as background job (polls every 30s)
+        if self.ohlcv_collector:
+            self.scheduler.register(
+                name="ohlcv_poll",
+                fn=self.ohlcv_collector.poll_once,
+                interval_seconds=30,  # Poll every 30s to build candle history
+            )
+            print("[ENGINE] OHLCV Collector registered as background job (30s interval)", flush=True)
 
         # Start async scheduler for background jobs
         await self.scheduler.start()

@@ -95,12 +95,28 @@ Respond in EXACTLY this JSON format:
     "reasoning": "1-2 sentence explanation"
 }}
 
+STRATEGY SIGNALS (from backtest strategy engine):
+- strategy_signals contains real-time indicator analysis from validated backtest strategies
+- MomentumRejection: Stochastic crossovers + RSI + MACD momentum
+- ATRMeanReversion: Bollinger Bands + ATR volatility + mean reversion
+- VengeanceTrend: SMA trend + breakout detection + volume confirmation
+- PressureFlow: Buy/sell transaction ratio + volume momentum + liquidity depth
+- combined_direction: BUY/SELL/NEUTRAL — the weighted consensus of all strategies
+- combined_strength: 0-1 — how strong the signal is
+- combined_confidence: 0-1 — how confident the strategies agree
+- USE strategy signals as a STRONG confluence factor:
+  * BUY from strategies + positive AI analysis = HIGH confidence entry
+  * SELL from strategies + negative AI analysis = strong exit signal
+  * NEUTRAL from strategies = rely on other signals
+  * Conflicting strategy signals = reduce confidence
+
 RULES:
 - Be conservative — most memecoins are scams or rugs
 - Only suggest LONG if multiple factors align positively
 - Risk quality 0-100 where 100 = safest possible
 - When uncertain, output NO_TRADE with action SKIP
 - Smart money consensus is one of the strongest signals — weight it heavily
+- Strategy signals from backtest engine are a strong confluence — weight them heavily
 """
 
 
@@ -235,7 +251,25 @@ class AgentOrchestrator:
                 decision["action"] = "SKIP"
                 decision["reason"] = "Score too low: " + str(int(algo_score * 100)) + "/100 (min=" + str(int(min_algo_score * 100)) + ")"
 
-        # Step 2b: Paper-mode override — if AI skipped but score is strong,
+        # Step 2b: Strategy signal boost — if AI skipped but strategy signals agree
+        # on BUY with strong confidence, allow the trade. Strategies provide confluence.
+        strategy_signals = candidate_dict.get("strategy_signals", {})
+        strat_dir = strategy_signals.get("combined_direction", "NEUTRAL")
+        strat_conf = strategy_signals.get("combined_confidence", 0)
+        strat_strength = strategy_signals.get("combined_strength", 0)
+
+        if decision["action"] == "SKIP" and strat_dir == "BUY" and strat_conf >= 0.5:
+            decision["action"] = "BUY"
+            decision["confidence"] = max(strat_conf, 0.5)
+            decision["reason"] = (
+                "Strategy bridge override: AI skipped but backtest strategies signal BUY "
+                "(strength=" + str(round(strat_strength, 2)) +
+                ", conf=" + str(round(strat_conf, 2)) + ")"
+            )
+            decision["source"] = "strategy_bridge"
+            print("[ORCH] Strategy bridge override: BUY " + candidate_dict.get("symbol", "?"))
+
+        # Step 2c: Paper-mode override — if AI skipped but score is strong,
         # allow the trade anyway. Paper trading is for learning.
         if decision["action"] == "SKIP" and self.mode == "paper":
             algo_score = candidate_dict.get("score", 0) / 100.0
@@ -383,6 +417,18 @@ class AgentOrchestrator:
 
             except Exception as e:
                 print("[ORCH] MCP enrichment error: " + str(e))
+
+        # Strategy Bridge signals — from backtest strategy engine
+        strategy_signals = candidate_dict.get("strategy_signals")
+        if strategy_signals:
+            state["strategy_signals"] = {
+                "combined_direction": strategy_signals.get("combined_direction", "NEUTRAL"),
+                "combined_strength": strategy_signals.get("combined_strength", 0),
+                "combined_confidence": strategy_signals.get("combined_confidence", 0),
+                "data_source": strategy_signals.get("data_source", "none"),
+                "signal_count": strategy_signals.get("signal_count", 0),
+                "signals": strategy_signals.get("signals", []),
+            }
 
         return state
 
