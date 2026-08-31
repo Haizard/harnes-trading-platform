@@ -148,6 +148,7 @@ class PaperTrader:
         del self.open_positions[token_address]
         self._log_trade(pos, "exit")
         self._save_to_db(pos, "exit")
+        self._save_portfolio()
         sign = "+" if pnl_usd >= 0 else ""
         print("[PAPER] SELL " + pos.symbol + " " + sign + "$" + str(round(pnl_usd, 4)) + " (" + sign + str(round(pnl_pct, 1)) + "% - " + reason + ")")
         self._print_capital_status()
@@ -218,13 +219,15 @@ class PaperTrader:
             pass
 
     def restore_open_trades(self):
-        """Restore open positions from DB after a deploy restart."""
+        """Restore open positions from DB after a deploy restart.
+        Deducts capital for each restored position so cash balance is accurate."""
         try:
             from src.db_storage import get_trades
             open_trades = get_trades(status="open", limit=self.max_positions)
             if not open_trades:
                 return
             restored = 0
+            total_deducted = 0.0
             for t in open_trades:
                 addr = t.get("token_address", "")
                 if not addr or addr in self.open_positions:
@@ -247,9 +250,11 @@ class PaperTrader:
                     max_hold_hours=t.get("max_hold_hours", 12.0) if "max_hold_hours" in t else 12.0,
                 )
                 self.open_positions[addr] = trade
+                self.capital -= trade.amount_usd
+                total_deducted += trade.amount_usd
                 restored += 1
             if restored > 0:
-                print("[PAPER] Restored " + str(restored) + " open trade(s) from DB")
+                print("[PAPER] Restored " + str(restored) + " open trade(s) from DB — deducted $" + str(round(total_deducted, 2)) + " from capital")
                 self._print_capital_status()
         except Exception as e:
             print("[PAPER] Restore error: " + str(e))
@@ -260,9 +265,14 @@ class PaperTrader:
         total_pnl = sum(t.pnl_usd for t in self.closed_trades)
         win_pnl = sum(t.pnl_usd for t in self.closed_trades if t.pnl_usd > 0)
         loss_pnl = sum(t.pnl_usd for t in self.closed_trades if t.pnl_usd < 0)
+        # Total portfolio value = cash + open positions value
+        open_positions_value = sum(pos.amount_usd for pos in self.open_positions.values())
+        total_portfolio_value = self.capital + open_positions_value
         return {
             "initial_capital": self.initial_capital,
             "current_capital": round(self.capital, 4),
+            "open_positions_value": round(open_positions_value, 4),
+            "total_portfolio_value": round(total_portfolio_value, 4),
             "open_positions": len(self.open_positions),
             "total_trades": total,
             "wins": wins, "losses": total - wins,
@@ -271,13 +281,31 @@ class PaperTrader:
             "profit_factor": round(win_pnl / abs(loss_pnl), 2) if loss_pnl != 0 else 0,
         }
 
+    def _save_portfolio(self):
+        """Save portfolio state to DB after every trade."""
+        try:
+            from src.db_storage import save_portfolio
+            s = self.get_stats()
+            save_portfolio(
+                initial_capital=s["initial_capital"],
+                current_capital=s["current_capital"],
+                total_pnl=s["total_pnl"],
+                total_trades=s["total_trades"],
+                wins=s["wins"],
+                losses=s["losses"],
+            )
+        except Exception:
+            pass
+
     def _print_capital_status(self):
         """Print capital status after every trade."""
         s = self.get_stats()
         pnl_sign = "+" if s["total_pnl"] >= 0 else ""
         emoji = "UP" if s["total_pnl"] >= 0 else "DOWN"
         print("")
-        print("  CAPITAL STATUS: $" + str(round(s["current_capital"], 2)) +
+        print("  CAPITAL STATUS: Cash=$" + str(round(s["current_capital"], 2)) +
+              " | Open=$" + str(round(s["open_positions_value"], 2)) +
+              " | Total=$" + str(round(s["total_portfolio_value"], 2)) +
               " | P&L: " + pnl_sign + "$" + str(round(s["total_pnl"], 2)) +
               " | Trades: " + str(s["total_trades"]) +
               " | Win Rate: " + str(s["win_rate"]) + "% | " + emoji)
