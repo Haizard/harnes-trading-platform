@@ -95,6 +95,7 @@ class GuardStage:
 class RiskGuard:
     """
     DSH-style waterfall risk guard.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
 
     Orders flow through ordered stages:
     1. Minimum order size check
@@ -110,10 +111,11 @@ class RiskGuard:
     - modify: adjust order size, then pass to next stage
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, event_bus=None):
         self.stages: List[GuardStage] = []
         self.rejection_log: List[dict] = []
         self.config = config or {}
+        self.event_bus = event_bus  # DSH EventBus
         self._setup_defaults()
 
     def _setup_defaults(self):
@@ -197,7 +199,7 @@ class RiskGuard:
         )
 
     def _log_rejection(self, order: Order, stage: str, reason: str):
-        """Log a rejection for analysis."""
+        """Log a rejection for analysis + DSH persistence."""
         entry = {
             'timestamp': datetime.utcnow().isoformat(),
             'token': order.token,
@@ -209,6 +211,25 @@ class RiskGuard:
         }
         self.rejection_log.append(entry)
         self._persist_rejection(entry)
+        
+        # DSH: Save to PostgreSQL
+        try:
+            from src.db_storage import log_event
+            log_event("risk_guard/rejection", entry)
+        except Exception:
+            pass
+        
+        # DSH: Emit to EventBus
+        if self.event_bus:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self.event_bus.emit("risk_guard/rejection", entry))
+                else:
+                    loop.run_until_complete(self.event_bus.emit("risk_guard/rejection", entry))
+            except Exception:
+                pass
 
     def _persist_rejection(self, entry: dict):
         """Save rejection to CSV for analysis."""

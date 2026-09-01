@@ -44,12 +44,15 @@ class SafetyReport:
 
 
 class RugPullDetector:
-    """Detect rug-pull risk for Solana tokens using public RPC."""
+    """Detect rug-pull risk for Solana tokens using public RPC.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
+    """
 
-    def __init__(self, rpc_url=None):
+    def __init__(self, rpc_url=None, event_bus=None):
         self.rpc_url = rpc_url or SOLANA_RPC
         self._cache = {}
         self._cache_ttl = 300  # 5 minutes
+        self.event_bus = event_bus  # DSH EventBus
 
     def check(self, token_address: str) -> SafetyReport:
         """Full safety check for a token."""
@@ -93,6 +96,38 @@ class RugPullDetector:
 
         # Cache result
         self._cache[token_address] = (time.time(), report)
+        
+        # DSH: Log high-risk findings to DB
+        if report.risk_score >= 50:
+            try:
+                from src.db_storage import log_event
+                log_event("rug_check/result", {
+                    "token": token_address,
+                    "risk_score": report.risk_score,
+                    "is_safe": report.is_safe,
+                    "reasons": report.reasons,
+                })
+            except Exception:
+                pass
+            
+            # DSH: Emit to EventBus
+            if self.event_bus:
+                try:
+                    import asyncio
+                    payload = {
+                        "token": token_address,
+                        "risk_score": report.risk_score,
+                        "is_safe": report.is_safe,
+                        "reasons": report.reasons,
+                    }
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(self.event_bus.emit("rug_check/result", payload))
+                    else:
+                        loop.run_until_complete(self.event_bus.emit("rug_check/result", payload))
+                except Exception:
+                    pass
+        
         return report
 
     def _rpc_call(self, method, params):

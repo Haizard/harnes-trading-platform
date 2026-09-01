@@ -123,7 +123,7 @@ class LLMExitDecider:
                     pass
 
         try:
-            from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions
+            from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 
             # Build context
             indicators_str = json.dumps(indicators or {}, indent=2, default=str)
@@ -147,15 +147,14 @@ class LLMExitDecider:
                 market_context=f"Current time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
             )
 
-            import asyncio
-            response_obj = asyncio.run(bedrock_chat(
+            response_obj = bedrock_chat_sync(
                 [ChatMessage(role="user", content=prompt)],
                 ChatOptions(
                     system_prompt="You are Moon Dev's AI Trading Assistant. Respond only in JSON.",
                     max_tokens=200,
                     temperature=0.2,
                 ),
-            ))
+            )
 
             # Parse JSON response
             text = response_obj.text

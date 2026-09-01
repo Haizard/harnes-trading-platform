@@ -114,7 +114,7 @@ class AIOverrideEngine:
             }
 
         try:
-            from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions
+            from src.bedrock_llm import bedrock_chat_sync, ChatMessage, ChatOptions
 
             # Build positions text
             positions_text = "No open positions"
@@ -137,15 +137,14 @@ class AIOverrideEngine:
                 positions_data=positions_text,
             )
 
-            import asyncio
-            response_obj = asyncio.run(bedrock_chat(
+            response_obj = bedrock_chat_sync(
                 [ChatMessage(role="user", content=prompt)],
                 ChatOptions(
                     system_prompt="You are Moon Dev's Risk Management AI. Respond only in JSON.",
                     max_tokens=200,
                     temperature=0.2,
                 ),
-            ))
+            )
 
             # Parse JSON response
             text = response_obj.text

@@ -48,6 +48,7 @@ class OutcomeRecord:
 class TradeFeedbackLoop:
     """
     DSH-style feedback loop.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
 
     Records every signal and its outcome, then analyzes:
     1. Which factors actually predict profitable trades
@@ -58,13 +59,14 @@ class TradeFeedbackLoop:
     Stores to PostgreSQL when available, falls back to JSONL.
     """
 
-    def __init__(self, history_dir: str = None):
+    def __init__(self, history_dir: str = None, event_bus=None):
         self.history_dir = history_dir or os.path.join(
             os.path.dirname(__file__), 'data'
         )
         os.makedirs(self.history_dir, exist_ok=True)
         self.signals_path = os.path.join(self.history_dir, 'signal_history.jsonl')
         self.outcomes_path = os.path.join(self.history_dir, 'outcome_history.jsonl')
+        self.event_bus = event_bus  # DSH EventBus
         # Check DB availability
         self._db_available = False
         try:

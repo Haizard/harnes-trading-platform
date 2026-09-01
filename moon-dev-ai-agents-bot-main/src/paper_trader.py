@@ -143,7 +143,11 @@ class PaperTrader:
         pos.pnl_usd = round(pnl_usd, 4)
         pos.pnl_pct = round(pnl_pct, 2)
         pos.status = status
-        self.capital += pos.amount_usd + pnl_usd
+        # Safety: ensure capital never goes negative
+        returned = pos.amount_usd + pnl_usd
+        if returned < 0:
+            returned = 0  # Worst case: lose entire investment
+        self.capital += returned
         self.closed_trades.append(pos)
         del self.open_positions[token_address]
         self._log_trade(pos, "exit")

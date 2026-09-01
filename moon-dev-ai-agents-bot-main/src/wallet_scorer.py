@@ -92,6 +92,7 @@ class WalletScore:
 class WalletScorer:
     """
     Scores wallets based on their trading activity.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
 
     Reads swap events from wallet_activity.jsonl and computes:
     - Win rate (% of profitable trades)
@@ -107,11 +108,12 @@ class WalletScorer:
         all_scores = scorer.score_all_wallets()
     """
 
-    def __init__(self, data_dir: Path = None):
+    def __init__(self, data_dir: Path = None, event_bus=None):
         self.data_dir = data_dir or DATA_DIR
         self.activity_log = self.data_dir / "wallet_tracker" / "wallet_activity.jsonl"
         self.scores_path = self.data_dir / "wallet_tracker" / "wallet_scores.json"
         self.scores: Dict[str, WalletScore] = {}
+        self.event_bus = event_bus  # DSH EventBus
         self._load_scores()
 
     # ── Scoring ────────────────────────────────────────────────

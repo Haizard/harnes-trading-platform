@@ -41,16 +41,18 @@ class ExecutionRecord:
 class ExecutionTracker:
     """
     Tracks execution quality across all trades.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
 
     Stores to PostgreSQL when available, falls back to JSONL.
     """
 
-    def __init__(self, history_dir: str = None):
+    def __init__(self, history_dir: str = None, event_bus=None):
         self.history_dir = history_dir or os.path.join(
             os.path.dirname(__file__), 'data'
         )
         os.makedirs(self.history_dir, exist_ok=True)
         self.executions_path = os.path.join(self.history_dir, 'execution_history.jsonl')
+        self.event_bus = event_bus  # DSH EventBus
         # Check DB availability
         self._db_available = False
         try:

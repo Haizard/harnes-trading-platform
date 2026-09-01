@@ -54,9 +54,11 @@ NOISE_WORDS = [
 
 
 class LightweightSentiment:
-    """Track per-token Twitter sentiment without heavy ML dependencies."""
+    """Track per-token Twitter sentiment without heavy ML dependencies.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
+    """
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         self.data_dir = Path("src/data/sentiment")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sentiment_file = self.data_dir / "token_sentiment.json"
@@ -64,6 +66,7 @@ class LightweightSentiment:
         self.tweets_dir.mkdir(parents=True, exist_ok=True)
         self.cache = self._load_cache()
         self._client = None
+        self.event_bus = event_bus  # DSH EventBus
         print("[SENTIMENT] Lightweight Sentiment initialized (no torch required)")
 
     def _load_cache(self) -> dict:
@@ -252,6 +255,35 @@ class LightweightSentiment:
         # Cache result
         self.cache[cache_key] = result
         self._save_cache()
+        
+        # DSH: Save to PostgreSQL
+        try:
+            from src.db_storage import log_event
+            log_event("sentiment/token", {
+                "symbol": symbol.upper(),
+                "score": result.get("score", 0),
+                "label": result.get("label", "unknown"),
+                "tweet_count": result.get("tweet_count", 0),
+            })
+        except Exception:
+            pass
+        
+        # DSH: Emit to EventBus
+        if self.event_bus:
+            try:
+                import asyncio
+                payload = {
+                    "symbol": symbol.upper(),
+                    "score": result.get("score", 0),
+                    "label": result.get("label", "unknown"),
+                }
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self.event_bus.emit("sentiment/token", payload))
+                else:
+                    loop.run_until_complete(self.event_bus.emit("sentiment/token", payload))
+            except Exception:
+                pass
 
         return result
 

@@ -124,14 +124,14 @@ class MicroEngine:
         self.sniper = MicroSniper(capital=capital, mode=mode, rpc_url=rpc_url)
         self.mode = self.sniper.mode  # Sync mode (may fallback from live to paper)
         self.paper = PaperTrader(capital=capital)
-        self.rug_detector = RugPullDetector()
+        self.rug_detector = RugPullDetector(event_bus=self.event_bus)
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
         self.event_bus = self.orchestrator.event_bus
         # Scanner gets event_bus for DSH category agents
         self.scanner = TokenScanner(callback=self._on_candidate, event_bus=self.event_bus)
         self.telegram = get_telegram_reporter()
         self.telegram.set_paper_trader(self.paper)
-        self.sentiment = get_lightweight_sentiment()
+        self.sentiment = get_lightweight_sentiment(event_bus=self.event_bus)
         self._register_telegram_listeners()
         self._running = False
         self._scan_count = 0
@@ -146,7 +146,7 @@ class MicroEngine:
         self.strategy_bridge = None
         if STRATEGY_BRIDGE_AVAILABLE:
             try:
-                self.strategy_bridge = get_strategy_bridge()
+                self.strategy_bridge = get_strategy_bridge(event_bus=self.event_bus)
                 print("[ENGINE] Strategy Bridge connected — backtest strategies active")
             except Exception as e:
                 print("[ENGINE] Strategy Bridge unavailable: " + str(e))
@@ -185,7 +185,7 @@ class MicroEngine:
         if WALLET_INTEL_AVAILABLE:
             try:
                 self.wallet_tracker = WalletTracker(event_bus=self.event_bus)
-                self.wallet_scorer = WalletScorer()
+                self.wallet_scorer = WalletScorer(event_bus=self.event_bus)
                 self.smart_money_detector = SmartMoneyDetector(
                     tracker=self.wallet_tracker,
                     scorer=self.wallet_scorer,

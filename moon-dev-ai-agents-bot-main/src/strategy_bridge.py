@@ -1172,9 +1172,10 @@ class StrategyBridge:
         "DemandZone": 1.2,          # Demand/supply zones (from StructuralDemandReversal)
     }
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         self.fetcher = OHLCVFetcher()
         self.indicator_engine = IndicatorEngine()
+        self.event_bus = event_bus  # DSH EventBus
         self.strategies = [
             # Original strategies
             MomentumStrategy,
@@ -1272,6 +1273,38 @@ class StrategyBridge:
                 f"source={result.data_source}, signals={len(result.signals)})",
                 "green" if result.combined_direction == "BUY" else "red",
             )
+            
+            # DSH: Save non-NEUTRAL signals to DB
+            try:
+                from src.db_storage import log_event
+                log_event("strategy/signal", {
+                    "token": token_address,
+                    "symbol": symbol,
+                    "direction": result.combined_direction,
+                    "strength": result.combined_strength,
+                    "confidence": result.combined_confidence,
+                    "signals": [s.strategy_name + ":" + s.direction for s in result.signals],
+                })
+            except Exception:
+                pass
+            
+            # DSH: Emit to EventBus
+            if self.event_bus:
+                try:
+                    import asyncio
+                    payload = {
+                        "token": token_address,
+                        "symbol": symbol,
+                        "direction": result.combined_direction,
+                        "strength": result.combined_strength,
+                    }
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(self.event_bus.emit("strategy/signal", payload))
+                    else:
+                        loop.run_until_complete(self.event_bus.emit("strategy/signal", payload))
+                except Exception:
+                    pass
 
         return result
 
@@ -1347,10 +1380,10 @@ class StrategyBridge:
 # ── Singleton ──────────────────────────────────────────────
 _bridge_instance = None
 
-def get_strategy_bridge() -> StrategyBridge:
+def get_strategy_bridge(event_bus=None) -> StrategyBridge:
     """Get or create the singleton StrategyBridge instance."""
     global _bridge_instance
     if _bridge_instance is None:
-        _bridge_instance = StrategyBridge()
-        cprint("[STRATEGY_BRIDGE] ✨ Strategy Bridge initialized", "white", "on_green")
+        _bridge_instance = StrategyBridge(event_bus=event_bus)
+        cprint("[STRATEGY_BRIDGE] Strategy Bridge initialized", "white", "on_green")
     return _bridge_instance
