@@ -76,6 +76,82 @@ class TokenCandleStore:
         self._candle_interval = 300  # 5-minute candles
         self._last_update = 0
 
+        # Adaptive polling state
+        self._volatility_score: float = 0.0   # 0-1, higher = more volatile
+        self._activity_score: float = 0.0     # 0-1, higher = more active
+        self._recent_prices: list = []        # last 10 prices for volatility calc
+        self._poll_interval: float = 30.0     # seconds between polls (adaptive)
+        self._last_polled: float = 0.0        # timestamp of last poll
+        self._consecutive_no_data: int = 0    # how many polls returned nothing
+
+    def _update_volatility(self):
+        """Calculate volatility score from recent price changes (0-1)."""
+        if len(self._recent_prices) < 3:
+            self._volatility_score = 0.5  # default medium
+            return
+
+        # Calculate average absolute % change between consecutive prices
+        changes = []
+        for i in range(1, len(self._recent_prices)):
+            prev = self._recent_prices[i - 1]
+            curr = self._recent_prices[i]
+            if prev > 0:
+                pct = abs(curr - prev) / prev
+                changes.append(pct)
+
+        if not changes:
+            self._volatility_score = 0.0
+            return
+
+        avg_change = sum(changes) / len(changes)
+        # Normalize: 0% change = 0, 5%+ change = 1.0
+        self._volatility_score = min(1.0, avg_change / 0.05)
+
+    def _adjust_poll_interval(self):
+        """Adjust poll interval based on volatility and activity.
+        
+        High volatility + high activity → poll every 15s (fast)
+        Medium → poll every 30s (normal)
+        Low volatility + low activity → poll every 90s (slow)
+        """
+        # Combined score: volatility matters more
+        combined = (self._volatility_score * 0.7) + (self._activity_score * 0.3)
+
+        if combined > 0.7:
+            # Very active/volatile — poll fast
+            self._poll_interval = 15.0
+        elif combined > 0.4:
+            # Moderate — normal polling
+            self._poll_interval = 30.0
+        elif combined > 0.15:
+            # Low activity — slow polling
+            self._poll_interval = 60.0
+        else:
+            # Dead/stale — very slow polling
+            self._poll_interval = 90.0
+
+    def should_poll_now(self) -> bool:
+        """Check if enough time has passed since last poll based on adaptive interval."""
+        now = time.time()
+        return (now - self._last_polled) >= self._poll_interval
+
+    def mark_polled(self):
+        """Mark that this token was just polled."""
+        self._last_polled = time.time()
+
+    def is_dead(self, max_no_data_polls: int = 20) -> bool:
+        """Check if token is dead (no data for many consecutive polls)."""
+        return self._consecutive_no_data >= max_no_data_polls
+
+    def get_poll_info(self) -> dict:
+        """Get current polling stats for this token."""
+        return {
+            "volatility": round(self._volatility_score, 2),
+            "activity": round(self._activity_score, 2),
+            "interval": round(self._poll_interval, 1),
+            "no_data_count": self._consecutive_no_data,
+        }
+
     def add_tick(self, price: float, timestamp: float, volume: float = 0,
                  buys: int = 0, sells: int = 0, pair_address: str = ""):
         """Add a new price tick. Automatically buckets into candles."""
@@ -85,13 +161,11 @@ class TokenCandleStore:
         candle_start = int(timestamp // self._candle_interval) * self._candle_interval
 
         if self._current_candle is None:
-            # First tick — create new candle
             self._current_candle = Candle(
                 timestamp=candle_start, price=price,
                 volume=volume, buys=buys, sells=sells, pair_address=pair_address,
             )
         elif candle_start > self._current_candle.timestamp:
-            # New candle period — close current and start new
             self.candles.append(self._current_candle)
             if len(self.candles) > self.max_candles:
                 self.candles = self.candles[-self.max_candles:]
@@ -100,10 +174,23 @@ class TokenCandleStore:
                 volume=volume, buys=buys, sells=sells, pair_address=pair_address,
             )
         else:
-            # Same candle period — update
             self._current_candle.update(price, volume, buys, sells)
 
+        # Track recent prices for volatility
+        self._recent_prices.append(price)
+        if len(self._recent_prices) > 10:
+            self._recent_prices = self._recent_prices[-10:]
+
+        # Update activity score
+        if volume > 0:
+            self._activity_score = min(1.0, self._activity_score + 0.1)
+        else:
+            self._activity_score = max(0.0, self._activity_score - 0.02)
+
+        self._update_volatility()
+        self._adjust_poll_interval()
         self._last_update = time.time()
+        self._consecutive_no_data = 0
 
     def get_dataframe(self) -> Optional[pd.DataFrame]:
         """Get OHLCV DataFrame from accumulated candles."""
@@ -198,22 +285,40 @@ class OHLCVCollector:
 
     def poll_once(self) -> int:
         """
-        Poll DexScreener for all tracked tokens and update candle stores.
+        Poll DexScreener for tracked tokens using adaptive intervals.
+        High-volatility tokens poll every 15s, stale tokens every 90s.
+        Dead tokens (no data for 20+ polls) are auto-removed.
         Returns number of tokens updated.
         """
         self._poll_count += 1
         updated = 0
+        skipped = 0
+        dead_tokens = []
 
         for token_address, store in self.stores.items():
             try:
+                # Adaptive polling — skip if not time yet
+                if not store.should_poll_now():
+                    skipped += 1
+                    continue
+
+                store.mark_polled()
+
+                # Check if token is dead
+                if store.is_dead():
+                    dead_tokens.append(token_address)
+                    continue
+
                 # Get pair data from DexScreener
                 pair_data = self._fetch_pair(token_address)
                 if not pair_data:
+                    store._consecutive_no_data += 1
                     self._tokens_without_data += 1
                     continue
 
                 price = float(pair_data.get("priceUsd", 0) or 0)
                 if price <= 0:
+                    store._consecutive_no_data += 1
                     continue
 
                 # Extract volume and transaction data
@@ -231,7 +336,7 @@ class OHLCVCollector:
                 now = time.time()
                 store.add_tick(
                     price=price, timestamp=now,
-                    volume=vol_1h / 12,  # Distribute 1h volume across 5-min candles
+                    volume=vol_1h / 12,
                     buys=buys_1h // 12,
                     sells=sells_1h // 12,
                     pair_address=pair_addr,
@@ -246,6 +351,19 @@ class OHLCVCollector:
             except Exception as e:
                 cprint(f"[OHLCV] Poll error for {token_address[:8]}...: {e}", "yellow")
 
+        # Remove dead tokens
+        for addr in dead_tokens:
+            del self.stores[addr]
+            cprint(f"[OHLCV] Removed dead token {addr[:8]}... (no data for 20+ polls)", "yellow")
+
+        # Log adaptive stats every 20 polls
+        if self._poll_count % 20 == 0:
+            active = len(self.stores) - len(dead_tokens)
+            if active > 0:
+                intervals = [s._poll_interval for s in self.stores.values()]
+                avg_interval = sum(intervals) / len(intervals) if intervals else 30
+                cprint(f"[OHLCV] Adaptive: {updated} updated, {skipped} skipped, {active} active tokens, avg interval: {avg_interval:.0f}s", "cyan")
+
         # Cleanup old candles every 100 polls (~50 minutes)
         if self._poll_count % 100 == 0:
             if self._db_available:
@@ -254,7 +372,7 @@ class OHLCVCollector:
                     cleanup_old_candles(hours=24)
                 except Exception:
                     pass
-            self._save_all()  # Save local files too
+            self._save_all()
 
         return updated
 
@@ -285,14 +403,24 @@ class OHLCVCollector:
         return None
 
     def get_stats(self) -> dict:
-        """Get collector statistics."""
+        """Get collector statistics with adaptive polling info."""
         tokens_with_data = sum(1 for s in self.stores.values() if s.get_tick_count() >= 3)
+        intervals = [s._poll_interval for s in self.stores.values()]
+        volatilities = [s._volatility_score for s in self.stores.values()]
         return {
             "tracked_tokens": len(self.stores),
             "tokens_with_data": tokens_with_data,
             "total_polls": self._poll_count,
+            "avg_poll_interval": round(sum(intervals) / len(intervals), 1) if intervals else 30,
+            "avg_volatility": round(sum(volatilities) / len(volatilities), 2) if volatilities else 0,
+            "fast_tokens": sum(1 for i in intervals if i <= 15),
+            "slow_tokens": sum(1 for i in intervals if i >= 60),
             "candles_per_token": {
                 addr[:8]: s.get_tick_count()
+                for addr, s in self.stores.items()
+            },
+            "poll_info_per_token": {
+                addr[:8]: s.get_poll_info()
                 for addr, s in self.stores.items()
             },
         }
