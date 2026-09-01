@@ -317,8 +317,8 @@ class LightweightSentiment:
 # Singleton
 _sentiment_instance = None
 
-def get_lightweight_sentiment() -> LightweightSentiment:
+def get_lightweight_sentiment(event_bus=None) -> LightweightSentiment:
     global _sentiment_instance
     if _sentiment_instance is None:
-        _sentiment_instance = LightweightSentiment()
+        _sentiment_instance = LightweightSentiment(event_bus=event_bus)
     return _sentiment_instance
