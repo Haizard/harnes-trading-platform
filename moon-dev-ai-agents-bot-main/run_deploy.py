@@ -1,6 +1,20 @@
 import sys
 import os
 import time
+import subprocess
+
+# Force-install required packages if missing
+def ensure_package(name, version=None):
+    try:
+        __import__(name)
+    except ImportError:
+        pkg = f"{name}=={version}" if version else name
+        print(f"[SETUP] Installing {pkg}...", flush=True)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
+
+ensure_package("fastapi", "0.109.0")
+ensure_package("uvicorn", "0.25.0")
+ensure_package("pydantic", "2.5.3")
 
 print('=' * 60, flush=True)
 print('MOON DEV TRADING PLATFORM', flush=True)
