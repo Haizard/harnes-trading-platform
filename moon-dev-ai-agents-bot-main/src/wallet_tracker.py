@@ -111,6 +111,8 @@ class WalletTracker:
         self.wallets: Dict[str, dict] = {}  # address -> config
         self._last_poll: Dict[str, float] = {}  # address -> last poll time
         self._seen_sigs: Set[str] = set()   # already-processed signatures
+        self._last_swap_time: Dict[str, float] = {}  # wallet -> last swap timestamp
+        self._swap_cooldown = 5.0  # Minimum seconds between logged swaps per wallet
         self._load_wallets()
         self._load_seen_sigs()
         # Load poll state from DB (survives deploys)
@@ -187,17 +189,28 @@ class WalletTracker:
             except Exception as e:
                 print(f"[WALLET] Error polling {wallet_cfg.get('label', addr[:8])}: {e}")
 
-        # Persist new events
-        if new_events:
-            self._append_events(new_events)
-            # Emit to EventBus for DSH listeners (Session Log, Telegram, etc.)
-            self._emit_swap_events(new_events)
+        # Filter rapid-fire trades (MEV bot protection)
+        now = time.time()
+        filtered_events = []
+        for evt in new_events:
+            wallet = evt.wallet
+            last_time = self._last_swap_time.get(wallet, 0)
+            if (now - last_time) >= self._swap_cooldown:
+                filtered_events.append(evt)
+                self._last_swap_time[wallet] = now
+            # else: skip rapid-fire duplicate from same wallet
+
+        # Persist filtered events
+        if filtered_events:
+            self._append_events(filtered_events)
+            # Emit to EventBus for DSH listeners
+            self._emit_swap_events(filtered_events)
 
         # Persist poll state to DB
         if polled_any:
             self._save_poll_state_to_db()
 
-        return new_events
+        return filtered_events
 
     def _poll_single_wallet(self, wallet_address: str) -> List[SwapEvent]:
         """Poll a single wallet for recent swap transactions."""
@@ -346,6 +359,15 @@ class WalletTracker:
         if not all_mints:
             return None
 
+        # Also check wSOL (wrapped SOL) balance changes
+        wsol_change = 0
+        wsol_pre = wallet_pre.get(SOL_MINT, 0)
+        wsol_post = wallet_post.get(SOL_MINT, 0)
+        wsol_change = wsol_post - wsol_pre
+
+        # Combined SOL change: native + wrapped
+        total_sol_lamports = sol_change_lamports + int(wsol_change * 1e9)
+
         # Determine direction based on SOL movement and token balance changes
         for mint in all_mints:
             pre_bal = wallet_pre.get(mint, 0)
@@ -359,21 +381,26 @@ class WalletTracker:
                 direction = SwapDirection.BUY
                 amount_tokens = change
                 # SOL spent (negative change = spent)
-                amount_sol = abs(sol_change_lamports) / 1e9
+                amount_sol = abs(total_sol_lamports) / 1e9
             else:
                 direction = SwapDirection.SELL
                 amount_tokens = abs(change)
                 # SOL received (positive change = received)
-                amount_sol = sol_change_lamports / 1e9 if sol_change_lamports > 0 else 0
+                amount_sol = total_sol_lamports / 1e9 if total_sol_lamports > 0 else 0
 
-            # Rough price estimate
+            # Estimate from token value if SOL is 0
             price_usd = 0
             amount_usd = 0
-            if amount_tokens > 0 and amount_sol > 0:
-                # Assume SOL ≈ $150 for rough estimate (use Jupiter for better)
+            if amount_tokens > 0:
                 sol_usd = 150.0
-                amount_usd = amount_sol * sol_usd
-                price_usd = amount_usd / amount_tokens if amount_tokens else 0
+                if amount_sol > 0:
+                    amount_usd = amount_sol * sol_usd
+                    price_usd = amount_usd / amount_tokens if amount_tokens else 0
+                elif direction == SwapDirection.BUY and sol_change_lamports < 0:
+                    # SOL was spent but lamports math failed — estimate from balance change
+                    amount_sol = abs(sol_change_lamports) / 1e9
+                    amount_usd = amount_sol * sol_usd
+                    price_usd = amount_usd / amount_tokens if amount_tokens else 0
 
             timestamp = datetime.fromtimestamp(block_time, tz=timezone.utc).isoformat() if block_time else ""
 

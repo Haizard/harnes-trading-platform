@@ -359,7 +359,11 @@ class TokenScorer:
         elif c.volume_24h > 20000:
             s += 20; sig.append("Good 24h volume")
         elif c.volume_24h > 5000:
-            s += 10; sig.append("Moderate volume")
+            s += 15; sig.append("Moderate volume")
+        elif c.volume_24h > 1000:
+            s += 10; sig.append("Some volume")
+        elif c.volume_24h > 100:
+            s += 5; sig.append("Low volume")
 
         # Liquidity scoring (max 25)
         if c.liquidity_usd > 100000:
@@ -369,9 +373,11 @@ class TokenScorer:
         elif c.liquidity_usd > 20000:
             s += 15; sig.append("Adequate liquidity")
         elif c.liquidity_usd > 5000:
-            s += 10; sig.append("Low liquidity")
+            s += 12; sig.append("Low liquidity")
         elif c.liquidity_usd > 1000:
-            s += 5; sig.append("Very low liquidity")
+            s += 8; sig.append("Very low liquidity")
+        elif c.liquidity_usd > 100:
+            s += 5; sig.append("Micro liquidity")
 
         # Momentum scoring (max 20)
         if c.price_change_1h > 10:
@@ -379,7 +385,11 @@ class TokenScorer:
         elif c.price_change_1h > 5:
             s += 15; sig.append("Good 1h momentum")
         elif c.price_change_1h > 2:
-            s += 10; sig.append("Positive 1h momentum")
+            s += 12; sig.append("Positive 1h momentum")
+        elif c.price_change_1h > 0:
+            s += 8; sig.append("Slight uptrend")
+        elif c.price_change_1h > -5:
+            s += 3; sig.append("Flat/down 1h")
 
         # Buy/sell ratio scoring (max 15)
         total_txns = c.txns_1h_buys + c.txns_1h_sells
@@ -388,9 +398,13 @@ class TokenScorer:
             if buy_ratio > 0.7:
                 s += 15; sig.append("Strong buy pressure")
             elif buy_ratio > 0.55:
-                s += 10; sig.append("Buy-side dominant")
+                s += 12; sig.append("Buy-side dominant")
             elif buy_ratio > 0.45:
-                s += 5; sig.append("Balanced flow")
+                s += 8; sig.append("Balanced flow")
+            elif total_txns > 10:
+                s += 5; sig.append("Active trading")
+        elif c.txns_1h_buys > 0:
+            s += 10; sig.append("Buys only")
 
         # Market cap scoring (max 10) - prefer micro-caps
         if 0 < c.market_cap < 1000000:
@@ -398,13 +412,19 @@ class TokenScorer:
         elif 0 < c.market_cap < 5000000:
             s += 7; sig.append("Small-cap")
         elif 0 < c.market_cap < 20000000:
-            s += 3; sig.append("Mid-cap")
+            s += 5; sig.append("Mid-cap")
+        elif c.market_cap > 0:
+            s += 2; sig.append("Large-cap")
 
         # Category bonus (max 5) — trending/boosted tokens get a small edge
         if c.source == "trending":
             s += 5; sig.append("Trending category")
         elif c.source == "boosted":
             s += 3; sig.append("Boosted token")
+        elif c.source == "pump_fun":
+            s += 4; sig.append("Pump.fun launch")
+        elif c.source == "memecoin":
+            s += 3; sig.append("Memecoin")
 
         c.score = min(s, 100.0)
         c.signals = sig
