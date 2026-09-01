@@ -124,9 +124,9 @@ class MicroEngine:
         self.sniper = MicroSniper(capital=capital, mode=mode, rpc_url=rpc_url)
         self.mode = self.sniper.mode  # Sync mode (may fallback from live to paper)
         self.paper = PaperTrader(capital=capital)
-        self.rug_detector = RugPullDetector(event_bus=self.event_bus)
         self.orchestrator = AgentOrchestrator(capital=capital, mode=self.mode)
         self.event_bus = self.orchestrator.event_bus
+        self.rug_detector = RugPullDetector(event_bus=self.event_bus)
         # Scanner gets event_bus for DSH category agents
         self.scanner = TokenScanner(callback=self._on_candidate, event_bus=self.event_bus)
         self.telegram = get_telegram_reporter()
