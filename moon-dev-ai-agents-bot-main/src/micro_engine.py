@@ -981,6 +981,19 @@ class MicroEngine:
         print("[ENGINE] Mode: " + self.mode)
         print("[ENGINE] Capital: $" + str(self.capital))
 
+        # Start web dashboard in background
+        try:
+            import threading
+            import uvicorn
+            from src.web_dashboard import app as dashboard_app
+            def run_dashboard():
+                uvicorn.run(dashboard_app, host="0.0.0.0", port=8080, log_level="error")
+            dashboard_thread = threading.Thread(target=run_dashboard, daemon=True)
+            dashboard_thread.start()
+            print("[ENGINE] Web Dashboard started on port 8080")
+        except Exception as e:
+            print("[ENGINE] Dashboard unavailable: " + str(e))
+
         # Send startup notification to Telegram
         try:
             self.telegram.send_startup_message(self.capital, self.mode)
