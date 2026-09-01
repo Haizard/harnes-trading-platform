@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Ensure twikit is installed (sentiment analysis)
+# Ensure key packages are installed (even if cached layer misses them)
+RUN pip install --no-cache-dir fastapi==0.109.0 uvicorn==0.25.0 pydantic==2.5.3
 RUN pip install --no-cache-dir twikit==2.3.3
 
 # Copy application code
