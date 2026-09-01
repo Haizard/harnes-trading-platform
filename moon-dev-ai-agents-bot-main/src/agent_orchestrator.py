@@ -251,23 +251,76 @@ class AgentOrchestrator:
                 decision["action"] = "SKIP"
                 decision["reason"] = "Score too low: " + str(int(algo_score * 100)) + "/100 (min=" + str(int(min_algo_score * 100)) + ")"
 
-        # Step 2b: Strategy signal boost — if AI skipped but strategy signals agree
-        # on BUY with strong confidence, allow the trade. Strategies provide confluence.
+        # Step 2b: Multi-signal confluence — if AI skipped but multiple signals agree
+        # on BUY, allow the trade. Combined signals provide stronger confluence.
         strategy_signals = candidate_dict.get("strategy_signals", {})
+        prediction_signal = candidate_dict.get("prediction_signal", {})
+        chart_analysis = candidate_dict.get("chart_analysis", {})
+        ict_analysis = candidate_dict.get("ict_analysis", {})
+        sentiment = candidate_dict.get("sentiment", {})
+
+        # Count BUY signals from all sources
+        buy_votes = 0
+        total_votes = 0
+        vote_reasons = []
+
+        # Strategy bridge vote
         strat_dir = strategy_signals.get("combined_direction", "NEUTRAL")
         strat_conf = strategy_signals.get("combined_confidence", 0)
-        strat_strength = strategy_signals.get("combined_strength", 0)
+        if strat_dir != "NEUTRAL":
+            total_votes += 1
+            if strat_dir == "BUY" and strat_conf >= 0.5:
+                buy_votes += 1
+                vote_reasons.append("StrategyBridge BUY")
 
-        if decision["action"] == "SKIP" and strat_dir == "BUY" and strat_conf >= 0.5:
+        # Prediction engine vote
+        pred_signal = prediction_signal.get("signal", "HOLD")
+        pred_conf = prediction_signal.get("confidence", 0)
+        if pred_signal not in ("HOLD", "NEUTRAL", "ERROR"):
+            total_votes += 1
+            if pred_signal in ("BUY", "WEAK_BUY"):
+                buy_votes += 1
+                vote_reasons.append("PredictionEngine " + pred_signal)
+
+        # Chart analysis vote
+        chart_action = chart_analysis.get("action", "HOLD")
+        chart_conf = chart_analysis.get("confidence", 0)
+        if chart_action != "HOLD":
+            total_votes += 1
+            if chart_action == "BUY" and chart_conf >= 0.6:
+                buy_votes += 1
+                vote_reasons.append("ChartAnalysis BUY")
+
+        # ICT analysis vote
+        ict_signal = ict_analysis.get("signal", "HOLD")
+        ict_conf = ict_analysis.get("confidence", 0)
+        if ict_signal != "HOLD":
+            total_votes += 1
+            if ict_signal == "BUY" and ict_conf >= 0.5:
+                buy_votes += 1
+                vote_reasons.append("ICTAnalysis BUY")
+
+        # Sentiment vote
+        sent_score = sentiment.get("score", 0)
+        sent_label = sentiment.get("label", "neutral")
+        if sent_label not in ("neutral", "unknown"):
+            total_votes += 1
+            if sent_score > 0.2:
+                buy_votes += 1
+                vote_reasons.append("Sentiment BULLISH")
+
+        # Override decision if multiple signals agree on BUY
+        if decision["action"] == "SKIP" and buy_votes >= 2 and total_votes >= 3:
+            confluence = buy_votes / total_votes
             decision["action"] = "BUY"
-            decision["confidence"] = max(strat_conf, 0.5)
+            decision["confidence"] = min(0.5 + confluence * 0.4, 0.9)
             decision["reason"] = (
-                "Strategy bridge override: AI skipped but backtest strategies signal BUY "
-                "(strength=" + str(round(strat_strength, 2)) +
-                ", conf=" + str(round(strat_conf, 2)) + ")"
+                "Multi-signal override: " + str(buy_votes) + "/" + str(total_votes) +
+                " signals BUY — " + ", ".join(vote_reasons)
             )
-            decision["source"] = "strategy_bridge"
-            print("[ORCH] Strategy bridge override: BUY " + candidate_dict.get("symbol", "?"))
+            decision["source"] = "multi_signal"
+            print("[ORCH] Multi-signal override: BUY " + candidate_dict.get("symbol", "?") +
+                  " (" + str(buy_votes) + "/" + str(total_votes) + " votes)")
 
         # Step 2c: Paper-mode override — if AI skipped but score is strong,
         # allow the trade anyway. Paper trading is for learning.
@@ -428,6 +481,44 @@ class AgentOrchestrator:
                 "data_source": strategy_signals.get("data_source", "none"),
                 "signal_count": strategy_signals.get("signal_count", 0),
                 "signals": strategy_signals.get("signals", []),
+            }
+
+        # PredictionEngine v2 signals
+        prediction_signal = candidate_dict.get("prediction_signal")
+        if prediction_signal:
+            state["prediction_signal"] = {
+                "signal": prediction_signal.get("signal", "HOLD"),
+                "score": prediction_signal.get("score", 0),
+                "confidence": prediction_signal.get("confidence", 0),
+                "reasons": prediction_signal.get("reasons", []),
+            }
+
+        # Chart Analysis signals
+        chart_analysis = candidate_dict.get("chart_analysis")
+        if chart_analysis:
+            state["chart_analysis"] = {
+                "direction": chart_analysis.get("direction", "SIDEWAYS"),
+                "action": chart_analysis.get("action", "HOLD"),
+                "confidence": chart_analysis.get("confidence", 0),
+                "pattern": chart_analysis.get("pattern", "none"),
+            }
+
+        # ICT Analysis signals
+        ict_analysis = candidate_dict.get("ict_analysis")
+        if ict_analysis:
+            state["ict_analysis"] = {
+                "signal": ict_analysis.get("signal", "HOLD"),
+                "confidence": ict_analysis.get("confidence", 0),
+                "market_structure": ict_analysis.get("market_structure", {}),
+            }
+
+        # Sentiment signals
+        sentiment = candidate_dict.get("sentiment")
+        if sentiment:
+            state["sentiment"] = {
+                "score": sentiment.get("score", 0),
+                "label": sentiment.get("label", "neutral"),
+                "tweet_count": sentiment.get("tweet_count", 0),
             }
 
         return state
