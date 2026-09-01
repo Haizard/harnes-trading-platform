@@ -209,14 +209,13 @@ class StorageTierManager:
                     total_freed += rows * 200 / (1024 * 1024)
                     cprint(f"[TIER] Deleted {rows} engine events (>30 days)", "cyan")
 
-                # 7. Vacuum to reclaim space
-                conn.execute("VACUUM")
-                cprint("[TIER] VACUUM complete", "cyan")
-
         except Exception as e:
             cprint(f"[TIER] Cleanup error: {e}", "yellow")
             self._log_cleanup_end(cleanup_id, tables_cleaned, total_freed, error=str(e))
             return
+
+        # VACUUM must run outside transaction block — skip it (too risky)
+        # PostgreSQL auto-vacuums, and manual VACUUM causes issues in connection pools
 
         # Log cleanup end
         self._log_cleanup_end(cleanup_id, tables_cleaned, total_freed)

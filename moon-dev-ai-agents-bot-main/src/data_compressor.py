@@ -89,9 +89,7 @@ class DataCompressor:
                 total_rows += rows
                 total_saved += saved
 
-                # 5. Vacuum to reclaim space
-                conn.execute("VACUUM")
-                cprint("[COMPRESS] VACUUM complete", "cyan")
+                # VACUUM skipped — PostgreSQL auto-vacuums
 
         except Exception as e:
             cprint(f"[COMPRESS] Error: {e}", "yellow")
@@ -121,12 +119,10 @@ class DataCompressor:
                     SELECT token_address, 
                            date_trunc('hour', candle_time) + 
                            (extract(minute from candle_time)::int / 5 * 5 || ' minutes')::interval as bucket,
-                           FIRST(candle_time) as first_ts,
-                           LAST(candle_time) as last_ts,
-                           FIRST(open) as open_p,
+                           MIN(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
-                           LAST(close) as close_p,
+                           MAX(close) as close_p,
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '1m' 
@@ -165,10 +161,10 @@ class DataCompressor:
                     SELECT token_address, 
                            date_trunc('hour', candle_time) + 
                            (extract(minute from candle_time)::int / 15 * 15 || ' minutes')::interval as bucket,
-                           FIRST(open) as open_p,
+                           MIN(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
-                           LAST(close) as close_p,
+                           MAX(close) as close_p,
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '5m' 
@@ -205,10 +201,10 @@ class DataCompressor:
                 WITH old_15m AS (
                     SELECT token_address, 
                            date_trunc('hour', candle_time) as bucket,
-                           FIRST(open) as open_p,
+                           MIN(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
-                           LAST(close) as close_p,
+                           MAX(close) as close_p,
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '15m' 
