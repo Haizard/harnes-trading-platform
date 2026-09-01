@@ -199,13 +199,18 @@ class MicroEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
 
-        # DB availability
+        # DB availability — CRASH if DB unavailable (data must persist)
         self._db_available = False
         try:
             from src.db_storage import get_pool
             self._db_available = get_pool() is not None
         except Exception:
             pass
+
+        if not self._db_available:
+            cprint("[ENGINE] FATAL: Database unavailable! Cannot start without DB.", "white", "on_red")
+            cprint("[ENGINE] Check LUCERIS_DATABASE_URL and PostgreSQL status.", "white", "on_red")
+            raise RuntimeError("Database connection required — cannot start without persistent storage")
 
         # Restore engine counters from DB
         self._restore_counters_from_db()

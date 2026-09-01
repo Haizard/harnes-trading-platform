@@ -138,6 +138,12 @@ def start_engine():
         engine = MicroEngine(capital=capital)
         print("[ENGINE] Starting...", flush=True)
         asyncio.run(engine.run())
+    except RuntimeError as e:
+        # DB unavailable — crash so container restarts and retries
+        print(f"[ENGINE] FATAL: {e}", flush=True)
+        print("[ENGINE] Container will restart to retry DB connection...", flush=True)
+        import os
+        os._exit(1)
     except Exception as e:
         print(f"[ENGINE] Error: {e}", flush=True)
         import traceback

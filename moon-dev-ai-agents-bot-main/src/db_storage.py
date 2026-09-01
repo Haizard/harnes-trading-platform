@@ -64,12 +64,18 @@ def get_pool():
             kwargs={"row_factory": dict_row, "connect_timeout": 10},
         )
         print("[DB] Connected to PostgreSQL")
-        _init_tables()
-        return _pool
     except Exception as e:
         print(f"[DB] Connection failed: {e} — using JSON fallback")
-        _pool_failed = True  # Don't retry
+        _pool_failed = True
         return None
+
+    # Init tables separately — don't let table errors kill the pool
+    try:
+        _init_tables()
+    except Exception as e:
+        print(f"[DB] Table init error: {e}")
+
+    return _pool
 
 
 def _init_tables():
@@ -281,39 +287,45 @@ def _init_tables():
                 UNIQUE(token_address, candle_time)
             )
         """)
-        # Add timeframe column if missing (migration)
-        try:
-            conn.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
-            # Update unique constraint to include timeframe
-            conn.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
-            conn.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
-        except Exception:
-            pass  # Column already exists or constraint already updated
-        # Indexes
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON engine_events(event_type)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_symbol ON feedback_signals(symbol)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_time ON feedback_signals(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_signal ON feedback_outcomes(signal_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_time ON feedback_outcomes(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_symbol ON executions(symbol)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet ON wallet_events(wallet)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
-        conn.commit()
-        print("[DB] Tables initialized")
+    # Migration: Add timeframe column in a separate transaction
+    try:
+        with pool.connection() as conn2:
+            conn2.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
+            conn2.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
+            conn2.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
+            print("[DB] Timeframe migration complete")
+    except Exception as e:
+        print(f"[DB] Timeframe migration: {e}")
+
+    # Indexes (separate transaction so index errors don't kill the pool)
+    try:
+        with pool.connection() as conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON engine_events(event_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_symbol ON feedback_signals(symbol)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_time ON feedback_signals(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_signal ON feedback_outcomes(signal_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_time ON feedback_outcomes(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_symbol ON executions(symbol)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet ON wallet_events(wallet)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
+            conn.commit()
+            print("[DB] Tables initialized")
+    except Exception as e:
+        print(f"[DB] Index init error: {e}")
 
 
 # ── Trade Operations ─────────────────────────────────────────
