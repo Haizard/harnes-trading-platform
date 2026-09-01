@@ -45,6 +45,7 @@ class RiskEvent:
 class PortfolioRiskManager:
     """
     Portfolio-level risk management for MicroEngine.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
     
     Monitors total portfolio value and enforces circuit breakers:
     - Max loss: stops new trades if total loss exceeds threshold
@@ -53,10 +54,11 @@ class PortfolioRiskManager:
     - Circuit breaker: prevents new trades during risk events
     """
 
-    def __init__(self, initial_capital: float = 100.0, mode: str = "paper"):
+    def __init__(self, initial_capital: float = 100.0, mode: str = "paper", event_bus=None):
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.mode = mode
+        self.event_bus = event_bus  # DSH EventBus for inter-module communication
         
         # Risk limits (from config.py defaults)
         self.max_loss_usd = float(os.environ.get("MAX_LOSS_USD", "25"))
@@ -230,7 +232,7 @@ class PortfolioRiskManager:
             cprint("[RISK] AI Override DEACTIVATED", "yellow")
 
     def _emit_event(self, event: RiskEvent):
-        """Emit a risk event to listeners."""
+        """Emit a risk event to listeners + DB + EventBus (DSH pattern)."""
         self.events.append(event)
         
         # Keep only last 100 events
@@ -242,6 +244,27 @@ class PortfolioRiskManager:
             cprint(f"[RISK] CRITICAL: {event.message}", "white", "on_red")
         else:
             cprint(f"[RISK] WARNING: {event.message}", "yellow")
+        
+        # DSH: Save to PostgreSQL
+        try:
+            from src.db_storage import log_event
+            log_event("risk/event", event.to_dict())
+        except Exception:
+            pass
+        
+        # DSH: Emit to EventBus
+        if self.event_bus:
+            try:
+                import asyncio
+                from src.event_bus import Events
+                payload = event.to_dict()
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self.event_bus.emit("risk/event", payload))
+                else:
+                    loop.run_until_complete(self.event_bus.emit("risk/event", payload))
+            except Exception:
+                pass
         
         # Notify listeners
         for listener in self._listeners:
@@ -266,9 +289,9 @@ class PortfolioRiskManager:
 # ── Singleton ──────────────────────────────────────────────
 _risk_manager_instance = None
 
-def get_portfolio_risk_manager(initial_capital: float = 100.0, mode: str = "paper") -> PortfolioRiskManager:
+def get_portfolio_risk_manager(initial_capital: float = 100.0, mode: str = "paper", event_bus=None) -> PortfolioRiskManager:
     """Get or create the singleton PortfolioRiskManager instance."""
     global _risk_manager_instance
     if _risk_manager_instance is None:
-        _risk_manager_instance = PortfolioRiskManager(initial_capital=initial_capital, mode=mode)
+        _risk_manager_instance = PortfolioRiskManager(initial_capital=initial_capital, mode=mode, event_bus=event_bus)
     return _risk_manager_instance

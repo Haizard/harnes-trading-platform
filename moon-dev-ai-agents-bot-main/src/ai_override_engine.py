@@ -57,16 +57,18 @@ Respond in this exact JSON format:
 class AIOverrideEngine:
     """
     AI override decisions during risk events.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
     
     When PortfolioRiskManager detects a risk event, this module asks the LLM
     whether to close all positions or hold through the drawdown.
     """
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         self._available = False
         self._last_check: Optional[datetime] = None
         self._check_interval = timedelta(minutes=15)  # Don't spam LLM
         self._decisions: list = []
+        self.event_bus = event_bus  # DSH EventBus
         
         # Check if Bedrock is available
         try:
@@ -154,6 +156,29 @@ class AIOverrideEngine:
                 decision["source"] = "llm"
                 self._decisions.append(decision)
                 
+                # DSH: Log to DB
+                try:
+                    from src.db_storage import log_event
+                    log_event("override/decision", {
+                        "risk_event_type": risk_event_type,
+                        **decision,
+                    })
+                except Exception:
+                    pass
+                
+                # DSH: Emit to EventBus
+                if self.event_bus:
+                    try:
+                        import asyncio
+                        payload = {"risk_event_type": risk_event_type, **decision}
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.ensure_future(self.event_bus.emit("override/decision", payload))
+                        else:
+                            loop.run_until_complete(self.event_bus.emit("override/decision", payload))
+                    except Exception:
+                        pass
+                
                 if decision.get("decision") == "OVERRIDE":
                     cprint(
                         f"[OVERRIDE] AI OVERRIDES {risk_event_type}: "
@@ -195,9 +220,9 @@ class AIOverrideEngine:
 # ── Singleton ──────────────────────────────────────────────
 _override_instance = None
 
-def get_ai_override_engine() -> AIOverrideEngine:
+def get_ai_override_engine(event_bus=None) -> AIOverrideEngine:
     """Get or create the singleton AIOverrideEngine instance."""
     global _override_instance
     if _override_instance is None:
-        _override_instance = AIOverrideEngine()
+        _override_instance = AIOverrideEngine(event_bus=event_bus)
     return _override_instance

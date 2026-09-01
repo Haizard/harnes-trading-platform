@@ -208,7 +208,7 @@ class MicroEngine:
         self.portfolio_risk = None
         if PORTFOLIO_RISK_AVAILABLE:
             try:
-                self.portfolio_risk = get_portfolio_risk_manager(initial_capital=capital, mode=self.mode)
+                self.portfolio_risk = get_portfolio_risk_manager(initial_capital=capital, mode=self.mode, event_bus=self.event_bus)
                 print("[ENGINE] Portfolio Risk Manager connected — circuit breaker active")
             except Exception as e:
                 print("[ENGINE] Portfolio Risk Manager unavailable: " + str(e))
@@ -235,7 +235,7 @@ class MicroEngine:
         self.exit_decider = None
         if LLM_EXIT_AVAILABLE:
             try:
-                self.exit_decider = get_llm_exit_decider()
+                self.exit_decider = get_llm_exit_decider(event_bus=self.event_bus)
                 print("[ENGINE] LLM Exit Decider connected — AI exits active")
             except Exception as e:
                 print("[ENGINE] LLM Exit Decider unavailable: " + str(e))
@@ -244,7 +244,7 @@ class MicroEngine:
         self.override_engine = None
         if AI_OVERRIDE_AVAILABLE:
             try:
-                self.override_engine = get_ai_override_engine()
+                self.override_engine = get_ai_override_engine(event_bus=self.event_bus)
                 print("[ENGINE] AI Override Engine connected — risk overrides active")
             except Exception as e:
                 print("[ENGINE] AI Override Engine unavailable: " + str(e))
@@ -253,7 +253,7 @@ class MicroEngine:
         self.full_sentiment = None
         if FULL_SENTIMENT_AVAILABLE:
             try:
-                self.full_sentiment = get_full_sentiment_agent()
+                self.full_sentiment = get_full_sentiment_agent(event_bus=self.event_bus)
                 print("[ENGINE] Full SentimentAgent connected — BERTweet ML active")
             except Exception as e:
                 print("[ENGINE] Full SentimentAgent unavailable: " + str(e))

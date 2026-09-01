@@ -56,14 +56,16 @@ Respond in this exact JSON format:
 class LLMExitDecider:
     """
     AI-driven exit decisions for open positions.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
     
     Instead of only fixed SL/TP, this asks the LLM to analyze each position
     and decide whether to exit or hold based on market conditions.
     """
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         self._available = False
         self._decisions: List[dict] = []
+        self.event_bus = event_bus  # DSH EventBus
         
         # Check if Bedrock is available
         try:
@@ -95,6 +97,30 @@ class LLMExitDecider:
                 "reason": "LLM not available — using fixed SL/TP",
                 "source": "fallback",
             }
+        
+        # DSH: Log decision to DB
+        def _log_decision(decision):
+            try:
+                from src.db_storage import log_event
+                log_event("llm_exit/decision", {
+                    "symbol": position_data.get("symbol", ""),
+                    **decision,
+                })
+            except Exception:
+                pass
+            
+            # DSH: Emit to EventBus
+            if self.event_bus:
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    payload = {"symbol": position_data.get("symbol", ""), **decision}
+                    if loop.is_running():
+                        asyncio.ensure_future(self.event_bus.emit("llm_exit/decision", payload))
+                    else:
+                        loop.run_until_complete(self.event_bus.emit("llm_exit/decision", payload))
+                except Exception:
+                    pass
 
         try:
             from src.bedrock_llm import bedrock_chat, ChatMessage, ChatOptions
@@ -139,6 +165,7 @@ class LLMExitDecider:
                 decision = json.loads(text[start:end])
                 decision["source"] = "llm"
                 self._decisions.append(decision)
+                _log_decision(decision)
                 return decision
 
         except Exception as e:
@@ -166,9 +193,9 @@ class LLMExitDecider:
 # ── Singleton ──────────────────────────────────────────────
 _exit_decider_instance = None
 
-def get_llm_exit_decider() -> LLMExitDecider:
+def get_llm_exit_decider(event_bus=None) -> LLMExitDecider:
     """Get or create the singleton LLMExitDecider instance."""
     global _exit_decider_instance
     if _exit_decider_instance is None:
-        _exit_decider_instance = LLMExitDecider()
+        _exit_decider_instance = LLMExitDecider(event_bus=event_bus)
     return _exit_decider_instance

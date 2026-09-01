@@ -75,6 +75,7 @@ NOISE_WORDS = [
 class FullSentimentAgent:
     """
     Full sentiment analysis with BERTweet ML model + Twitter scraping.
+    DSH Pattern: EventBus events + PostgreSQL persistence.
     
     Priority:
       1. BERTweet ML model (if torch + transformers installed)
@@ -82,13 +83,14 @@ class FullSentimentAgent:
       3. Cached results (fast)
     """
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         self.data_dir = Path("src/data/sentiment")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sentiment_file = self.data_dir / "token_sentiment.json"
         self.cache = self._load_cache()
         self._client = None
         self._model_loaded = False
+        self.event_bus = event_bus  # DSH EventBus
         
         # Try to load BERTweet model
         if _BERTWEET_AVAILABLE:
@@ -295,6 +297,26 @@ class FullSentimentAgent:
             "green" if score > 0.1 else ("red" if score < -0.1 else "yellow")
         )
         
+        # DSH: Save to PostgreSQL
+        try:
+            from src.db_storage import log_event
+            log_event("sentiment/token", result)
+        except Exception:
+            pass
+        
+        # DSH: Emit to EventBus
+        if self.event_bus:
+            try:
+                import asyncio
+                from src.event_bus import Events
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self.event_bus.emit("sentiment/token", result))
+                else:
+                    loop.run_until_complete(self.event_bus.emit("sentiment/token", result))
+            except Exception:
+                pass
+        
         return result
 
     def get_stats(self) -> dict:
@@ -309,9 +331,9 @@ class FullSentimentAgent:
 # ── Singleton ──────────────────────────────────────────────
 _sentiment_instance = None
 
-def get_full_sentiment_agent() -> FullSentimentAgent:
+def get_full_sentiment_agent(event_bus=None) -> FullSentimentAgent:
     """Get or create the singleton FullSentimentAgent instance."""
     global _sentiment_instance
     if _sentiment_instance is None:
-        _sentiment_instance = FullSentimentAgent()
+        _sentiment_instance = FullSentimentAgent(event_bus=event_bus)
     return _sentiment_instance
