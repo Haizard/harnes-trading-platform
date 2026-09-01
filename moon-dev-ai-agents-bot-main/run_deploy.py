@@ -12,19 +12,34 @@ print('=' * 60, flush=True)
 # Start HTTP server on the PORT Northflank gives us
 port = int(os.environ.get("PORT", "8000"))
 
-try:
-    import uvicorn
-    from src.web_dashboard import app as dashboard_app
-    print(f"Binding FastAPI dashboard to 0.0.0.0:{port}", flush=True)
-    # Run dashboard in a thread so we can start the engine too
-    import threading
-    def run_dashboard():
+import threading
+
+def start_dashboard():
+    """Start the web dashboard. Returns True if successful."""
+    try:
+        import uvicorn
+        from src.web_dashboard import app as dashboard_app
+        print(f"[DASHBOARD] Starting FastAPI dashboard on port {port}...", flush=True)
         uvicorn.run(dashboard_app, host="0.0.0.0", port=port, log_level="error")
-    dashboard_thread = threading.Thread(target=run_dashboard, daemon=True)
+        return True
+    except Exception as e:
+        print(f"[DASHBOARD] Failed: {e}", flush=True)
+        return False
+
+# Try dashboard first, fallback to simple server
+dashboard_ok = False
+try:
+    # Quick import test
+    from src.web_dashboard import app
+    print(f"[DASHBOARD] Import OK, starting server...", flush=True)
+    dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
     dashboard_thread.start()
-    print(f"Dashboard running on port {port}", flush=True)
+    time.sleep(1)  # Give it a moment to start
+    dashboard_ok = True
 except Exception as e:
-    print(f"Dashboard fallback: {e}", flush=True)
+    print(f"[DASHBOARD] Import failed: {e}", flush=True)
+
+if not dashboard_ok:
     # Fallback: simple health check server
     from http.server import HTTPServer, BaseHTTPRequestHandler
     class Handler(BaseHTTPRequestHandler):
@@ -36,7 +51,7 @@ except Exception as e:
         def log_message(self, format, *args):
             pass
     server = HTTPServer(("0.0.0.0", port), Handler)
-    print(f"Simple server running on port {port}", flush=True)
+    print(f"[DASHBOARD] Fallback: Simple server on port {port}", flush=True)
 
 sys.stdout.flush()
 
