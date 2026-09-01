@@ -37,7 +37,7 @@ class HumanFeedbackSystem:
         record = FeedbackRecord(trade_id=trade_id, rating=rating, category=category,
                                comment=comment, trader_confidence=confidence)
         with open(self.feedback_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(record.to_dict()) + '\n')
+            f.write(json.dumps(record.to_dict(), default=str) + '\n')
 
     def get_feedback(self, category: str = None, days: int = 30) -> List[dict]:
         if not os.path.exists(self.feedback_path):

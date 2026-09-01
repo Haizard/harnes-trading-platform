@@ -526,7 +526,7 @@ class WeightedPredictor:
                 'factors': factors,
             }
             with open(self.history_path, 'a') as f:
-                f.write(json.dumps(entry) + '\n')
+                f.write(json.dumps(entry, default=str) + '\n')
         except Exception:
             pass  # Don't crash on logging failure
 

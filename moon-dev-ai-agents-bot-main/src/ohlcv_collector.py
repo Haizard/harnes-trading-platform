@@ -368,7 +368,7 @@ class OHLCVCollector:
                 "saved_at": time.time(),
             }
             with open(filepath, "w") as f:
-                json.dump(data, f)
+                json.dump(data, f, default=str)
         except Exception as e:
             cprint(f"[OHLCV] Save error for {token_address[:8]}...: {e}", "yellow")
 

@@ -333,7 +333,7 @@ def save_trade(trade_dict: dict, mode: str = "paper") -> Optional[int]:
                 trade_dict.get("status", "open"),
                 trade_dict.get("score", 0),
                 mode,
-                json.dumps(trade_dict.get("signals", [])),
+                json.dumps(trade_dict.get("signals", []), default=str),
                 trade_dict.get("ai_confidence", 0),
             )).fetchone()
             conn.commit()

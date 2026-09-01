@@ -67,6 +67,7 @@ class MicroEngine:
         # Scanner gets event_bus for DSH category agents
         self.scanner = TokenScanner(callback=self._on_candidate, event_bus=self.event_bus)
         self.telegram = get_telegram_reporter()
+        self.telegram.set_paper_trader(self.paper)
         self.sentiment = get_lightweight_sentiment()
         self._register_telegram_listeners()
         self._running = False
@@ -240,6 +241,8 @@ class MicroEngine:
                 wins=stats["wins"],
                 losses=stats["losses"],
             )
+            # Sync capital to Telegram reporter
+            self.telegram.set_capital(stats["initial_capital"], stats["current_capital"])
         except Exception:
             pass
 

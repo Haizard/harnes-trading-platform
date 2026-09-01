@@ -116,6 +116,15 @@ class TelegramReporter:
         except Exception:
             pass
 
+    def _persist_capital(self):
+        """Save current capital to DB and update set_capital."""
+        try:
+            from src.db_storage import save_engine_state
+            save_engine_state("tg_current_capital", str(self.current_capital))
+            save_engine_state("tg_initial_capital", str(self.initial_capital))
+        except Exception:
+            pass
+
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
         """Send a message via Telegram."""
         if not self.enabled:
@@ -306,6 +315,10 @@ class TelegramReporter:
             text += f"Score: {score}/100\n"
         if ai_confidence > 0:
             text += f"AI Confidence: {ai_confidence:.0%}\n"
+        # Update capital (deduct investment)
+        self.current_capital -= amount_usd
+        self._persist_capital()
+
         text += f"Capital: ${self.current_capital:.2f}\n"
         text += f"Time: {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
 
@@ -330,6 +343,10 @@ class TelegramReporter:
         """Notify when a trade is closed."""
         profit_emoji = "WIN" if pnl_usd >= 0 else "LOSS"
         pnl_sign = "+" if pnl_usd >= 0 else ""
+
+        # Update capital (return investment + pnl)
+        self.current_capital += amount_usd + pnl_usd
+        self._persist_capital()
 
         text = (
             f"EXIT [{profit_emoji}] {symbol}\n\n"

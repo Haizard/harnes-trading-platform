@@ -562,7 +562,7 @@ class TokenScanner:
     def _log_candidate(self, c):
         log_path = self.data_dir / "scanner_results.jsonl"
         with open(log_path, "a") as f:
-            f.write(json.dumps(c.to_dict()) + chr(10))
+            f.write(json.dumps(c.to_dict(), default=str) + chr(10))
 
     def start(self, interval_seconds=30):
         """Start background scanning thread."""

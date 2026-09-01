@@ -24,12 +24,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(self._get_stats()).encode())
+            self.wfile.write(json.dumps(self._get_stats(), default=str).encode())
         elif self.path == "/api/trades":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(self._get_recent_trades()).encode())
+            self.wfile.write(json.dumps(self._get_recent_trades(), default=str).encode())
         else:
             self.send_response(404)
             self.end_headers()

@@ -417,7 +417,7 @@ class MicroSniper:
         # Keep JSONL as backup, but DB is primary
         with open(self.data_dir / "positions.jsonl", "a") as f:
             f.write(json.dumps({"action": action, "timestamp": datetime.now(timezone.utc).isoformat(),
-                "mode": self.mode, **pos.to_dict()}) + chr(10))
+                "mode": self.mode, **pos.to_dict()}, default=str) + chr(10))
 
     def _save_to_db(self, trade, action):
         """Save trade to PostgreSQL if available."""

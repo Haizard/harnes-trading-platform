@@ -200,7 +200,7 @@ class PaperTrader:
         with open(log_path, "a") as f:
             data = {"action": action, "timestamp": datetime.now(timezone.utc).isoformat()}
             data.update(trade.to_dict())
-            f.write(json.dumps(data) + chr(10))
+            f.write(json.dumps(data, default=str) + chr(10))
 
     def _save_to_db(self, trade, action):
         """Save trade to PostgreSQL if available."""
