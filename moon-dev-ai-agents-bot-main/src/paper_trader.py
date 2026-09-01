@@ -297,6 +297,38 @@ class PaperTrader:
         except Exception:
             pass
 
+    def get_positions_for_risk(self) -> dict:
+        """Get all open positions formatted for risk management systems."""
+        positions = {}
+        for addr, pos in self.open_positions.items():
+            cur = self.get_real_price(addr)
+            pnl_pct = 0.0
+            pnl_usd = 0.0
+            if cur and pos.entry_price > 0:
+                pnl_pct = ((cur - pos.entry_price) / pos.entry_price * 100)
+                pnl_usd = pos.amount_usd * (pnl_pct / 100)
+            
+            try:
+                from datetime import datetime, timezone
+                entry_dt = datetime.fromisoformat(pos.entry_time.replace("+00:00", "+00:00"))
+                hours_held = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+            except Exception:
+                hours_held = 0
+            
+            positions[addr] = {
+                "symbol": pos.symbol,
+                "amount_usd": pos.amount_usd,
+                "entry_price": pos.entry_price,
+                "current_price": cur or pos.entry_price,
+                "pnl_pct": round(pnl_pct, 2),
+                "pnl_usd": round(pnl_usd, 4),
+                "hours_held": round(hours_held, 1),
+                "stop_loss_pct": pos.stop_loss_pct,
+                "take_profit_pct": pos.take_profit_pct,
+                "category": pos.category,
+            }
+        return positions
+
     def _print_capital_status(self):
         """Print capital status after every trade."""
         s = self.get_stats()

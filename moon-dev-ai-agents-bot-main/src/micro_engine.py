@@ -46,6 +46,41 @@ try:
 except ImportError:
     WALLET_INTEL_AVAILABLE = False
 
+# Portfolio Risk Manager — circuit breaker, max loss/gain, min balance
+try:
+    from src.portfolio_risk_manager import get_portfolio_risk_manager
+    PORTFOLIO_RISK_AVAILABLE = True
+except ImportError:
+    PORTFOLIO_RISK_AVAILABLE = False
+
+# PredictionEngine v2 — multi-factor scoring
+try:
+    from src.prediction_engine_v2 import get_prediction_engine
+    PREDICTION_V2_AVAILABLE = True
+except ImportError:
+    PREDICTION_V2_AVAILABLE = False
+
+# Feature Engineer — microstructure features
+try:
+    from src.feature_engineer import get_feature_engineer
+    FEATURE_ENGINEER_AVAILABLE = True
+except ImportError:
+    FEATURE_ENGINEER_AVAILABLE = False
+
+# LLM Exit Decider — AI-driven exits
+try:
+    from src.llm_exit_decider import get_llm_exit_decider
+    LLM_EXIT_AVAILABLE = True
+except ImportError:
+    LLM_EXIT_AVAILABLE = False
+
+# AI Override Engine — override decisions during risk events
+try:
+    from src.ai_override_engine import get_ai_override_engine
+    AI_OVERRIDE_AVAILABLE = True
+except ImportError:
+    AI_OVERRIDE_AVAILABLE = False
+
 DEFAULT_CAPITAL = 100.0
 SCAN_INTERVAL = 30
 EXIT_CHECK_INTERVAL = 10
@@ -140,6 +175,51 @@ class MicroEngine:
                 print("[ENGINE] Wallet Intelligence ENABLED — tracking " + str(wallet_count) + " wallets")
             except Exception as e:
                 print("[ENGINE] Wallet Intelligence unavailable: " + str(e))
+
+        # Portfolio Risk Manager — circuit breaker, max loss/gain, min balance
+        self.portfolio_risk = None
+        if PORTFOLIO_RISK_AVAILABLE:
+            try:
+                self.portfolio_risk = get_portfolio_risk_manager(initial_capital=capital, mode=self.mode)
+                print("[ENGINE] Portfolio Risk Manager connected — circuit breaker active")
+            except Exception as e:
+                print("[ENGINE] Portfolio Risk Manager unavailable: " + str(e))
+
+        # PredictionEngine v2 — multi-factor scoring
+        self.prediction_engine = None
+        if PREDICTION_V2_AVAILABLE:
+            try:
+                self.prediction_engine = get_prediction_engine()
+                print("[ENGINE] PredictionEngine v2 connected — multi-factor signals active")
+            except Exception as e:
+                print("[ENGINE] PredictionEngine v2 unavailable: " + str(e))
+
+        # Feature Engineer — microstructure features
+        self.feature_engineer = None
+        if FEATURE_ENGINEER_AVAILABLE:
+            try:
+                self.feature_engineer = get_feature_engineer()
+                print("[ENGINE] Feature Engineer connected — microstructure analysis active")
+            except Exception as e:
+                print("[ENGINE] Feature Engineer unavailable: " + str(e))
+
+        # LLM Exit Decider — AI-driven exits
+        self.exit_decider = None
+        if LLM_EXIT_AVAILABLE:
+            try:
+                self.exit_decider = get_llm_exit_decider()
+                print("[ENGINE] LLM Exit Decider connected — AI exits active")
+            except Exception as e:
+                print("[ENGINE] LLM Exit Decider unavailable: " + str(e))
+
+        # AI Override Engine — override decisions during risk events
+        self.override_engine = None
+        if AI_OVERRIDE_AVAILABLE:
+            try:
+                self.override_engine = get_ai_override_engine()
+                print("[ENGINE] AI Override Engine connected — risk overrides active")
+            except Exception as e:
+                print("[ENGINE] AI Override Engine unavailable: " + str(e))
 
     def _restore_counters_from_db(self):
         """Restore engine counters from DB after deploy."""
@@ -348,6 +428,39 @@ class MicroEngine:
         if candidate.score < MIN_SCORE:
             return
 
+        # Step 0: Portfolio Risk Manager — circuit breaker check
+        if self.portfolio_risk:
+            try:
+                # Update capital from paper trader
+                stats = self.paper.get_stats()
+                self.portfolio_risk.update_capital(stats["current_capital"])
+                
+                # Check risk limits
+                risk_event = self.portfolio_risk.check_risk()
+                if risk_event and not self.portfolio_risk.is_trading_allowed():
+                    # Circuit breaker active — ask AI for override
+                    if self.override_engine and risk_event.severity == "critical":
+                        override = self.override_engine.should_override(
+                            risk_event.event_type,
+                            self.portfolio_risk.get_portfolio_stats(),
+                            self.paper.get_positions_for_risk(),
+                        )
+                        if override.get("decision") == "OVERRIDE":
+                            self.portfolio_risk.set_override(True)
+                            print("[RISK] AI override approved — trading continues")
+                        else:
+                            self.portfolio_risk.activate_circuit_breaker(risk_event.message)
+                            print("[RISK] Circuit breaker active — no new trades")
+                            self._log_event_to_db("risk/circuit_breaker", risk_event.to_dict())
+                            return
+                    else:
+                        self.portfolio_risk.activate_circuit_breaker(risk_event.message)
+                        print("[RISK] Circuit breaker active — no new trades")
+                        self._log_event_to_db("risk/circuit_breaker", risk_event.to_dict())
+                        return
+            except Exception as e:
+                print("[RISK] Risk check error: " + str(e))
+
         # Step 1: Rug-pull safety check
         print("[RUG] Checking safety for " + candidate.symbol + "...")
         report = self.rug_detector.check(candidate.address)
@@ -382,6 +495,7 @@ class MicroEngine:
 
         # Step 1.7: Strategy Bridge — run backtest strategies on live data
         strategy_result = None
+        prediction_signal = None
         if self.strategy_bridge:
             try:
                 strategy_result = self.strategy_bridge.analyze(
@@ -390,6 +504,33 @@ class MicroEngine:
                     pair_address=candidate.pair_address,
                     candidate_metrics=candidate.to_dict(),
                 )
+                
+                # Step 1.8: PredictionEngine v2 — multi-factor scoring
+                if self.prediction_engine and strategy_result:
+                    try:
+                        indicators = strategy_result.indicators
+                        prediction_signal = self.prediction_engine.get_prediction(
+                            candidate.address,
+                            indicators=indicators,
+                            candidate_metrics=candidate.to_dict(),
+                        )
+                        if prediction_signal.get("signal") in ("BUY", "SELL", "STRONG_BUY", "STRONG_SELL"):
+                            print("[PREDICTION] " + candidate.symbol + " -> " +
+                                  prediction_signal["signal"] +
+                                  " (score=" + str(prediction_signal["score"]) +
+                                  ", conf=" + str(round(prediction_signal["confidence"], 2)) + ")")
+                        
+                        # Hard gate: skip LLM if confident SELL signal
+                        if prediction_signal.get("signal") in ("SELL", "STRONG_SELL") and prediction_signal.get("confidence", 0) >= 0.75:
+                            print("[PREDICTION] SELL gate triggered for " + candidate.symbol + " — skipping")
+                            self._log_event_to_db("prediction/sell_gate", {
+                                "token": candidate.address, "symbol": candidate.symbol,
+                                "signal": prediction_signal["signal"],
+                                "confidence": prediction_signal["confidence"],
+                            })
+                            return
+                    except Exception as pe:
+                        print("[PREDICTION] Error: " + str(pe))
                 if strategy_result.combined_direction != "NEUTRAL":
                     print("[STRATEGY] " + candidate.symbol + " -> " +
                           strategy_result.combined_direction +
@@ -527,10 +668,72 @@ class MicroEngine:
             })
 
     def _check_exits(self):
+        # Update portfolio risk manager with current capital
+        if self.portfolio_risk:
+            try:
+                stats = self.paper.get_stats()
+                self.portfolio_risk.update_capital(stats["current_capital"])
+                risk_event = self.portfolio_risk.check_risk()
+                if risk_event:
+                    self._log_event_to_db("risk/event", risk_event.to_dict())
+                    # If critical, try AI override or activate circuit breaker
+                    if risk_event.severity == "critical":
+                        if self.override_engine:
+                            override = self.override_engine.should_override(
+                                risk_event.event_type,
+                                self.portfolio_risk.get_portfolio_stats(),
+                                self.paper.get_positions_for_risk(),
+                            )
+                            if override.get("decision") == "OVERRIDE":
+                                self.portfolio_risk.set_override(True)
+                            else:
+                                self.portfolio_risk.activate_circuit_breaker(risk_event.message)
+                        else:
+                            self.portfolio_risk.activate_circuit_breaker(risk_event.message)
+            except Exception as e:
+                print("[RISK] Exit risk check error: " + str(e))
+
+        # LLM Exit Decisions — ask AI whether to exit each position
+        if self.exit_decider and self.exit_decider._available:
+            try:
+                positions = self.paper.get_positions_for_risk()
+                for addr, pos_data in positions.items():
+                    # Only ask LLM for positions held > 1 hour
+                    if pos_data.get("hours_held", 0) < 1:
+                        continue
+                    # Get indicators if strategy bridge available
+                    indicators = None
+                    strategy_signals = None
+                    if self.strategy_bridge:
+                        try:
+                            cached = self.strategy_bridge.fetcher.get_ohlcv(addr)
+                            if cached is not None and len(cached) >= 5:
+                                from src.strategy_bridge import IndicatorEngine
+                                indicators = IndicatorEngine.calculate(cached)
+                        except Exception:
+                            pass
+                    
+                    decision = self.exit_decider.should_exit(
+                        pos_data,
+                        indicators=indicators,
+                        strategy_signals=strategy_signals,
+                    )
+                    if decision.get("action") == "EXIT" and decision.get("confidence", 0) >= 0.7:
+                        print("[EXIT-LLM] AI recommends EXIT for " + pos_data["symbol"] +
+                              ": " + decision.get("reason", "") +
+                              " (conf=" + str(round(decision["confidence"], 2)) + ")")
+                        # Execute paper exit
+                        self.paper.sell(addr, "llm_exit")
+            except Exception as e:
+                print("[EXIT-LLM] Error: " + str(e))
+
+        # Standard exits (SL/TP/stale)
         if self.mode == "live":
             closed = self.sniper.check_exits()
             for pos in closed:
                 self.orchestrator.record_trade_outcome(pos.symbol, pos.pnl_usd, pos.pnl_pct, 0)
+                if self.portfolio_risk:
+                    self.portfolio_risk.record_trade_pnl(pos.pnl_usd)
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": pos.symbol, "amount_usd": pos.amount_usd,
                     "pnl_usd": pos.pnl_usd, "pnl_pct": pos.pnl_pct,
@@ -542,6 +745,8 @@ class MicroEngine:
             closed = self.paper.check_exits()
             for trade in closed:
                 self.orchestrator.record_trade_outcome(trade.symbol, trade.pnl_usd, trade.pnl_pct, 0)
+                if self.portfolio_risk:
+                    self.portfolio_risk.record_trade_pnl(trade.pnl_usd)
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": trade.symbol, "amount_usd": trade.amount_usd,
                     "pnl_usd": trade.pnl_usd, "pnl_pct": trade.pnl_pct,
