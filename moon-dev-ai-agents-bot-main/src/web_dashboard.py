@@ -66,29 +66,185 @@ def get_current_user(request: Request) -> Optional[dict]:
         return None
 
 
+# ── JSON Fallback Helpers ──────────────────────────────────
+
+def _load_trades_from_jsonl():
+    """Load trades from paper_trades.jsonl as fallback."""
+    trades = []
+    jsonl_path = Path("src/data/paper_trading/paper_trades.jsonl")
+    if jsonl_path.exists():
+        try:
+            entries = []
+            for line in jsonl_path.read_text().splitlines():
+                if line.strip():
+                    entries.append(json.loads(line))
+            # Group by token_address: last entry wins
+            by_token = {}
+            for e in entries:
+                addr = e.get("token_address", "")
+                by_token[addr] = e  # last action per token
+            # Reconstruct trade lifecycle
+            all_entries = {}
+            for e in entries:
+                addr = e.get("token_address", "")
+                action = e.get("action", "entry")
+                key = addr
+                if action == "entry":
+                    all_entries[key] = {"entry": e, "exit": None}
+                elif action == "exit":
+                    if key in all_entries:
+                        all_entries[key]["exit"] = e
+                    else:
+                        all_entries[key] = {"entry": None, "exit": e}
+            # Build trade list
+            for addr, pair in all_entries.items():
+                entry = pair.get("entry") or {}
+                exit_ = pair.get("exit") or {}
+                trade = {
+                    "token_address": addr,
+                    "symbol": entry.get("symbol") or exit_.get("symbol", "?"),
+                    "amount_usd": entry.get("amount_usd", 0),
+                    "entry_price": entry.get("entry_price", 0),
+                    "exit_price": exit_.get("exit_price", 0),
+                    "pnl_usd": exit_.get("pnl_usd", 0),
+                    "pnl_pct": exit_.get("pnl_pct", 0),
+                    "status": exit_.get("status") or entry.get("status", "open"),
+                    "score": entry.get("score", 0),
+                    "entry_time": entry.get("entry_time", entry.get("timestamp", "")),
+                    "exit_time": exit_.get("exit_time", exit_.get("timestamp", "")),
+                    "signals": entry.get("signals", []),
+                    "exit_reason": exit_.get("status", ""),
+                }
+                trades.append(trade)
+        except Exception as e:
+            print(f"[DASHBOARD] JSONL load error: {e}")
+    return trades
+
+
+def _load_scanner_from_events():
+    """Load scanner data from engine_events.jsonl as fallback."""
+    results = []
+    jsonl_path = Path("src/data/micro_engine/engine_events.jsonl")
+    if jsonl_path.exists():
+        try:
+            for line in jsonl_path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                etype = entry.get("type") or entry.get("event_type", "")
+                if etype == "token/candidate":
+                    data = entry.get("data", {})
+                    results.append({
+                        "token_address": data.get("address", ""),
+                        "symbol": data.get("symbol", ""),
+                        "score": data.get("score", 0),
+                        "liquidity_usd": data.get("liquidity_usd", 0),
+                        "volume_24h": data.get("volume_24h", 0),
+                        "price_usd": data.get("price_usd", 0),
+                        "category": data.get("category", "unknown"),
+                        "source": data.get("source", ""),
+                        "market_cap": data.get("market_cap", 0),
+                        "price_change_1h": data.get("price_change_1h", 0),
+                        "txns_1h_buys": data.get("txns_1h_buys", 0),
+                        "txns_1h_sells": data.get("txns_1h_sells", 0),
+                        "dex": data.get("dex", ""),
+                        "signals": data.get("signals", []),
+                        "created_at": entry.get("timestamp", ""),
+                    })
+            # Sort by score desc, take last 100
+            results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            results = results[:100]
+        except Exception as e:
+            print(f"[DASHBOARD] Scanner events load error: {e}")
+    return results
+
+
+def _load_events_from_jsonl(event_type_filter=None, limit=50):
+    """Load engine events from JSONL as fallback."""
+    events = []
+    jsonl_path = Path("src/data/micro_engine/engine_events.jsonl")
+    if jsonl_path.exists():
+        try:
+            for line in jsonl_path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                # JSONL uses 'type', DB uses 'event_type' — normalize
+                etype = entry.get("type") or entry.get("event_type", "")
+                entry["event_type"] = etype
+                if event_type_filter:
+                    if isinstance(event_type_filter, str):
+                        if not etype.startswith(event_type_filter):
+                            continue
+                    elif callable(event_type_filter):
+                        if not event_type_filter(etype):
+                            continue
+                events.append(entry)
+            events = events[-limit:]
+        except Exception as e:
+            print(f"[DASHBOARD] Events JSONL load error: {e}")
+    return events
+
+
+def _load_wallets_from_jsonl():
+    """Load wallet events from JSONL as fallback."""
+    events = []
+    wallet_dir = Path("src/data/wallet_tracker")
+    if wallet_dir.exists():
+        for f in wallet_dir.glob("*.jsonl"):
+            try:
+                for line in f.read_text().splitlines():
+                    if line.strip():
+                        events.append(json.loads(line))
+            except Exception:
+                pass
+    events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return events[:50]
+
+
 # ── API Endpoints ──────────────────────────────────────────
 
 @app.get("/api/portfolio")
 async def get_portfolio():
-    """Get portfolio overview from DB."""
+    """Get portfolio overview — DB first, JSONL fallback."""
     try:
-        from src.db_storage import get_portfolio, get_trades
-        portfolio = get_portfolio()
-        trades = get_trades(limit=100)
-        
-        # Get open positions
+        # Try DB first
+        portfolio = None
+        trades = []
+        db_used = False
+        try:
+            from src.db_storage import get_portfolio as db_get_portfolio, get_trades as db_get_trades
+            portfolio = db_get_portfolio()
+            trades = db_get_trades(limit=200)
+            db_used = bool(trades)
+        except Exception:
+            pass
+
+        # Fallback to JSONL
+        if not trades:
+            trades = _load_trades_from_jsonl()
+
         open_trades = [t for t in trades if t.get("status") == "open"]
-        closed_trades = [t for t in trades if t.get("status") != "open"]
-        
-        # Calculate stats
+        closed_trades = [t for t in trades if t.get("status") not in ("open", None)]
+
         total_pnl = sum(t.get("pnl_usd", 0) for t in closed_trades)
-        wins = sum(1 for t in closed_trades if t.get("pnl_usd", 0) > 0)
-        losses = sum(1 for t in closed_trades if t.get("pnl_usd", 0) < 0)
-        
+        wins = sum(1 for t in closed_trades if (t.get("pnl_usd") or 0) > 0)
+        losses = sum(1 for t in closed_trades if (t.get("pnl_usd") or 0) < 0)
+
+        # If no portfolio from DB, build from capital state
+        if not portfolio:
+            capital = 100.0
+            total_invested = sum(t.get("amount_usd", 0) for t in open_trades)
+            portfolio = {
+                "initial_capital": 100.0,
+                "current_capital": round(capital - total_invested + total_pnl, 2),
+                "total_pnl": round(total_pnl, 2),
+            }
+
         return {
             "portfolio": portfolio or {},
             "open_positions": open_trades,
-            "closed_trades": closed_trades[-20:],  # Last 20
+            "closed_trades": closed_trades[-30:],
             "stats": {
                 "total_trades": len(closed_trades),
                 "wins": wins,
@@ -96,7 +252,9 @@ async def get_portfolio():
                 "win_rate": round(wins / max(len(closed_trades), 1) * 100, 1),
                 "total_pnl": round(total_pnl, 2),
                 "open_count": len(open_trades),
-            }
+            },
+            "db_used": db_used,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         return {"error": str(e)}
@@ -104,148 +262,173 @@ async def get_portfolio():
 
 @app.get("/api/scanner")
 async def get_scanner():
-    """Get scanner results and token candidates."""
+    """Get scanner results — DB first, JSONL fallback."""
     try:
-        from src.db_storage import get_pool
-        pool = get_pool()
-        if not pool:
-            return {"error": "No DB"}
-        
-        with pool.connection() as conn:
-            # Recent scanner results
-            rows = conn.execute("""
-                SELECT * FROM scanner_results 
-                ORDER BY created_at DESC 
-                LIMIT 50
-            """).fetchall()
-            
-            # Token categories
-            categories = conn.execute("""
-                SELECT category, COUNT(*) as cnt 
-                FROM scanner_results 
-                GROUP BY category 
-                ORDER BY cnt DESC
-            """).fetchall()
-            
-            return {
-                "results": [dict(r) for r in rows],
-                "categories": [dict(c) for c in categories],
-                "total_tokens": sum(c["cnt"] for c in categories),
-            }
+        results = []
+        db_used = False
+
+        # Try DB first
+        try:
+            from src.db_storage import get_pool
+            pool = get_pool()
+            if pool:
+                with pool.connection() as conn:
+                    rows = conn.execute("""
+                        SELECT * FROM scanner_results
+                        ORDER BY created_at DESC LIMIT 100
+                    """).fetchall()
+                    for r in rows:
+                        d = dict(r)
+                        # Extract category from data JSONB
+                        data_field = d.get("data", {})
+                        if isinstance(data_field, str):
+                            try:
+                                data_field = json.loads(data_field)
+                            except Exception:
+                                data_field = {}
+                        d["category"] = data_field.get("category", "unknown")
+                        d["source"] = data_field.get("source", "")
+                        d["market_cap"] = data_field.get("market_cap", 0)
+                        d["price_change_1h"] = data_field.get("price_change_1h", 0)
+                        d["txns_1h_buys"] = data_field.get("txns_1h_buys", 0)
+                        d["txns_1h_sells"] = data_field.get("txns_1h_sells", 0)
+                        d["dex"] = data_field.get("dex", "")
+                        d["signals"] = data_field.get("signals", [])
+                        results.append(d)
+                    db_used = True
+        except Exception:
+            pass
+
+        # Fallback to JSONL
+        if not results:
+            results = _load_scanner_from_events()
+
+        # Build categories
+        cats = {}
+        for r in results:
+            cat = r.get("category", "unknown")
+            cats[cat] = cats.get(cat, 0) + 1
+        categories = [{"category": k, "cnt": v} for k, v in sorted(cats.items(), key=lambda x: -x[1])]
+
+        return {
+            "results": results[:50],
+            "categories": categories,
+            "total_tokens": len(results),
+            "db_used": db_used,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/api/wallets")
 async def get_wallets():
-    """Get wallet tracker activity."""
+    """Get wallet tracker activity — DB first, JSONL fallback."""
     try:
-        from src.db_storage import get_pool
-        pool = get_pool()
-        if not pool:
-            return {"error": "No DB"}
-        
-        with pool.connection() as conn:
-            # Recent wallet events
-            rows = conn.execute("""
-                SELECT * FROM wallet_events 
-                ORDER BY created_at DESC 
-                LIMIT 50
-            """).fetchall()
-            
-            # Whale alerts
-            whale_alerts = []
-            try:
-                whale_rows = conn.execute("""
-                    SELECT * FROM whale_alerts 
-                    ORDER BY alert_time DESC 
-                    LIMIT 20
-                """).fetchall()
-                whale_alerts = [dict(w) for w in whale_rows]
-            except Exception:
-                pass
-            
-            # Wallet summary
-            wallets = conn.execute("""
-                SELECT wallet, 
-                       COUNT(*) as swaps,
-                       SUM(CASE WHEN data->>'direction' = 'buy' THEN 1 ELSE 0 END) as buys,
-                       SUM(CASE WHEN data->>'direction' = 'sell' THEN 1 ELSE 0 END) as sells
-                FROM wallet_events 
-                WHERE created_at > NOW() - INTERVAL '24 hours'
-                GROUP BY wallet
-                ORDER BY swaps DESC
-            """).fetchall()
-            
-            return {
-                "events": [dict(r) for r in rows],
-                "whale_alerts": whale_alerts,
-                "wallet_summary": [dict(w) for w in wallets],
-            }
+        events = []
+        whale_alerts = []
+        db_used = False
+
+        # Try DB first
+        try:
+            from src.db_storage import get_pool
+            pool = get_pool()
+            if pool:
+                with pool.connection() as conn:
+                    rows = conn.execute("""
+                        SELECT * FROM wallet_events
+                        ORDER BY created_at DESC LIMIT 50
+                    """).fetchall()
+                    events = [dict(r) for r in rows]
+                    db_used = True
+                    try:
+                        whale_rows = conn.execute("""
+                            SELECT * FROM whale_alerts
+                            ORDER BY alert_time DESC LIMIT 20
+                        """).fetchall()
+                        whale_alerts = [dict(w) for w in whale_rows]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Fallback to JSONL
+        if not events:
+            events = _load_wallets_from_jsonl()
+
+        return {
+            "events": events,
+            "whale_alerts": whale_alerts,
+            "wallet_summary": [],
+            "db_used": db_used,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/api/rbi")
 async def get_rbi():
-    """Get Risk-Based Intelligence data."""
+    """Get Risk-Based Intelligence data — DB first, JSONL fallback."""
     try:
-        from src.db_storage import get_pool
-        pool = get_pool()
-        if not pool:
-            return {"error": "No DB"}
-        
-        with pool.connection() as conn:
-            # Risk events
-            risk_events = conn.execute("""
-                SELECT * FROM engine_events 
-                WHERE event_type LIKE 'risk/%'
-                ORDER BY created_at DESC 
-                LIMIT 30
-            """).fetchall()
-            
-            # Circuit breaker status
-            circuit_breaker = conn.execute("""
-                SELECT * FROM engine_events 
-                WHERE event_type = 'risk/circuit_breaker'
-                ORDER BY created_at DESC 
-                LIMIT 1
-            """).fetchone()
-            
-            # Risk rejections
-            risk_rejections = []
-            try:
-                risk_rejections = conn.execute("""
-                    SELECT * FROM risk_rejections 
-                    ORDER BY created_at DESC 
-                    LIMIT 20
-                """).fetchall()
-            except Exception:
-                pass
-            
-            # Strategy signals
-            strategy_signals = conn.execute("""
-                SELECT * FROM engine_events 
-                WHERE event_type LIKE 'strategy/%'
-                ORDER BY created_at DESC 
-                LIMIT 30
-            """).fetchall()
-            
-            return {
-                "risk_events": [dict(r) for r in risk_events],
-                "circuit_breaker": dict(circuit_breaker) if circuit_breaker else None,
-                "risk_rejections": [dict(r) for r in risk_rejections],
-                "strategy_signals": [dict(s) for s in strategy_signals],
-            }
+        risk_events = []
+        strategy_signals = []
+        circuit_breaker = None
+        db_used = False
+
+        # Try DB first
+        try:
+            from src.db_storage import get_pool
+            pool = get_pool()
+            if pool:
+                with pool.connection() as conn:
+                    rows = conn.execute("""
+                        SELECT * FROM engine_events
+                        WHERE event_type LIKE 'risk/%'
+                        ORDER BY created_at DESC LIMIT 50
+                    """).fetchall()
+                    risk_events = [dict(r) for r in rows]
+                    cb_row = conn.execute("""
+                        SELECT * FROM engine_events
+                        WHERE event_type LIKE 'risk/circuit%'
+                        ORDER BY created_at DESC LIMIT 1
+                    """).fetchone()
+                    circuit_breaker = dict(cb_row) if cb_row else None
+                    sig_rows = conn.execute("""
+                        SELECT * FROM engine_events
+                        WHERE event_type LIKE 'strategy/%'
+                        ORDER BY created_at DESC LIMIT 50
+                    """).fetchall()
+                    strategy_signals = [dict(s) for s in sig_rows]
+                    db_used = True
+        except Exception:
+            pass
+
+        # Fallback to JSONL
+        if not risk_events:
+            all_events = _load_events_from_jsonl(limit=200)
+            risk_events = [e for e in all_events if (e.get("event_type") or e.get("type", "")).startswith("risk/")]
+            strategy_signals = [e for e in all_events if (e.get("event_type") or e.get("type", "")).startswith("strategy/")]
+            if risk_events:
+                circuit_breaker = risk_events[0]
+
+        return {
+            "risk_events": risk_events[-30:],
+            "circuit_breaker": circuit_breaker,
+            "risk_rejections": [],
+            "strategy_signals": strategy_signals[-30:],
+            "db_used": db_used,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/api/mcp")
 async def get_mcp():
-    """Get MCP (Model Context Protocol) data."""
+    """Get MCP (Model Context Protocol) data — DB first, JSONL fallback."""
     try:
-        from src.mcp_registry import MCPRegistry, create_default_mcp_registry
+        from src.mcp_registry import create_default_mcp_registry
         registry = create_default_mcp_registry()
         
         tools = []
@@ -256,27 +439,32 @@ async def get_mcp():
                 "parameters": tool.parameters,
             })
         
-        # Get recent MCP calls from DB
         recent_calls = []
+        db_used = False
         try:
             from src.db_storage import get_pool
             pool = get_pool()
             if pool:
                 with pool.connection() as conn:
                     rows = conn.execute("""
-                        SELECT * FROM engine_events 
+                        SELECT * FROM engine_events
                         WHERE event_type LIKE 'mcp/%'
-                        ORDER BY created_at DESC 
-                        LIMIT 20
+                        ORDER BY created_at DESC LIMIT 20
                     """).fetchall()
                     recent_calls = [dict(r) for r in rows]
+                    db_used = True
         except Exception:
             pass
-        
+
+        if not recent_calls:
+            recent_calls = _load_events_from_jsonl(
+                lambda et: et.startswith("mcp/"), limit=20)
+
         return {
             "tools": tools,
             "tool_count": len(tools),
             "recent_calls": recent_calls,
+            "db_used": db_used,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -981,14 +1169,14 @@ DASHBOARD_HTML = """
         loadPortfolio();
         loadHealth();
         
-        // Auto-refresh every 30 seconds
+        // Auto-refresh every 10 seconds
         setInterval(() => {
             const active = document.querySelector('.panel.active');
             if (active) {
                 const name = active.id.replace('panel-', '');
                 if (panels[name]) panels[name]();
             }
-        }, 30000);
+        }, 10000);
     </script>
 </body>
 </html>

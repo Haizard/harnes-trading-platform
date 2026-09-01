@@ -23,6 +23,7 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
+from pathlib import Path
 from contextlib import contextmanager
 
 try:
@@ -317,8 +318,25 @@ def _init_tables():
 
 # ── Trade Operations ─────────────────────────────────────────
 
+def _save_trade_jsonl(trade_dict: dict, action: str = "entry"):
+    """Save trade to JSONL as fallback when DB is unavailable."""
+    try:
+        jsonl_path = Path("src/data/paper_trading/paper_trades.jsonl")
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = dict(trade_dict)
+        entry["action"] = action
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+
+
 def save_trade(trade_dict: dict, mode: str = "paper") -> Optional[int]:
     """Save a trade to PostgreSQL. Returns the trade ID."""
+    # Always save to JSONL
+    _save_trade_jsonl(trade_dict, trade_dict.get("action", "entry"))
+
     pool = get_pool()
     if not pool:
         return None
@@ -513,7 +531,22 @@ def get_sentiment(symbol: str) -> Optional[dict]:
 # ── Event Log ────────────────────────────────────────────────
 
 def log_event(event_type: str, data: dict):
-    """Log an engine event."""
+    """Log an engine event to DB and JSONL."""
+    # Always write to JSONL (survives DB failures)
+    try:
+        jsonl_path = Path("src/data/micro_engine/engine_events.jsonl")
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "type": event_type,
+            "data": data,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(jsonl_path, "a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+
+    # Also write to DB
     pool = get_pool()
     if not pool:
         return
