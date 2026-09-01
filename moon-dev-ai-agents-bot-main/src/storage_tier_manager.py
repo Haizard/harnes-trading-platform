@@ -166,7 +166,7 @@ class StorageTierManager:
 
                 # 2. Clean OHLCV 1m candles > 7 days (after aggregating to 5m)
                 rows = conn.execute(
-                    "DELETE FROM ohlcv_candles WHERE timeframe = '1m' AND timestamp < NOW() - INTERVAL '7 days'"
+                    "DELETE FROM ohlcv_candles WHERE timeframe = '1m' AND candle_time < NOW() - INTERVAL '7 days'"
                 ).rowcount
                 if rows > 0:
                     tables_cleaned.append("ohlcv_candles_1m")
@@ -175,7 +175,7 @@ class StorageTierManager:
 
                 # 3. Clean OHLCV 5m candles > 30 days
                 rows = conn.execute(
-                    "DELETE FROM ohlcv_candles WHERE timeframe = '5m' AND timestamp < NOW() - INTERVAL '30 days'"
+                    "DELETE FROM ohlcv_candles WHERE timeframe = '5m' AND candle_time < NOW() - INTERVAL '30 days'"
                 ).rowcount
                 if rows > 0:
                     tables_cleaned.append("ohlcv_candles_5m")

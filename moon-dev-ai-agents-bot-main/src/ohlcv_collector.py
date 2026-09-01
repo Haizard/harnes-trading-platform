@@ -570,7 +570,7 @@ class OHLCVCollector:
         except Exception:
             return None
 
-    def _save_candle_to_db(self, token_address: str, candle: Candle):
+    def _save_candle_to_db(self, token_address: str, candle: Candle, timeframe: str = "1m"):
         """Save a single candle to PostgreSQL."""
         try:
             from src.db_storage import save_ohlcv_candle
@@ -587,6 +587,7 @@ class OHLCVCollector:
                 buys=candle.buys,
                 sells=candle.sells,
                 source="dexscreener",
+                timeframe=timeframe,
             )
         except Exception as e:
             cprint(f"[OHLCV] DB save error: {e}", "yellow")

@@ -215,6 +215,18 @@ class BackupManager:
     def _backup_table(self, conn, table_name: str, backup_id: int) -> int:
         """Backup a table to compressed local file."""
         try:
+            # Check if table exists
+            table_check = conn.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = %s
+                )
+            """, (table_name,)).fetchone()
+            
+            if not table_check or not table_check[0]:
+                cprint(f"[BACKUP] Table {table_name} not found, skipping", "yellow")
+                return 0
+
             # Get row count
             r = conn.execute(f"SELECT COUNT(*) as cnt FROM {table_name}").fetchone()
             count = r["cnt"] if r else 0

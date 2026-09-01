@@ -262,6 +262,7 @@ def _init_tables():
                 id SERIAL PRIMARY KEY,
                 token_address TEXT NOT NULL,
                 candle_time TIMESTAMPTZ NOT NULL,
+                timeframe TEXT NOT NULL DEFAULT '1m',
                 open REAL NOT NULL,
                 high REAL NOT NULL,
                 low REAL NOT NULL,
@@ -271,7 +272,7 @@ def _init_tables():
                 sells INTEGER DEFAULT 0,
                 source TEXT DEFAULT 'dexscreener',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(token_address, candle_time)
+                UNIQUE(token_address, candle_time, timeframe)
             )
         """)
         # Indexes
@@ -296,6 +297,7 @@ def _init_tables():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
         conn.commit()
         print("[DB] Tables initialized")
 
@@ -909,7 +911,8 @@ def load_engine_state(key: str, default: str = None) -> str:
 
 def save_ohlcv_candle(token_address: str, candle_time: str, open_p: float,
                        high: float, low: float, close: float, volume: float = 0,
-                       buys: int = 0, sells: int = 0, source: str = "dexscreener"):
+                       buys: int = 0, sells: int = 0, source: str = "dexscreener",
+                       timeframe: str = "1m"):
     """Save or update an OHLCV candle. Uses UPSERT to avoid duplicates."""
     pool = get_pool()
     if not pool:
@@ -917,24 +920,24 @@ def save_ohlcv_candle(token_address: str, candle_time: str, open_p: float,
     try:
         with pool.connection() as conn:
             conn.execute("""
-                INSERT INTO ohlcv_candles (token_address, candle_time, open, high, low, close,
+                INSERT INTO ohlcv_candles (token_address, candle_time, timeframe, open, high, low, close,
                     volume, buys, sells, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (token_address, candle_time) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (token_address, candle_time, timeframe) DO UPDATE SET
                     high = GREATEST(ohlcv_candles.high, EXCLUDED.high),
                     low = LEAST(ohlcv_candles.low, EXCLUDED.low),
                     close = EXCLUDED.close,
                     volume = ohlcv_candles.volume + EXCLUDED.volume,
                     buys = ohlcv_candles.buys + EXCLUDED.buys,
                     sells = ohlcv_candles.sells + EXCLUDED.sells
-            """, (token_address, candle_time, open_p, high, low, close,
+            """, (token_address, candle_time, timeframe, open_p, high, low, close,
                   volume, buys, sells, source))
             conn.commit()
     except Exception as e:
         print(f"[DB] save_ohlcv_candle error: {e}")
 
 
-def save_ohlcv_candles_bulk(token_address: str, candles: list):
+def save_ohlcv_candles_bulk(token_address: str, candles: list, timeframe: str = "1m"):
     """Save multiple OHLCV candles in a single batch. candles = list of dicts."""
     pool = get_pool()
     if not pool or not candles:
@@ -943,10 +946,10 @@ def save_ohlcv_candles_bulk(token_address: str, candles: list):
         with pool.connection() as conn:
             for c in candles:
                 conn.execute("""
-                    INSERT INTO ohlcv_candles (token_address, candle_time, open, high, low, close,
+                    INSERT INTO ohlcv_candles (token_address, candle_time, timeframe, open, high, low, close,
                         volume, buys, sells, source)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (token_address, candle_time) DO UPDATE SET
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (token_address, candle_time, timeframe) DO UPDATE SET
                         high = GREATEST(ohlcv_candles.high, EXCLUDED.high),
                         low = LEAST(ohlcv_candles.low, EXCLUDED.low),
                         close = EXCLUDED.close,
@@ -954,7 +957,7 @@ def save_ohlcv_candles_bulk(token_address: str, candles: list):
                         buys = ohlcv_candles.buys + EXCLUDED.buys,
                         sells = ohlcv_candles.sells + EXCLUDED.sells
                 """, (
-                    token_address, c["time"], c["open"], c["high"], c["low"], c["close"],
+                    token_address, c["time"], timeframe, c["open"], c["high"], c["low"], c["close"],
                     c.get("volume", 0), c.get("buys", 0), c.get("sells", 0),
                     c.get("source", "dexscreener"),
                 ))

@@ -119,10 +119,10 @@ class DataCompressor:
             rows = conn.execute("""
                 WITH old_1m AS (
                     SELECT token_address, 
-                           date_trunc('hour', timestamp) + 
-                           (extract(minute from timestamp)::int / 5 * 5 || ' minutes')::interval as bucket,
-                           FIRST(timestamp) as first_ts,
-                           LAST(timestamp) as last_ts,
+                           date_trunc('hour', candle_time) + 
+                           (extract(minute from candle_time)::int / 5 * 5 || ' minutes')::interval as bucket,
+                           FIRST(candle_time) as first_ts,
+                           LAST(candle_time) as last_ts,
                            FIRST(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
@@ -130,13 +130,13 @@ class DataCompressor:
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '1m' 
-                    AND timestamp < NOW() - INTERVAL '7 days'
+                    AND candle_time < NOW() - INTERVAL '7 days'
                     GROUP BY token_address, bucket
                 )
-                INSERT INTO ohlcv_candles (token_address, timeframe, timestamp, open, high, low, close, volume)
+                INSERT INTO ohlcv_candles (token_address, timeframe, candle_time, open, high, low, close, volume)
                 SELECT token_address, '5m', bucket, open_p, high_p, low_p, close_p, total_vol
                 FROM old_1m
-                ON CONFLICT (token_address, timeframe, timestamp) DO NOTHING
+                ON CONFLICT (token_address, candle_time, timeframe) DO NOTHING
             """)
             inserted = rows.rowcount
 
@@ -144,7 +144,7 @@ class DataCompressor:
             deleted = conn.execute("""
                 DELETE FROM ohlcv_candles 
                 WHERE timeframe = '1m' 
-                AND timestamp < NOW() - INTERVAL '7 days'
+                AND candle_time < NOW() - INTERVAL '7 days'
             """).rowcount
 
             saved = deleted * 150 / (1024 * 1024)  # ~150 bytes per candle
@@ -163,8 +163,8 @@ class DataCompressor:
             rows = conn.execute("""
                 WITH old_5m AS (
                     SELECT token_address, 
-                           date_trunc('hour', timestamp) + 
-                           (extract(minute from timestamp)::int / 15 * 15 || ' minutes')::interval as bucket,
+                           date_trunc('hour', candle_time) + 
+                           (extract(minute from candle_time)::int / 15 * 15 || ' minutes')::interval as bucket,
                            FIRST(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
@@ -172,20 +172,20 @@ class DataCompressor:
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '5m' 
-                    AND timestamp < NOW() - INTERVAL '30 days'
+                    AND candle_time < NOW() - INTERVAL '30 days'
                     GROUP BY token_address, bucket
                 )
-                INSERT INTO ohlcv_candles (token_address, timeframe, timestamp, open, high, low, close, volume)
+                INSERT INTO ohlcv_candles (token_address, timeframe, candle_time, open, high, low, close, volume)
                 SELECT token_address, '15m', bucket, open_p, high_p, low_p, close_p, total_vol
                 FROM old_5m
-                ON CONFLICT (token_address, timeframe, timestamp) DO NOTHING
+                ON CONFLICT (token_address, candle_time, timeframe) DO NOTHING
             """)
             inserted = rows.rowcount
 
             deleted = conn.execute("""
                 DELETE FROM ohlcv_candles 
                 WHERE timeframe = '5m' 
-                AND timestamp < NOW() - INTERVAL '30 days'
+                AND candle_time < NOW() - INTERVAL '30 days'
             """).rowcount
 
             saved = deleted * 150 / (1024 * 1024)
@@ -204,7 +204,7 @@ class DataCompressor:
             rows = conn.execute("""
                 WITH old_15m AS (
                     SELECT token_address, 
-                           date_trunc('hour', timestamp) as bucket,
+                           date_trunc('hour', candle_time) as bucket,
                            FIRST(open) as open_p,
                            MAX(high) as high_p,
                            MIN(low) as low_p,
@@ -212,20 +212,20 @@ class DataCompressor:
                            SUM(volume) as total_vol
                     FROM ohlcv_candles 
                     WHERE timeframe = '15m' 
-                    AND timestamp < NOW() - INTERVAL '60 days'
+                    AND candle_time < NOW() - INTERVAL '60 days'
                     GROUP BY token_address, bucket
                 )
-                INSERT INTO ohlcv_candles (token_address, timeframe, timestamp, open, high, low, close, volume)
+                INSERT INTO ohlcv_candles (token_address, timeframe, candle_time, open, high, low, close, volume)
                 SELECT token_address, '1h', bucket, open_p, high_p, low_p, close_p, total_vol
                 FROM old_15m
-                ON CONFLICT (token_address, timeframe, timestamp) DO NOTHING
+                ON CONFLICT (token_address, candle_time, timeframe) DO NOTHING
             """)
             inserted = rows.rowcount
 
             deleted = conn.execute("""
                 DELETE FROM ohlcv_candles 
                 WHERE timeframe = '15m' 
-                AND timestamp < NOW() - INTERVAL '60 days'
+                AND candle_time < NOW() - INTERVAL '60 days'
             """).rowcount
 
             saved = deleted * 150 / (1024 * 1024)
@@ -241,6 +241,18 @@ class DataCompressor:
     def _compress_orderbook(self, conn) -> tuple:
         """Compress order book snapshots to hourly summaries."""
         try:
+            # Check if tables exist first
+            table_check = conn.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'orderbook_snapshots'
+                )
+            """).fetchone()
+            
+            if not table_check or not table_check[0]:
+                cprint("[COMPRESS] Order book tables not found, skipping", "yellow")
+                return 0, 0
+
             # Create hourly summaries from raw snapshots
             rows = conn.execute("""
                 WITH hourly AS (
