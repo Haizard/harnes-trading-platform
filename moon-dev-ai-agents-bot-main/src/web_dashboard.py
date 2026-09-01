@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Optional
 
 # FastAPI
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # Add project root to path
@@ -50,6 +50,20 @@ app.add_middleware(
 )
 
 DATA_DIR = Path("src/data")
+
+# Auth helpers
+
+def get_current_user(request: Request) -> Optional[dict]:
+    """Extract user from cookie token."""
+    token = request.cookies.get("auth_token")
+    if not token:
+        return None
+    try:
+        from src.auth import get_auth_manager
+        auth = get_auth_manager()
+        return auth.verify_session(token)
+    except Exception:
+        return None
 
 
 # ── API Endpoints ──────────────────────────────────────────
@@ -493,12 +507,133 @@ async def get_health():
         return {"error": str(e)}
 
 
+# ── Auth API Endpoints ─────────────────────────────────────
+
+@app.post("/api/auth/signup")
+async def auth_signup(request: Request):
+    """Create a new user account."""
+    try:
+        body = await request.json()
+        username = body.get("username", "").strip()
+        email = body.get("email", "").strip()
+        password = body.get("password", "")
+        display_name = body.get("display_name", "").strip()
+
+        if not username or not email or not password:
+            return {"error": "Username, email, and password are required"}
+
+        from src.auth import get_auth_manager
+        auth = get_auth_manager()
+        result = auth.signup(username, email, password, display_name)
+
+        if result.get("error"):
+            return result
+
+        # Set auth cookie
+        response = JSONResponse(result)
+        response.set_cookie(
+            key="auth_token",
+            value=result["token"],
+            httponly=True,
+            max_age=86400,  # 24 hours
+            samesite="lax",
+        )
+        return response
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    """Authenticate user and return token."""
+    try:
+        body = await request.json()
+        username = body.get("username", "").strip()
+        password = body.get("password", "")
+
+        if not username or not password:
+            return {"error": "Username and password are required"}
+
+        from src.auth import get_auth_manager
+        auth = get_auth_manager()
+        result = auth.login(username, password)
+
+        if result.get("error"):
+            return result
+
+        # Set auth cookie
+        response = JSONResponse(result)
+        response.set_cookie(
+            key="auth_token",
+            value=result["token"],
+            httponly=True,
+            max_age=86400,
+            samesite="lax",
+        )
+        return response
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    """Log out and clear session."""
+    token = request.cookies.get("auth_token")
+    if token:
+        from src.auth import get_auth_manager
+        auth = get_auth_manager()
+        auth.logout(token)
+
+    response = JSONResponse({"success": True})
+    response.delete_cookie("auth_token")
+    return response
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Get current user info."""
+    token = request.cookies.get("auth_token")
+    if not token:
+        return {"authenticated": False}
+
+    from src.auth import get_auth_manager
+    auth = get_auth_manager()
+    user = auth.verify_session(token)
+    if not user:
+        return {"authenticated": False}
+
+    return {"authenticated": True, "user": user}
+
+
 # ── HTML Dashboard ──────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Serve the main dashboard HTML."""
-    return DASHBOARD_HTML
+async def dashboard(request: Request):
+    """Serve the main dashboard HTML (requires auth)."""
+    token = request.cookies.get("auth_token")
+    if token:
+        from src.auth import get_auth_manager
+        auth = get_auth_manager()
+        user = auth.verify_session(token)
+        if user:
+            return DASHBOARD_HTML
+
+    # Not authenticated — show login page
+    return LOGIN_HTML
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    """Login page."""
+    return LOGIN_HTML
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page():
+    """Signup page."""
+    return SIGNUP_HTML
 
 
 DASHBOARD_HTML = """
@@ -593,7 +728,11 @@ DASHBOARD_HTML = """
 <body>
     <div class="header">
         <h1>🌙 Moon Dev Trading Dashboard</h1>
-        <div class="status" id="header-status">Loading...</div>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div class="status" id="header-status">Loading...</div>
+            <div id="user-info" style="color:#aaa;font-size:13px;"></div>
+            <button onclick="logout()" style="background:#f8717133;border:1px solid #f8717155;color:#f87171;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">Logout</button>
+        </div>
     </div>
     
     <div class="nav">
@@ -813,6 +952,24 @@ DASHBOARD_HTML = """
             document.getElementById('health-modules').innerHTML = modules;
         }
         
+        // Load user info
+        async function loadUserInfo() {
+            try {
+                const resp = await fetch('/api/auth/me');
+                const data = await resp.json();
+                if (data.authenticated && data.user) {
+                    document.getElementById('user-info').innerHTML = 
+                        `<span style="color:#4ade80">●</span> ${data.user.display_name || data.user.username}`;
+                }
+            } catch(e) {}
+        }
+        loadUserInfo();
+        
+        async function logout() {
+            await fetch('/api/auth/logout', {method: 'POST'});
+            window.location.href = '/login';
+        }
+        
         // Load default panel
         loadPortfolio();
         loadHealth();
@@ -825,6 +982,205 @@ DASHBOARD_HTML = """
                 if (panels[name]) panels[name]();
             }
         }, 30000);
+    </script>
+</body>
+</html>
+"""
+
+
+# ── Auth Pages ─────────────────────────────────────────────
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌙 Moon Dev — Login</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f; color: #e0e0e0; 
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh;
+        }
+        .auth-container { width: 100%; max-width: 420px; padding: 20px; }
+        .auth-card { background: #111; border: 1px solid #333; border-radius: 12px; padding: 40px 32px; }
+        .auth-card h1 { color: #00d4ff; font-size: 28px; text-align: center; margin-bottom: 8px; }
+        .auth-card .subtitle { color: #888; text-align: center; margin-bottom: 32px; font-size: 14px; }
+        .auth-card label { display: block; color: #aaa; font-size: 13px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .auth-card input { width: 100%; padding: 12px 14px; background: #0a0a0f; border: 1px solid #333; border-radius: 8px; color: #fff; font-size: 14px; margin-bottom: 16px; transition: border-color 0.2s; }
+        .auth-card input:focus { outline: none; border-color: #00d4ff; }
+        .auth-card input::placeholder { color: #555; }
+        .auth-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #00d4ff, #0088cc); border: none; border-radius: 8px; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.2s; }
+        .auth-btn:hover { opacity: 0.9; }
+        .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .auth-link { text-align: center; margin-top: 20px; font-size: 14px; color: #888; }
+        .auth-link a { color: #00d4ff; text-decoration: none; }
+        .auth-link a:hover { text-decoration: underline; }
+        .auth-error { background: #f8717122; border: 1px solid #f8717144; border-radius: 8px; padding: 12px; margin-bottom: 16px; color: #f87171; font-size: 13px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <h1>🌙 Moon Dev</h1>
+            <p class="subtitle">Sign in to your trading dashboard</p>
+            
+            <div class="auth-error" id="error-msg"></div>
+            
+            <form id="login-form">
+                <label>Username</label>
+                <input type="text" id="username" placeholder="Enter username" required autocomplete="username">
+                
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Enter password" required autocomplete="current-password">
+                
+                <button type="submit" class="auth-btn" id="submit-btn">Sign In</button>
+            </form>
+            
+            <p class="auth-link">Don't have an account? <a href="/signup">Sign up</a></p>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submit-btn');
+            const errDiv = document.getElementById('error-msg');
+            
+            btn.disabled = true;
+            btn.textContent = 'Signing in...';
+            errDiv.style.display = 'none';
+            
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        username: document.getElementById('username').value,
+                        password: document.getElementById('password').value,
+                    }),
+                });
+                const data = await resp.json();
+                
+                if (data.error) {
+                    errDiv.textContent = data.error;
+                    errDiv.style.display = 'block';
+                } else {
+                    window.location.href = '/';
+                }
+            } catch(err) {
+                errDiv.textContent = 'Connection failed: ' + err.message;
+                errDiv.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Sign In';
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+SIGNUP_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌙 Moon Dev — Sign Up</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f; color: #e0e0e0; 
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh;
+        }
+        .auth-container { width: 100%; max-width: 420px; padding: 20px; }
+        .auth-card { background: #111; border: 1px solid #333; border-radius: 12px; padding: 40px 32px; }
+        .auth-card h1 { color: #00d4ff; font-size: 28px; text-align: center; margin-bottom: 8px; }
+        .auth-card .subtitle { color: #888; text-align: center; margin-bottom: 32px; font-size: 14px; }
+        .auth-card label { display: block; color: #aaa; font-size: 13px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .auth-card input { width: 100%; padding: 12px 14px; background: #0a0a0f; border: 1px solid #333; border-radius: 8px; color: #fff; font-size: 14px; margin-bottom: 16px; transition: border-color 0.2s; }
+        .auth-card input:focus { outline: none; border-color: #00d4ff; }
+        .auth-card input::placeholder { color: #555; }
+        .auth-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #00d4ff, #0088cc); border: none; border-radius: 8px; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.2s; }
+        .auth-btn:hover { opacity: 0.9; }
+        .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .auth-link { text-align: center; margin-top: 20px; font-size: 14px; color: #888; }
+        .auth-link a { color: #00d4ff; text-decoration: none; }
+        .auth-link a:hover { text-decoration: underline; }
+        .auth-error { background: #f8717122; border: 1px solid #f8717144; border-radius: 8px; padding: 12px; margin-bottom: 16px; color: #f87171; font-size: 13px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <h1>🌙 Moon Dev</h1>
+            <p class="subtitle">Create your trading account</p>
+            
+            <div class="auth-error" id="error-msg"></div>
+            
+            <form id="signup-form">
+                <label>Username</label>
+                <input type="text" id="username" placeholder="Choose a username" required minlength="3" autocomplete="username">
+                
+                <label>Email</label>
+                <input type="email" id="email" placeholder="your@email.com" required autocomplete="email">
+                
+                <label>Display Name (optional)</label>
+                <input type="text" id="display_name" placeholder="Your name" autocomplete="name">
+                
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+                
+                <button type="submit" class="auth-btn" id="submit-btn">Create Account</button>
+            </form>
+            
+            <p class="auth-link">Already have an account? <a href="/login">Sign in</a></p>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('signup-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submit-btn');
+            const errDiv = document.getElementById('error-msg');
+            
+            btn.disabled = true;
+            btn.textContent = 'Creating account...';
+            errDiv.style.display = 'none';
+            
+            try {
+                const resp = await fetch('/api/auth/signup', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        username: document.getElementById('username').value,
+                        email: document.getElementById('email').value,
+                        display_name: document.getElementById('display_name').value,
+                        password: document.getElementById('password').value,
+                    }),
+                });
+                const data = await resp.json();
+                
+                if (data.error) {
+                    errDiv.textContent = data.error;
+                    errDiv.style.display = 'block';
+                } else {
+                    window.location.href = '/';
+                }
+            } catch(err) {
+                errDiv.textContent = 'Connection failed: ' + err.message;
+                errDiv.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Create Account';
+            }
+        });
     </script>
 </body>
 </html>
