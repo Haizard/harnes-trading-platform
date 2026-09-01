@@ -148,5 +148,6 @@ t = threading.Thread(target=start_engine, daemon=True)
 t.start()
 print("[ENGINE] Background thread started", flush=True)
 
-# This blocks forever - keeps container alive
-server.serve_forever()
+# Keep container alive — dashboard runs in thread, just sleep forever
+while True:
+    time.sleep(60)
