@@ -10,24 +10,34 @@ print(f'PORT env: {os.environ.get("PORT", "not set")}', flush=True)
 print('=' * 60, flush=True)
 
 # Start HTTP server on the PORT Northflank gives us
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
-
 port = int(os.environ.get("PORT", "8000"))
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        msg = "Moon Dev Trading Platform is running!"
-        self.wfile.write(msg.encode())
-    def log_message(self, format, *args):
-        pass  # Suppress request logging
+try:
+    import uvicorn
+    from src.web_dashboard import app as dashboard_app
+    print(f"Binding FastAPI dashboard to 0.0.0.0:{port}", flush=True)
+    # Run dashboard in a thread so we can start the engine too
+    import threading
+    def run_dashboard():
+        uvicorn.run(dashboard_app, host="0.0.0.0", port=port, log_level="error")
+    dashboard_thread = threading.Thread(target=run_dashboard, daemon=True)
+    dashboard_thread.start()
+    print(f"Dashboard running on port {port}", flush=True)
+except Exception as e:
+    print(f"Dashboard fallback: {e}", flush=True)
+    # Fallback: simple health check server
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Moon Dev Trading Platform is running!")
+        def log_message(self, format, *args):
+            pass
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    print(f"Simple server running on port {port}", flush=True)
 
-print(f"Binding to 0.0.0.0:{port}", flush=True)
-server = HTTPServer(("0.0.0.0", port), Handler)
-print(f"Server running on port {port}", flush=True)
 sys.stdout.flush()
 
 # Now start the trading engine in a background thread
