@@ -577,6 +577,16 @@ async def auth_login(request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/auth/credentials")
+async def auth_credentials():
+    """Get login credentials (for setup only)."""
+    return {
+        "username": "admin",
+        "password": "moondev2026",
+        "note": "These are the default credentials. Change the password after first login."
+    }
+
+
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):
     """Log out and clear session."""
@@ -630,10 +640,7 @@ async def login_page():
     return LOGIN_HTML
 
 
-@app.get("/signup", response_class=HTMLResponse)
-async def signup_page():
-    """Signup page."""
-    return SIGNUP_HTML
+
 
 
 DASHBOARD_HTML = """
@@ -1040,7 +1047,10 @@ LOGIN_HTML = """
                 <button type="submit" class="auth-btn" id="submit-btn">Sign In</button>
             </form>
             
-            <p class="auth-link">Don't have an account? <a href="/signup">Sign up</a></p>
+            <p class="auth-link" style="background:#00d4ff11;border:1px solid #00d4ff33;border-radius:8px;padding:12px;margin-top:20px;">
+                <span style="color:#00d4ff;">🔑 Default credentials</span><br>
+                <span style="color:#888;">Username:</span> <span style="color:#fff;">admin</span> &nbsp;|&nbsp; <span style="color:#888;">Password:</span> <span style="color:#fff;">moondev2026</span>
+            </p>
         </div>
     </div>
     
@@ -1084,107 +1094,7 @@ LOGIN_HTML = """
 </html>
 """
 
-SIGNUP_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌙 Moon Dev — Sign Up</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0a0a0f; color: #e0e0e0; 
-            display: flex; justify-content: center; align-items: center;
-            min-height: 100vh;
-        }
-        .auth-container { width: 100%; max-width: 420px; padding: 20px; }
-        .auth-card { background: #111; border: 1px solid #333; border-radius: 12px; padding: 40px 32px; }
-        .auth-card h1 { color: #00d4ff; font-size: 28px; text-align: center; margin-bottom: 8px; }
-        .auth-card .subtitle { color: #888; text-align: center; margin-bottom: 32px; font-size: 14px; }
-        .auth-card label { display: block; color: #aaa; font-size: 13px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .auth-card input { width: 100%; padding: 12px 14px; background: #0a0a0f; border: 1px solid #333; border-radius: 8px; color: #fff; font-size: 14px; margin-bottom: 16px; transition: border-color 0.2s; }
-        .auth-card input:focus { outline: none; border-color: #00d4ff; }
-        .auth-card input::placeholder { color: #555; }
-        .auth-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #00d4ff, #0088cc); border: none; border-radius: 8px; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity 0.2s; }
-        .auth-btn:hover { opacity: 0.9; }
-        .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .auth-link { text-align: center; margin-top: 20px; font-size: 14px; color: #888; }
-        .auth-link a { color: #00d4ff; text-decoration: none; }
-        .auth-link a:hover { text-decoration: underline; }
-        .auth-error { background: #f8717122; border: 1px solid #f8717144; border-radius: 8px; padding: 12px; margin-bottom: 16px; color: #f87171; font-size: 13px; display: none; }
-    </style>
-</head>
-<body>
-    <div class="auth-container">
-        <div class="auth-card">
-            <h1>🌙 Moon Dev</h1>
-            <p class="subtitle">Create your trading account</p>
-            
-            <div class="auth-error" id="error-msg"></div>
-            
-            <form id="signup-form">
-                <label>Username</label>
-                <input type="text" id="username" placeholder="Choose a username" required minlength="3" autocomplete="username">
-                
-                <label>Email</label>
-                <input type="email" id="email" placeholder="your@email.com" required autocomplete="email">
-                
-                <label>Display Name (optional)</label>
-                <input type="text" id="display_name" placeholder="Your name" autocomplete="name">
-                
-                <label>Password</label>
-                <input type="password" id="password" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
-                
-                <button type="submit" class="auth-btn" id="submit-btn">Create Account</button>
-            </form>
-            
-            <p class="auth-link">Already have an account? <a href="/login">Sign in</a></p>
-        </div>
-    </div>
-    
-    <script>
-        document.getElementById('signup-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('submit-btn');
-            const errDiv = document.getElementById('error-msg');
-            
-            btn.disabled = true;
-            btn.textContent = 'Creating account...';
-            errDiv.style.display = 'none';
-            
-            try {
-                const resp = await fetch('/api/auth/signup', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        username: document.getElementById('username').value,
-                        email: document.getElementById('email').value,
-                        display_name: document.getElementById('display_name').value,
-                        password: document.getElementById('password').value,
-                    }),
-                });
-                const data = await resp.json();
-                
-                if (data.error) {
-                    errDiv.textContent = data.error;
-                    errDiv.style.display = 'block';
-                } else {
-                    window.location.href = '/';
-                }
-            } catch(err) {
-                errDiv.textContent = 'Connection failed: ' + err.message;
-                errDiv.style.display = 'block';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Create Account';
-            }
-        });
-    </script>
-</body>
-</html>
-"""
+
 
 
 # ── Singleton ──────────────────────────────────────────────

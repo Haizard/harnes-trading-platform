@@ -126,8 +126,30 @@ class AuthManager:
 
                 cprint("[AUTH] Users and sessions tables ready", "cyan")
 
+                # Seed admin account
+                self._seed_admin(conn)
+
         except Exception as e:
             cprint(f"[AUTH] Table init error: {e}", "yellow")
+
+    def _seed_admin(self, conn):
+        """Create default admin account if none exists."""
+        try:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE username = 'admin'"
+            ).fetchone()
+            if not existing:
+                password_hash = hash_password("moondev2026")
+                conn.execute(
+                    """INSERT INTO users (username, email, password_hash, display_name, role)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    ("admin", "admin@moondev.io", password_hash, "Moon Dev Admin", "admin")
+                )
+                cprint("[AUTH] Admin account created — username: admin / password: moondev2026", "white", "on_green")
+            else:
+                cprint("[AUTH] Admin account exists", "cyan")
+        except Exception as e:
+            cprint(f"[AUTH] Admin seed error: {e}", "yellow")
 
     def signup(self, username: str, email: str, password: str, 
                display_name: str = "") -> dict:
