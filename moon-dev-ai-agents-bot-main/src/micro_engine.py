@@ -81,6 +81,34 @@ try:
 except ImportError:
     AI_OVERRIDE_AVAILABLE = False
 
+# Full SentimentAgent — BERTweet ML + Twitter scraping
+try:
+    from src.full_sentiment_agent import get_full_sentiment_agent
+    FULL_SENTIMENT_AVAILABLE = True
+except ImportError:
+    FULL_SENTIMENT_AVAILABLE = False
+
+# Chart Analysis Agent — chart pattern recognition
+try:
+    from src.chart_analysis_agent import get_chart_analysis_agent
+    CHART_ANALYSIS_AVAILABLE = True
+except ImportError:
+    CHART_ANALYSIS_AVAILABLE = False
+
+# CoinGecko Agent — market data & token discovery
+try:
+    from src.coingecko_agent import get_coingecko_agent
+    COINGECKO_AVAILABLE = True
+except ImportError:
+    COINGECKO_AVAILABLE = False
+
+# ICT Analysis Agent — Smart Money concepts
+try:
+    from src.ict_analysis_agent import get_ict_analysis_agent
+    ICT_ANALYSIS_AVAILABLE = True
+except ImportError:
+    ICT_ANALYSIS_AVAILABLE = False
+
 DEFAULT_CAPITAL = 100.0
 SCAN_INTERVAL = 30
 EXIT_CHECK_INTERVAL = 10
@@ -220,6 +248,42 @@ class MicroEngine:
                 print("[ENGINE] AI Override Engine connected — risk overrides active")
             except Exception as e:
                 print("[ENGINE] AI Override Engine unavailable: " + str(e))
+
+        # Full SentimentAgent — BERTweet ML + Twitter scraping
+        self.full_sentiment = None
+        if FULL_SENTIMENT_AVAILABLE:
+            try:
+                self.full_sentiment = get_full_sentiment_agent()
+                print("[ENGINE] Full SentimentAgent connected — BERTweet ML active")
+            except Exception as e:
+                print("[ENGINE] Full SentimentAgent unavailable: " + str(e))
+
+        # Chart Analysis Agent — chart pattern recognition
+        self.chart_agent = None
+        if CHART_ANALYSIS_AVAILABLE:
+            try:
+                self.chart_agent = get_chart_analysis_agent()
+                print("[ENGINE] Chart Analysis Agent connected — pattern recognition active")
+            except Exception as e:
+                print("[ENGINE] Chart Analysis Agent unavailable: " + str(e))
+
+        # CoinGecko Agent — market data & token discovery
+        self.coingecko = None
+        if COINGECKO_AVAILABLE:
+            try:
+                self.coingecko = get_coingecko_agent()
+                print("[ENGINE] CoinGecko Agent connected — market data active")
+            except Exception as e:
+                print("[ENGINE] CoinGecko Agent unavailable: " + str(e))
+
+        # ICT Analysis Agent — Smart Money concepts
+        self.ict_agent = None
+        if ICT_ANALYSIS_AVAILABLE:
+            try:
+                self.ict_agent = get_ict_analysis_agent()
+                print("[ENGINE] ICT Analysis Agent connected — Smart Money active")
+            except Exception as e:
+                print("[ENGINE] ICT Analysis Agent unavailable: " + str(e))
 
     def _restore_counters_from_db(self):
         """Restore engine counters from DB after deploy."""
@@ -364,6 +428,22 @@ class MicroEngine:
             except Exception:
                 pass
 
+    def _poll_coingecko_trending(self):
+        """DSH BackgroundJob: poll CoinGecko for trending tokens."""
+        if not self.coingecko:
+            return
+        try:
+            trending = self.coingecko.get_trending()
+            if trending:
+                print("[COINGECKO] Trending: " + ", ".join(t["symbol"] for t in trending[:5]))
+                # Log trending tokens to DB
+                self._log_event_to_db("coingecko/trending", {
+                    "tokens": [t["symbol"] for t in trending[:10]],
+                    "count": len(trending),
+                })
+        except Exception as e:
+            print("[COINGECKO] Trending poll error: " + str(e))
+
     def _poll_wallets(self):
         """DSH BackgroundJob: poll tracked wallets for smart money swaps."""
         if not self.wallet_tracker:
@@ -484,14 +564,26 @@ class MicroEngine:
             except Exception as e:
                 print("[OHLCV] Register error for " + candidate.symbol + ": " + str(e))
 
-        # Step 1.5: Quick sentiment check (non-blocking, uses cache)
-        try:
-            sent = self.sentiment.get_token_sentiment(candidate.symbol)
-            if sent and sent.get("tweet_count", 0) > 0:
-                print("[SENTIMENT] " + candidate.symbol + ": " + sent.get("label", "unknown") +
-                      " (score=" + str(sent.get("score", 0)) + ", tweets=" + str(sent.get("tweet_count", 0)) + ")")
-        except Exception:
-            pass
+        # Step 1.5: Sentiment check (full ML or lightweight)
+        sentiment_data = None
+        if self.full_sentiment:
+            try:
+                sentiment_data = self.full_sentiment.get_token_sentiment(candidate.symbol)
+                if sentiment_data and sentiment_data.get("tweet_count", 0) > 0:
+                    print("[SENTIMENT-ML] " + candidate.symbol + ": " + sentiment_data.get("label", "unknown") +
+                          " (score=" + str(sentiment_data.get("score", 0)) +
+                          ", tweets=" + str(sentiment_data.get("tweet_count", 0)) +
+                          ", source=" + sentiment_data.get("source", "unknown") + ")")
+            except Exception as e:
+                print("[SENTIMENT-ML] Error: " + str(e))
+        elif self.sentiment:
+            try:
+                sentiment_data = self.sentiment.get_token_sentiment(candidate.symbol)
+                if sentiment_data and sentiment_data.get("tweet_count", 0) > 0:
+                    print("[SENTIMENT] " + candidate.symbol + ": " + sentiment_data.get("label", "unknown") +
+                          " (score=" + str(sentiment_data.get("score", 0)) + ")")
+            except Exception:
+                pass
 
         # Step 1.7: Strategy Bridge — run backtest strategies on live data
         strategy_result = None
@@ -531,6 +623,38 @@ class MicroEngine:
                             return
                     except Exception as pe:
                         print("[PREDICTION] Error: " + str(pe))
+                
+                # Step 1.9: Chart Analysis — pattern recognition
+                chart_signal = None
+                if self.chart_agent:
+                    try:
+                        chart_signal = self.chart_agent.analyze(
+                            candidate.symbol,
+                            indicators=strategy_result.indicators,
+                            candidate_metrics=candidate.to_dict(),
+                        )
+                        if chart_signal.get("action") != "HOLD":
+                            print("[CHART] " + candidate.symbol + " -> " +
+                                  chart_signal["action"] +
+                                  " (" + chart_signal.get("pattern", "") +
+                                  ", conf=" + str(round(chart_signal["confidence"], 2)) + ")")
+                    except Exception as ce:
+                        print("[CHART] Error: " + str(ce))
+                
+                # Step 1.10: ICT Analysis — Smart Money concepts
+                ict_signal = None
+                if self.ict_agent:
+                    try:
+                        ict_signal = self.ict_agent.analyze(
+                            indicators=strategy_result.indicators,
+                            candidate_metrics=candidate.to_dict(),
+                        )
+                        if ict_signal.get("signal") != "HOLD":
+                            print("[ICT] " + candidate.symbol + " -> " +
+                                  ict_signal["signal"] +
+                                  " (" + ict_signal.get("reason", "")[:50] + ")")
+                    except Exception as ie:
+                        print("[ICT] Error: " + str(ie))
                 if strategy_result.combined_direction != "NEUTRAL":
                     print("[STRATEGY] " + candidate.symbol + " -> " +
                           strategy_result.combined_direction +
@@ -550,10 +674,18 @@ class MicroEngine:
                 print("[STRATEGY] Error analyzing " + candidate.symbol + ": " + str(e))
 
         # Step 2: AI Orchestrator decision (consensus + feedback loop)
-        # Inject strategy signals into candidate data for the orchestrator
+        # Inject all signals into candidate data for the orchestrator
         candidate_dict = candidate.to_dict()
         if strategy_result:
             candidate_dict["strategy_signals"] = strategy_result.to_dict()
+        if prediction_signal:
+            candidate_dict["prediction_signal"] = prediction_signal
+        if sentiment_data:
+            candidate_dict["sentiment"] = sentiment_data
+        if chart_signal:
+            candidate_dict["chart_analysis"] = chart_signal
+        if ict_signal:
+            candidate_dict["ict_analysis"] = ict_signal
         decision = self.orchestrator.analyze_candidate(candidate_dict)
         ai_source = decision.get("source", "algorithmic")
         ai_action = decision.get("action", "SKIP")
@@ -794,6 +926,15 @@ class MicroEngine:
                 interval_seconds=30,  # Poll every 30s to build candle history
             )
             print("[ENGINE] OHLCV Collector registered as background job (30s interval)", flush=True)
+
+        # Register CoinGecko trending discovery (polls every 5 min)
+        if self.coingecko:
+            self.scheduler.register(
+                name="coingecko_trending",
+                fn=self._poll_coingecko_trending,
+                interval_seconds=300,  # Every 5 minutes
+            )
+            print("[ENGINE] CoinGecko trending discovery registered (5min interval)", flush=True)
 
         # Start async scheduler for background jobs
         await self.scheduler.start()
