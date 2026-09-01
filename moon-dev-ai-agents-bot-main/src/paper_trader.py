@@ -97,8 +97,17 @@ class PaperTrader:
             return None
         if token_address in self.open_positions:
             return None
+        # Strict capital check: need amount + 10% buffer for safety
+        if amount_usd >= self.capital * 0.90:
+            # Scale down to available capital minus buffer
+            amount_usd = max(1.0, self.capital * 0.80)
         if amount_usd > self.capital:
             return None
+        # Safety floor: never let capital go below $5
+        if self.capital - amount_usd < 5.0:
+            amount_usd = max(1.0, self.capital - 5.0)
+            if amount_usd < 1.0:
+                return None
         amount_sol = amount_usd / 15.0
         quote = self.get_quote(token_address, amount_sol)
         if not quote:
@@ -147,7 +156,7 @@ class PaperTrader:
         returned = pos.amount_usd + pnl_usd
         if returned < 0:
             returned = 0  # Worst case: lose entire investment
-        self.capital += returned
+        self.capital = max(0.0, self.capital + returned)  # Hard floor at $0
         self.closed_trades.append(pos)
         del self.open_positions[token_address]
         self._log_trade(pos, "exit")
