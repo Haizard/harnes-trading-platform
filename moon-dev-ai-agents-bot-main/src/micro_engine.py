@@ -109,6 +109,41 @@ try:
 except ImportError:
     ICT_ANALYSIS_AVAILABLE = False
 
+# Storage Tier Manager — data lifecycle, cleanup, compression
+try:
+    from src.storage_tier_manager import get_storage_tier_manager
+    STORAGE_TIER_AVAILABLE = True
+except ImportError:
+    STORAGE_TIER_AVAILABLE = False
+
+# Backup Manager — data backup to separate DB
+try:
+    from src.backup_manager import get_backup_manager
+    BACKUP_MANAGER_AVAILABLE = True
+except ImportError:
+    BACKUP_MANAGER_AVAILABLE = False
+
+# Order Book Collector — whale detection via order book
+try:
+    from src.orderbook_collector import get_orderbook_collector
+    ORDERBOOK_COLLECTOR_AVAILABLE = True
+except ImportError:
+    ORDERBOOK_COLLECTOR_AVAILABLE = False
+
+# Data Compressor — compress/aggregate old data
+try:
+    from src.data_compressor import get_data_compressor
+    DATA_COMPRESSOR_AVAILABLE = True
+except ImportError:
+    DATA_COMPRESSOR_AVAILABLE = False
+
+# Storage Alerts — DB usage monitoring
+try:
+    from src.storage_alerts import get_storage_alerts
+    STORAGE_ALERTS_AVAILABLE = True
+except ImportError:
+    STORAGE_ALERTS_AVAILABLE = False
+
 DEFAULT_CAPITAL = 100.0
 SCAN_INTERVAL = 30
 EXIT_CHECK_INTERVAL = 10
@@ -284,6 +319,51 @@ class MicroEngine:
                 print("[ENGINE] ICT Analysis Agent connected — Smart Money active")
             except Exception as e:
                 print("[ENGINE] ICT Analysis Agent unavailable: " + str(e))
+
+        # Storage Tier Manager — data lifecycle, cleanup, compression
+        self.storage_tier = None
+        if STORAGE_TIER_AVAILABLE:
+            try:
+                self.storage_tier = get_storage_tier_manager(event_bus=self.event_bus)
+                print("[ENGINE] Storage Tier Manager connected — data lifecycle active")
+            except Exception as e:
+                print("[ENGINE] Storage Tier Manager unavailable: " + str(e))
+
+        # Backup Manager — data backup to separate DB
+        self.backup_manager = None
+        if BACKUP_MANAGER_AVAILABLE:
+            try:
+                self.backup_manager = get_backup_manager(event_bus=self.event_bus)
+                print("[ENGINE] Backup Manager connected — data backup active")
+            except Exception as e:
+                print("[ENGINE] Backup Manager unavailable: " + str(e))
+
+        # Order Book Collector — whale detection via order book
+        self.orderbook_collector = None
+        if ORDERBOOK_COLLECTOR_AVAILABLE:
+            try:
+                self.orderbook_collector = get_orderbook_collector(event_bus=self.event_bus)
+                print("[ENGINE] Order Book Collector connected — whale detection active")
+            except Exception as e:
+                print("[ENGINE] Order Book Collector unavailable: " + str(e))
+
+        # Data Compressor — compress/aggregate old data
+        self.data_compressor = None
+        if DATA_COMPRESSOR_AVAILABLE:
+            try:
+                self.data_compressor = get_data_compressor(event_bus=self.event_bus)
+                print("[ENGINE] Data Compressor connected — compression active")
+            except Exception as e:
+                print("[ENGINE] Data Compressor unavailable: " + str(e))
+
+        # Storage Alerts — DB usage monitoring
+        self.storage_alerts = None
+        if STORAGE_ALERTS_AVAILABLE:
+            try:
+                self.storage_alerts = get_storage_alerts(event_bus=self.event_bus)
+                print("[ENGINE] Storage Alerts connected — DB monitoring active")
+            except Exception as e:
+                print("[ENGINE] Storage Alerts unavailable: " + str(e))
 
     def _restore_counters_from_db(self):
         """Restore engine counters from DB after deploy."""
@@ -502,6 +582,13 @@ class MicroEngine:
                     price_usd=candidate.price_usd,
                     data=candidate.to_dict(),
                 )
+            except Exception:
+                pass
+
+        # Track order book for high-scoring candidates
+        if self.orderbook_collector and candidate.score >= 60:
+            try:
+                self.orderbook_collector.track_token(candidate.address)
             except Exception:
                 pass
 
@@ -935,6 +1022,52 @@ class MicroEngine:
                 interval_seconds=300,  # Every 5 minutes
             )
             print("[ENGINE] CoinGecko trending discovery registered (5min interval)", flush=True)
+
+        # Register Order Book Collector (polls every 30s)
+        if self.orderbook_collector:
+            # Track tokens that we're trading
+            self.scheduler.register(
+                name="orderbook_poll",
+                fn=self.orderbook_collector.poll_once,
+                interval_seconds=30,
+            )
+            print("[ENGINE] Order Book Collector registered (30s interval)", flush=True)
+
+        # Register Storage Tier Manager (daily cleanup at midnight)
+        if self.storage_tier:
+            self.scheduler.register(
+                name="storage_cleanup",
+                fn=self.storage_tier.run_cleanup,
+                interval_seconds=86400,  # Daily
+            )
+            print("[ENGINE] Storage Tier Manager registered (daily cleanup)", flush=True)
+
+        # Register Backup Manager (daily backup at 1am)
+        if self.backup_manager:
+            self.scheduler.register(
+                name="storage_backup",
+                fn=self.backup_manager.run_backup,
+                interval_seconds=86400,  # Daily
+            )
+            print("[ENGINE] Backup Manager registered (daily backup)", flush=True)
+
+        # Register Data Compressor (daily compression at 2am)
+        if self.data_compressor:
+            self.scheduler.register(
+                name="storage_compress",
+                fn=self.data_compressor.run_compression,
+                interval_seconds=86400,  # Daily
+            )
+            print("[ENGINE] Data Compressor registered (daily compression)", flush=True)
+
+        # Register Storage Alerts (hourly check)
+        if self.storage_alerts:
+            self.scheduler.register(
+                name="storage_alerts",
+                fn=self.storage_alerts.check_storage,
+                interval_seconds=3600,  # Hourly
+            )
+            print("[ENGINE] Storage Alerts registered (hourly check)", flush=True)
 
         # Start async scheduler for background jobs
         await self.scheduler.start()
