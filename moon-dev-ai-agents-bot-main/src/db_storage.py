@@ -37,11 +37,17 @@ except ImportError:
 _pool = None
 
 
+_pool_failed = False  # Track if pool creation failed to avoid retrying
+
 def get_pool():
     """Get or create the connection pool."""
-    global _pool
+    global _pool, _pool_failed
     if _pool is not None:
         return _pool
+
+    # Don't retry if pool creation already failed
+    if _pool_failed:
+        return None
 
     if not PSYCOPG_AVAILABLE:
         return None
@@ -61,7 +67,7 @@ def get_pool():
         return _pool
     except Exception as e:
         print(f"[DB] Connection failed: {e} — using JSON fallback")
-        _pool = None
+        _pool_failed = True  # Don't retry
         return None
 
 
@@ -262,7 +268,6 @@ def _init_tables():
                 id SERIAL PRIMARY KEY,
                 token_address TEXT NOT NULL,
                 candle_time TIMESTAMPTZ NOT NULL,
-                timeframe TEXT NOT NULL DEFAULT '1m',
                 open REAL NOT NULL,
                 high REAL NOT NULL,
                 low REAL NOT NULL,
@@ -272,9 +277,17 @@ def _init_tables():
                 sells INTEGER DEFAULT 0,
                 source TEXT DEFAULT 'dexscreener',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(token_address, candle_time, timeframe)
+                UNIQUE(token_address, candle_time)
             )
         """)
+        # Add timeframe column if missing (migration)
+        try:
+            conn.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
+            # Update unique constraint to include timeframe
+            conn.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
+            conn.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
+        except Exception:
+            pass  # Column already exists or constraint already updated
         # Indexes
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
