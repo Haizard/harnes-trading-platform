@@ -225,25 +225,136 @@ class TokenCandleStore:
         return (time.time() - self._last_update) > max_age_seconds if self._last_update > 0 else True
 
 
+# ── Timeframe Config ──────────────────────────────────────
+TIMEFRAMES = {
+    "1m": 60,      # 1 minute
+    "5m": 300,     # 5 minutes
+    "15m": 900,    # 15 minutes
+    "1h": 3600,    # 1 hour
+}
+
+
+# ── Multi-Timeframe Store ──────────────────────────────────
+class MultiTimeframeStore:
+    """Stores candle history for a single token across multiple timeframes."""
+
+    def __init__(self, token_address: str, max_candles: int = 200):
+        self.token_address = token_address
+        self.stores: Dict[str, TokenCandleStore] = {}
+
+        # Create a store for each timeframe
+        for tf_name, tf_seconds in TIMEFRAMES.items():
+            store = TokenCandleStore(token_address, max_candles)
+            store._candle_interval = tf_seconds
+            self.stores[tf_name] = store
+
+        # Adaptive polling state (on the primary 1m store)
+        self._volatility_score: float = 0.0
+        self._activity_score: float = 0.0
+        self._recent_prices: list = []
+        self._poll_interval: float = 30.0
+        self._last_polled: float = 0.0
+        self._consecutive_no_data: int = 0
+        self._last_update = 0
+
+    def add_tick(self, price: float, timestamp: float, volume: float = 0,
+                 buys: int = 0, sells: int = 0, pair_address: str = ""):
+        """Add a tick to ALL timeframe stores."""
+        if price <= 0:
+            return
+
+        # Add to each timeframe store
+        for tf_name, store in self.stores.items():
+            store.add_tick(price, timestamp, volume, buys, sells, pair_address)
+
+        # Track volatility/activity on this store
+        self._recent_prices.append(price)
+        if len(self._recent_prices) > 10:
+            self._recent_prices = self._recent_prices[-10:]
+
+        if volume > 0:
+            self._activity_score = min(1.0, self._activity_score + 0.1)
+        else:
+            self._activity_score = max(0.0, self._activity_score - 0.02)
+
+        self._update_volatility()
+        self._adjust_poll_interval()
+        self._last_update = time.time()
+        self._consecutive_no_data = 0
+
+    def _update_volatility(self):
+        if len(self._recent_prices) < 3:
+            self._volatility_score = 0.5
+            return
+        changes = []
+        for i in range(1, len(self._recent_prices)):
+            prev = self._recent_prices[i - 1]
+            curr = self._recent_prices[i]
+            if prev > 0:
+                changes.append(abs(curr - prev) / prev)
+        if changes:
+            self._volatility_score = min(1.0, (sum(changes) / len(changes)) / 0.05)
+        else:
+            self._volatility_score = 0.0
+
+    def _adjust_poll_interval(self):
+        combined = (self._volatility_score * 0.7) + (self._activity_score * 0.3)
+        if combined > 0.7:
+            self._poll_interval = 15.0
+        elif combined > 0.4:
+            self._poll_interval = 30.0
+        elif combined > 0.15:
+            self._poll_interval = 60.0
+        else:
+            self._poll_interval = 90.0
+
+    def should_poll_now(self) -> bool:
+        return (time.time() - self._last_polled) >= self._poll_interval
+
+    def mark_polled(self):
+        self._last_polled = time.time()
+
+    def is_dead(self, max_no_data_polls: int = 20) -> bool:
+        return self._consecutive_no_data >= max_no_data_polls
+
+    def get_dataframe(self, timeframe: str = "1m") -> Optional[pd.DataFrame]:
+        """Get OHLCV DataFrame for a specific timeframe."""
+        store = self.stores.get(timeframe)
+        if not store:
+            return None
+        return store.get_dataframe()
+
+    def get_poll_info(self) -> dict:
+        return {
+            "volatility": round(self._volatility_score, 2),
+            "activity": round(self._activity_score, 2),
+            "interval": round(self._poll_interval, 1),
+            "no_data_count": self._consecutive_no_data,
+        }
+
+    def get_total_candles(self) -> int:
+        return sum(s.get_tick_count() for s in self.stores.values())
+
+    def is_stale(self, max_age_seconds: int = 600) -> bool:
+        return (time.time() - self._last_update) > max_age_seconds if self._last_update > 0 else True
+
+
 # ── OHLCV Collector ──────────────────────────────────────
 class OHLCVCollector:
     """
-    Continuous OHLCV collector for Solana tokens.
+    Continuous OHLCV collector for Solana tokens with multi-timeframe support.
     
-    Polls DexScreener pair data and builds candle history over time.
-    Stores data locally so StrategyBridge can read it.
+    Polls DexScreener pair data and builds candle history across
+    1m, 5m, 15m, and 1h timeframes.
     
     Usage:
         collector = OHLCVCollector()
-        
-        # Register a token to track
-        collector.track_token("token_address", pair_address="pair_address")
-        
-        # Poll (call from background thread)
+        collector.track_token("token_address")
         collector.poll_once()
         
-        # Get OHLCV for strategy analysis
-        df = collector.get_ohlcv("token_address")
+        # Get candles for specific timeframe
+        df_1m = collector.get_ohlcv("token_address", timeframe="1m")
+        df_1h = collector.get_ohlcv("token_address", timeframe="1h")
     """
 
     DEXSCREENER_PAIR = "https://api.dexscreener.com/latest/dex/pairs/solana/{pair_address}"
@@ -277,10 +388,9 @@ class OHLCVCollector:
             self._load_all()
 
     def track_token(self, token_address: str, pair_address: str = ""):
-        """Register a token to start tracking."""
+        """Register a token to start tracking across all timeframes."""
         if token_address not in self.stores:
-            self.stores[token_address] = TokenCandleStore(token_address)
-            # Load any existing data
+            self.stores[token_address] = MultiTimeframeStore(token_address)
             self._load_token(token_address)
 
     def poll_once(self) -> int:
@@ -344,9 +454,9 @@ class OHLCVCollector:
                 updated += 1
                 self._tokens_with_data += 1
 
-                # Save to DB if available
-                if self._db_available and store._current_candle:
-                    self._save_candle_to_db(token_address, store._current_candle)
+                # Save 1m candle to DB if available
+                if self._db_available and store.stores["1m"]._current_candle:
+                    self._save_candle_to_db(token_address, store.stores["1m"]._current_candle)
 
             except Exception as e:
                 cprint(f"[OHLCV] Poll error for {token_address[:8]}...: {e}", "yellow")
@@ -376,10 +486,26 @@ class OHLCVCollector:
 
         return updated
 
-    def get_ohlcv(self, token_address: str, min_candles: int = 10) -> Optional[pd.DataFrame]:
-        """Get OHLCV DataFrame for a token. Returns None if insufficient data."""
-        # Try PostgreSQL first (persistent across restarts)
-        if self._db_available:
+    def get_ohlcv(self, token_address: str, min_candles: int = 10,
+                   timeframe: str = "1m") -> Optional[pd.DataFrame]:
+        """Get OHLCV DataFrame for a token at a specific timeframe.
+        
+        Args:
+            token_address: Token mint address
+            min_candles: Minimum candles required (returns None if less)
+            timeframe: "1m", "5m", "15m", or "1h"
+        """
+        store = self.stores.get(token_address)
+        if not store:
+            return None
+
+        # Get from multi-timeframe store
+        df = store.get_dataframe(timeframe)
+        if df is not None and len(df) >= min_candles:
+            return df
+
+        # Fallback: try DB for 1m only
+        if timeframe == "1m" and self._db_available:
             try:
                 from src.db_storage import get_ohlcv_candles
                 rows = get_ohlcv_candles(token_address, hours=24, limit=200)
@@ -392,19 +518,18 @@ class OHLCVCollector:
             except Exception:
                 pass
 
-        # Fall back to in-memory store
+        return None
+
+    def get_available_timeframes(self, token_address: str) -> dict:
+        """Get available candle counts per timeframe for a token."""
         store = self.stores.get(token_address)
         if not store:
-            return None
-
-        df = store.get_dataframe()
-        if df is not None and len(df) >= min_candles:
-            return df
-        return None
+            return {}
+        return {tf: s.get_tick_count() for tf, s in store.stores.items()}
 
     def get_stats(self) -> dict:
         """Get collector statistics with adaptive polling info."""
-        tokens_with_data = sum(1 for s in self.stores.values() if s.get_tick_count() >= 3)
+        tokens_with_data = sum(1 for s in self.stores.values() if s.get_total_candles() >= 3)
         intervals = [s._poll_interval for s in self.stores.values()]
         volatilities = [s._volatility_score for s in self.stores.values()]
         return {
@@ -416,7 +541,7 @@ class OHLCVCollector:
             "fast_tokens": sum(1 for i in intervals if i <= 15),
             "slow_tokens": sum(1 for i in intervals if i >= 60),
             "candles_per_token": {
-                addr[:8]: s.get_tick_count()
+                addr[:8]: s.get_total_candles()
                 for addr, s in self.stores.items()
             },
             "poll_info_per_token": {
@@ -482,19 +607,21 @@ class OHLCVCollector:
         for token_address, store in self.stores.items():
             self._save_token(token_address, store)
 
-    def _save_token(self, token_address: str, store: TokenCandleStore):
-        """Save a single token's candle data to disk."""
+    def _save_token(self, token_address: str, store: MultiTimeframeStore):
+        """Save a single token's candle data to disk (all timeframes)."""
         try:
             filepath = self.data_dir / f"{token_address}.json"
-            all_candles = list(store.candles)
-            if store._current_candle:
-                all_candles.append(store._current_candle)
-
             data = {
                 "token_address": token_address,
-                "candles": [c.to_dict() for c in all_candles],
+                "timeframes": {},
                 "saved_at": time.time(),
             }
+            for tf_name, tf_store in store.stores.items():
+                all_candles = list(tf_store.candles)
+                if tf_store._current_candle:
+                    all_candles.append(tf_store._current_candle)
+                data["timeframes"][tf_name] = [c.to_dict() for c in all_candles]
+
             with open(filepath, "w") as f:
                 json.dump(data, f, default=str)
         except Exception as e:
@@ -519,24 +646,50 @@ class OHLCVCollector:
             with open(filepath, "r") as f:
                 data = json.load(f)
 
-            store = TokenCandleStore(token_address)
-            for candle_data in data.get("candles", []):
-                c = Candle(
-                    timestamp=candle_data["t"],
-                    price=candle_data["c"],  # Use close as price
-                    volume=candle_data.get("v", 0),
-                    buys=candle_data.get("buys", 0),
-                    sells=candle_data.get("sells", 0),
-                )
-                c.open = candle_data.get("o", candle_data["c"])
-                c.high = candle_data.get("h", candle_data["c"])
-                c.low = candle_data.get("l", candle_data["c"])
-                store.candles.append(c)
+            store = MultiTimeframeStore(token_address)
+            total = 0
 
-            if store.candles:
+            # New multi-timeframe format
+            timeframes_data = data.get("timeframes", {})
+            if timeframes_data:
+                for tf_name, candles_data in timeframes_data.items():
+                    tf_store = store.stores.get(tf_name)
+                    if not tf_store:
+                        continue
+                    for candle_data in candles_data:
+                        c = Candle(
+                            timestamp=candle_data["t"],
+                            price=candle_data["c"],
+                            volume=candle_data.get("v", 0),
+                            buys=candle_data.get("buys", 0),
+                            sells=candle_data.get("sells", 0),
+                        )
+                        c.open = candle_data.get("o", candle_data["c"])
+                        c.high = candle_data.get("h", candle_data["c"])
+                        c.low = candle_data.get("l", candle_data["c"])
+                        tf_store.candles.append(c)
+                    total += len(tf_store.candles)
+            else:
+                # Legacy single-timeframe format
+                tf_store = store.stores["5m"]
+                for candle_data in data.get("candles", []):
+                    c = Candle(
+                        timestamp=candle_data["t"],
+                        price=candle_data["c"],
+                        volume=candle_data.get("v", 0),
+                        buys=candle_data.get("buys", 0),
+                        sells=candle_data.get("sells", 0),
+                    )
+                    c.open = candle_data.get("o", candle_data["c"])
+                    c.high = candle_data.get("h", candle_data["c"])
+                    c.low = candle_data.get("l", candle_data["c"])
+                    tf_store.candles.append(c)
+                total = len(tf_store.candles)
+
+            if total > 0:
                 store._last_update = time.time()
                 self.stores[token_address] = store
-                cprint(f"[OHLCV] Loaded {len(store.candles)} candles for {token_address[:8]}...", "cyan")
+                cprint(f"[OHLCV] Loaded {total} candles for {token_address[:8]}...", "cyan")
 
         except Exception as e:
             cprint(f"[OHLCV] Load error for {token_address[:8]}...: {e}", "yellow")

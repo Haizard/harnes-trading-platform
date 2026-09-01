@@ -195,6 +195,15 @@ class TelegramReporter:
                     self._cmd_capital()
                 elif text == "/help":
                     self._cmd_help()
+                elif text.startswith("/chart"):
+                    parts = text.split()
+                    token_addr = parts[1] if len(parts) > 1 else ""
+                    tf = parts[2] if len(parts) > 2 else "1m"
+                    self._cmd_chart(token_addr, tf)
+                elif text.startswith("/candles"):
+                    parts = text.split()
+                    token_addr = parts[1] if len(parts) > 1 else ""
+                    self._cmd_candles(token_addr)
                 elif text.startswith("/"):
                     self.send("Unknown command. Type /help for options.")
         except Exception:
@@ -291,6 +300,8 @@ class TelegramReporter:
             "/open - Open positions\n"
             "/capital - Capital details\n"
             "/summary - Daily summary\n"
+            "/chart <addr> [tf] - Price chart (tf: 1m/5m/15m/1h)\n"
+            "/candles <addr> - Multi-timeframe candle overview\n"
             "/help - This message\n\n"
             "The bot also sends automatic alerts for:\n"
             "- Trade entries and exits\n"
@@ -298,6 +309,79 @@ class TelegramReporter:
             "- Heartbeat every 30 minutes"
         )
         self.send(text)
+
+    def _cmd_chart(self, token_address: str, timeframe: str = "1m"):
+        """Handle /chart command — render ASCII candlestick chart."""
+        if not token_address:
+            # Show chart for open positions
+            if self._paper_trader and self._paper_trader.open_positions:
+                for addr, pos in self._paper_trader.open_positions.items():
+                    token_address = addr
+                    break
+            else:
+                self.send("Usage: /chart <token_address> [1m|5m|15m|1h]")
+                return
+
+        try:
+            from src.ohlcv_collector import get_ohlcv_collector
+            from src.ascii_chart import render_chart
+
+            collector = get_ohlcv_collector()
+            df = collector.get_ohlcv(token_address, min_candles=5, timeframe=timeframe)
+
+            if df is None or len(df) < 2:
+                # Show what timeframes are available
+                available = collector.get_available_timeframes(token_address)
+                tf_info = ", ".join(f"{tf}:{n}" for tf, n in available.items() if n > 0) or "none"
+                self.send(f"📊 No chart data for {token_address[:8]}...\nAvailable: {tf_info}")
+                return
+
+            chart = render_chart(df, symbol=token_address[:8], num_candles=30)
+            self.send(f"<pre>{chart}</pre>", parse_mode="HTML")
+
+        except Exception as e:
+            self.send(f"Chart error: {str(e)[:200]}")
+
+    def _cmd_candles(self, token_address: str):
+        """Handle /candles command — show multi-timeframe overview."""
+        if not token_address:
+            if self._paper_trader and self._paper_trader.open_positions:
+                for addr, pos in self._paper_trader.open_positions.items():
+                    token_address = addr
+                    break
+            else:
+                self.send("Usage: /candles <token_address>")
+                return
+
+        try:
+            from src.ohlcv_collector import get_ohlcv_collector
+            from src.ascii_chart import render_mini_chart
+
+            collector = get_ohlcv_collector()
+            available = collector.get_available_timeframes(token_address)
+
+            if not available or all(n == 0 for n in available.values()):
+                self.send(f"📊 No candle data for {token_address[:8]}...")
+                return
+
+            text = f"📊 CANDLES: {token_address[:8]}...\n\n"
+
+            for tf in ["1m", "5m", "15m", "1h"]:
+                count = available.get(tf, 0)
+                if count > 0:
+                    df = collector.get_ohlcv(token_address, min_candles=2, timeframe=tf)
+                    if df is not None and len(df) >= 2:
+                        sparkline = render_mini_chart(df, num_candles=20)
+                        text += f"{tf}: {count} candles\n{sparkline}\n\n"
+                    else:
+                        text += f"{tf}: {count} candles (building...)\n\n"
+                else:
+                    text += f"{tf}: waiting for data...\n\n"
+
+            self.send(text)
+
+        except Exception as e:
+            self.send(f"Candles error: {str(e)[:200]}")
 
     # ── Trade Notifications ──────────────────────────────────
 
