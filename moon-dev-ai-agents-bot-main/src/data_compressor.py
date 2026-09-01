@@ -238,16 +238,18 @@ class DataCompressor:
         """Compress order book snapshots to hourly summaries."""
         try:
             # Check if tables exist first
-            table_check = conn.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'orderbook_snapshots'
-                )
-            """).fetchone()
-            
-            if not table_check or not table_check[0]:
-                cprint("[COMPRESS] Order book tables not found, skipping", "yellow")
-                return 0, 0
+            try:
+                table_check = conn.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'orderbook_snapshots'
+                    )
+                """).fetchone()
+                
+                if not table_check or not table_check[0]:
+                    return 0, 0  # Table doesn't exist yet, skip silently
+            except Exception:
+                return 0, 0  # Table check failed, skip silently
 
             # Create hourly summaries from raw snapshots
             rows = conn.execute("""
