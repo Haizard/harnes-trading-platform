@@ -205,6 +205,12 @@ function drawSMCOverlays() {
     const pl = candleSeries.createPriceLine({ price: l.price, color: col, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: lbl });
     liqLines.push(pl);
   });
+  // Custom bot price lines (Liquidity Sweeps, FVG Fills)
+  const customLines = smcData.custom_price_lines || [];
+  customLines.forEach(cl => {
+    const pl = candleSeries.createPriceLine({ price: cl.price, color: cl.color, lineWidth: 1, lineStyle: cl.lineStyle || 0, axisLabelVisible: true, title: cl.title || "" });
+    liqLines.push(pl);
+  });
   if (smcData.markers && smcData.markers.length > 0) {
     candleSeries.setMarkers(smcData.markers.map(m => ({
       time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text

@@ -761,8 +761,20 @@ async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 10
             from src.db_storage import log_event
             log_event("smc/chart_request", {"symbol": symbol, "interval": interval, "candles": len(candles)})
         except: pass
-        return {"symbol": symbol, "interval": interval, "candles": candles,
+
+        result_dict = {"symbol": symbol, "interval": interval, "candles": candles,
                 "indicators": indicators, **smc.to_dict()}
+        # Run custom chart bots
+        try:
+            from src.custom_chart_bots import run_custom_bots
+            custom = run_custom_bots(candles)
+            result_dict["markers"] = result_dict.get("markers", []) + custom.markers
+            result_dict["custom_price_lines"] = custom.price_lines
+            result_dict["custom_panels"] = custom.panels
+        except Exception as ce:
+            result_dict["custom_error"] = str(ce)
+        return result_dict
+
     except Exception as e:
         return {"error": str(e), "symbol": symbol}
 
