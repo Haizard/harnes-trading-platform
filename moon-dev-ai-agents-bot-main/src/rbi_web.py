@@ -1,6 +1,8 @@
 """
 RBI Agent Web Interface — Full interactive control of the RBI pipeline.
 
+DSH Pattern: EventBus → DB → Singleton
+
 Features:
   - Add trading ideas via web form (no more editing ideas.txt)
   - Trigger pipeline runs from the browser
@@ -9,7 +11,7 @@ Features:
   - Browse strategy results with scores, walk-forward, decisions
 
 Architecture:
-  RunManager (singleton) → captures stdout → broadcasts to WebSocket clients
+  RunManager (DSH singleton) → EventBus → DB persistence → WebSocket broadcast
   FastAPI Router → mounted on main dashboard app
 
 Start standalone:
@@ -66,20 +68,25 @@ class OutputCapture(io.StringIO):
 
 
 class RunManager:
-    """Manages RBI pipeline runs — tracks state, captures output, streams via WebSocket."""
+    """Manages RBI pipeline runs — tracks state, captures output, streams via WebSocket.
+
+    DSH compliance: accepts event_bus, emits events for run lifecycle,
+    persists via DB/JSONL, singleton via get_run_manager() factory.
+    """
 
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls, event_bus=None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         if self._initialized:
             return
         self._initialized = True
+        self.event_bus = event_bus
         self.runs: Dict[str, dict] = {}
         self.logs: Dict[str, List[str]] = {}
         self.websocket_clients: Dict[str, Set[WebSocket]] = {}
@@ -104,6 +111,22 @@ class RunManager:
             except Exception:
                 pass
 
+    def _emit_event(self, event_name: str, payload: dict):
+        """Emit event via EventBus (DSH pattern)."""
+        # Persist to DB
+        try:
+            from src.db_storage import log_event
+            log_event(event_name, payload)
+        except Exception:
+            pass
+
+        # Emit to EventBus
+        if self.event_bus:
+            try:
+                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+            except Exception:
+                pass
+
     def create_run(self, idea_text: str, auto_mode: bool = False) -> str:
         """Create a new pipeline run. Returns run_id."""
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
@@ -124,6 +147,20 @@ class RunManager:
             self.runs[run_id] = run
             self.logs[run_id] = []
         self._persist_run(run)
+
+        # DSH: emit event
+        self._emit_event("rbi/run_created", {
+            "run_id": run_id,
+            "idea": idea_text[:200],
+            "auto_mode": auto_mode,
+            "timestamp": run["created_at"],
+        })
+        self._emit_event("rbi/idea_added", {
+            "run_id": run_id,
+            "idea": idea_text[:500],
+            "timestamp": run["created_at"],
+        })
+
         return run_id
 
     def start_run(self, run_id: str):
@@ -135,6 +172,13 @@ class RunManager:
             self.runs[run_id]["started_at"] = datetime.now(timezone.utc).isoformat()
         self._persist_run(self.runs[run_id])
         self._broadcast_status(run_id)
+
+        # DSH: emit event
+        self._emit_event("rbi/run_started", {
+            "run_id": run_id,
+            "idea": self.runs[run_id]["idea"][:200],
+            "timestamp": self.runs[run_id]["started_at"],
+        })
 
         thread = threading.Thread(target=self._execute_run, args=(run_id,), daemon=True)
         thread.start()
@@ -171,12 +215,30 @@ class RunManager:
             # Try to extract strategy name from logs
             self._extract_result(run_id)
 
+            # DSH: emit event
+            self._emit_event("rbi/run_completed", {
+                "run_id": run_id,
+                "idea": idea_text[:200],
+                "strategy_name": self.runs[run_id].get("strategy_name"),
+                "result": self.runs[run_id].get("result"),
+                "phases": self.runs[run_id].get("phases", {}),
+                "timestamp": self.runs[run_id]["finished_at"],
+            })
+
         except Exception as e:
             with self._lock:
                 self.runs[run_id]["status"] = "error"
                 self.runs[run_id]["error"] = str(e)
                 self.runs[run_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
             self.append_log(run_id, f"\n[FATAL ERROR] {e}\n")
+
+            # DSH: emit error event
+            self._emit_event("rbi/run_error", {
+                "run_id": run_id,
+                "idea": idea_text[:200],
+                "error": str(e),
+                "timestamp": self.runs[run_id]["finished_at"],
+            })
         finally:
             sys.stdout = old_stdout
             self._persist_run(self.runs[run_id])
@@ -300,10 +362,22 @@ class RunManager:
             pass
 
 
+# ── Singleton Factory (DSH pattern) ──────────────────────
+
+_run_manager_instance = None
+
+def get_run_manager(event_bus=None) -> RunManager:
+    """Get or create the singleton RunManager instance (DSH pattern)."""
+    global _run_manager_instance
+    if _run_manager_instance is None:
+        _run_manager_instance = RunManager(event_bus=event_bus)
+    return _run_manager_instance
+
+
 # ── FastAPI Router ─────────────────────────────────────────
 
 router = APIRouter(tags=["rbi"])
-run_manager = RunManager()
+run_manager = RunManager()  # Initial instance; get_run_manager() preferred
 
 
 # ── API Routes ─────────────────────────────────────────────

@@ -524,6 +524,19 @@ class Events:
     # Category Agent events
     AGENT_DISCOVERY = "agent/discovery"      # Agent found candidates
     AGENT_SCORED = "agent/scored"           # Agent scored a candidate
+
+    # MCP (Model Context Protocol)
+    MCP_TOOL_CALLED = "mcp/tool_called"       # A tool was called via MCP
+    MCP_TOOL_ERROR = "mcp/tool_error"         # A tool call failed
+    MCP_CONFIG_CHANGED = "mcp/config_changed"  # MCP config was updated
+    MCP_SERVER_STARTED = "mcp/server_started"   # MCP server initialized
+
+    # RBI (Research-Based Intelligence)
+    RBI_RUN_CREATED = "rbi/run_created"       # A new RBI run was created
+    RBI_RUN_STARTED = "rbi/run_started"       # An RBI run started executing
+    RBI_RUN_COMPLETED = "rbi/run_completed"   # An RBI run finished successfully
+    RBI_RUN_ERROR = "rbi/run_error"           # An RBI run failed
+    RBI_IDEA_ADDED = "rbi/idea_added"         # A new idea was submitted
     AGENT_TRADE_SIGNAL = "agent/trade_signal"  # Agent recommends a trade
 
 

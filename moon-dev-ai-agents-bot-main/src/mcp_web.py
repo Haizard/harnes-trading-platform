@@ -1,6 +1,8 @@
 """
 MCP Web Management Panel — Full interactive control of the Model Context Protocol server.
 
+DSH Pattern: EventBus → DB → Singleton
+
 Features:
   - Server status: health check, uptime, tool count, auto-connect
   - Config management: API keys, server URL, enable/disable individual tools
@@ -9,6 +11,7 @@ Features:
   - Auto-connect: MCP server starts with platform and auto-registers tools
 
 Architecture:
+  MCPWebPanel (singleton) → EventBus → DB persistence
   APIRouter → mounted on main dashboard app
   Config stored in JSON file (src/data/mcp/config.json)
   Server runs as part of the dashboard process (in-process, not separate port)
@@ -42,7 +45,7 @@ DEFAULT_CONFIG = {
         "birdeye": "",
         "twitter_bearer": "",
     },
-    "enabled_tools": [],  # Empty = all enabled
+    "enabled_tools": [],
     "disabled_tools": [],
     "last_health_check": None,
     "server_status": "unknown",
@@ -55,7 +58,6 @@ def load_config() -> dict:
         try:
             with open(CONFIG_FILE, "r") as f:
                 saved = json.load(f)
-            # Merge with defaults for any missing keys
             config = {**DEFAULT_CONFIG, **saved}
             return config
         except Exception:
@@ -70,25 +72,152 @@ def save_config(config: dict):
         json.dump(config, f, indent=2)
 
 
-# ── MCP Server Integration ─────────────────────────────────
-# We import the MCP registry and expose it through the dashboard
+# ── MCPWebPanel (DSH Singleton) ────────────────────────────
 
-_mcp_registry = None
-_mcp_start_time = None
+class MCPWebPanel:
+    """
+    DSH-compliant MCP Web Panel.
 
+    Manages the MCP registry, tool calls, config, and event emission.
+    All key actions emit events via the EventBus for dashboard visibility.
+    """
 
-def get_mcp_registry():
-    """Lazy-init the MCP registry."""
-    global _mcp_registry, _mcp_start_time
-    if _mcp_registry is None:
+    def __init__(self, event_bus=None):
+        self.event_bus = event_bus
+        self._registry = None
+        self._start_time = None
+
+    def _emit_event(self, event_name: str, payload: dict):
+        """Emit event via EventBus (DSH pattern)."""
+        # Persist to DB
         try:
-            from src.mcp_registry import create_default_mcp_registry
-            _mcp_registry = create_default_mcp_registry()
-            _mcp_start_time = time.time()
-            print("[MCP] Registry initialized via web panel", flush=True)
-        except Exception as e:
-            print(f"[MCP] Failed to init registry: {e}", flush=True)
-    return _mcp_registry
+            from src.db_storage import log_event
+            log_event(event_name, payload)
+        except Exception:
+            pass
+
+        # Emit to EventBus
+        if self.event_bus:
+            try:
+                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+            except Exception:
+                pass
+
+    def get_registry(self):
+        """Lazy-init the MCP registry (singleton pattern)."""
+        if self._registry is None:
+            try:
+                from src.mcp_registry import create_default_mcp_registry
+                self._registry = create_default_mcp_registry()
+                self._start_time = time.time()
+                self._emit_event("mcp/server_started", {
+                    "tools_count": len(self._registry.list_tool_names()),
+                    "tools": self._registry.list_tool_names(),
+                })
+            except Exception as e:
+                print(f"[MCP] Failed to init registry: {e}", flush=True)
+        return self._registry
+
+    async def call_tool(self, tool_name: str, params: dict):
+        """Call a tool and emit events for success/error."""
+        registry = self.get_registry()
+        if not registry:
+            raise HTTPException(503, "MCP registry not initialized")
+
+        tool = registry.get_tool(tool_name)
+        if not tool:
+            raise HTTPException(404, f"Unknown tool: {tool_name}")
+
+        # Validate required params
+        for param in tool.parameters:
+            if param.required:
+                val = params.get(param.name)
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    if param.default is not None and isinstance(param.default, str) and param.default.strip():
+                        params[param.name] = param.default
+                    else:
+                        raise HTTPException(422, f"Missing required parameter: '{param.name}'. {param.description}")
+
+        # Execute (async)
+        result = await registry.call_tool(tool_name, params)
+
+        # Emit event
+        event_payload = {
+            "tool": tool_name,
+            "params": params,
+            "success": result.success,
+            "latency_ms": round(result.latency_ms, 1),
+            "source": result.source,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if result.success:
+            self._emit_event("mcp/tool_called", event_payload)
+        else:
+            event_payload["error"] = result.error
+            self._emit_event("mcp/tool_error", event_payload)
+
+        return {
+            "success": result.success,
+            "data": result.data,
+            "error": result.error,
+            "tool": tool_name,
+            "source": result.source,
+            "latency_ms": round(result.latency_ms, 1),
+            "timestamp": event_payload["timestamp"],
+        }
+
+    def update_config(self, updates: dict) -> dict:
+        """Update config and emit event."""
+        config = load_config()
+
+        if "auto_connect" in updates:
+            config["auto_connect"] = bool(updates["auto_connect"])
+        if "api_keys" in updates:
+            config["api_keys"] = {**config.get("api_keys", {}), **updates["api_keys"]}
+        if "enabled_tools" in updates:
+            config["enabled_tools"] = updates["enabled_tools"]
+        if "disabled_tools" in updates:
+            config["disabled_tools"] = updates["disabled_tools"]
+        if "server_port" in updates:
+            config["server_port"] = int(updates["server_port"])
+
+        save_config(config)
+
+        # Apply API keys to environment
+        for key, value in config.get("api_keys", {}).items():
+            if value:
+                env_key = key.upper()
+                if not env_key.endswith("_API_KEY"):
+                    env_key += "_API_KEY"
+                os.environ[env_key] = value
+
+        self._emit_event("mcp/config_changed", {
+            "auto_connect": config.get("auto_connect"),
+            "server_port": config.get("server_port"),
+            "keys_updated": list(updates.get("api_keys", {}).keys()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        return config
+
+
+# ── Singleton ──────────────────────────────────────────────
+
+_panel_instance = None
+
+
+def get_mcp_panel(event_bus=None) -> MCPWebPanel:
+    """Get or create the singleton MCPWebPanel instance (DSH pattern)."""
+    global _panel_instance
+    if _panel_instance is None:
+        _panel_instance = MCPWebPanel(event_bus=event_bus)
+    return _panel_instance
+
+
+# Keep backward-compatible alias
+def get_mcp_registry():
+    """Get the MCP registry (backward-compatible, delegates to singleton)."""
+    return get_mcp_panel().get_registry()
 
 
 # ── Router ──────────────────────────────────────────────────
@@ -119,20 +248,20 @@ def get_mcp_html() -> str:
     return MCP_HTML_CONTENT
 
 
-# ── API Endpoints ──────────────────────────────────────────
+# ── API Endpoints (use singleton panel) ────────────────────
 
 @router.get("/status")
 async def mcp_status():
     """Get MCP server status including health, uptime, tool count."""
+    panel = get_mcp_panel()
     config = load_config()
-    registry = get_mcp_registry()
+    registry = panel.get_registry()
 
     uptime = 0
     health = {"status": "unknown"}
-    if registry and _mcp_start_time:
-        uptime = round(time.time() - _mcp_start_time, 1)
+    if registry and panel._start_time:
+        uptime = round(time.time() - panel._start_time, 1)
 
-    # Try health check if MCP server is running separately
     try:
         import requests as req
         port = config.get("server_port", 8420)
@@ -140,7 +269,6 @@ async def mcp_status():
         if r.status_code == 200:
             health = r.json()
     except Exception:
-        # In-process mode — health from registry
         tool_count = len(registry.list_tool_names()) if registry else 0
         health = {
             "status": "running_in_dashboard",
@@ -161,7 +289,7 @@ async def mcp_status():
 @router.get("/tools")
 async def mcp_tools():
     """List all MCP tools with metadata."""
-    registry = get_mcp_registry()
+    registry = get_mcp_panel().get_registry()
     if not registry:
         return {"tools": [], "count": 0, "error": "Registry not initialized"}
 
@@ -187,41 +315,14 @@ async def mcp_call(request: Request):
     if not tool_name:
         raise HTTPException(400, "Tool name is required")
 
-    registry = get_mcp_registry()
-    if not registry:
-        raise HTTPException(503, "MCP registry not initialized")
-
-    tool = registry.get_tool(tool_name)
-    if not tool:
-        raise HTTPException(404, f"Unknown tool: {tool_name}")
-
-    # Validate required params (reject missing AND empty-string values)
-    for param in tool.parameters:
-        if param.required:
-            val = params.get(param.name)
-            if val is None or (isinstance(val, str) and not val.strip()):
-                if param.default is not None and isinstance(param.default, str) and param.default.strip():
-                    params[param.name] = param.default
-                else:
-                    raise HTTPException(422, f"Missing required parameter: '{param.name}'. {param.description}")
-
-    result = await registry.call_tool(tool_name, params)
-
-    return {
-        "success": result.success,
-        "data": result.data,
-        "error": result.error,
-        "tool": tool_name,
-        "source": result.source,
-        "latency_ms": round(result.latency_ms, 1),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    panel = get_mcp_panel()
+    return await panel.call_tool(tool_name, params)
 
 
 @router.get("/history")
 async def mcp_history(limit: int = 50):
     """Get recent MCP tool call history."""
-    registry = get_mcp_registry()
+    registry = get_mcp_panel().get_registry()
     if not registry:
         return {"history": [], "count": 0}
 
@@ -233,30 +334,8 @@ async def mcp_history(limit: int = 50):
 async def mcp_update_config(request: Request):
     """Update MCP configuration."""
     body = await request.json()
-    config = load_config()
-
-    # Update allowed fields
-    if "auto_connect" in body:
-        config["auto_connect"] = bool(body["auto_connect"])
-    if "api_keys" in body:
-        config["api_keys"] = {**config.get("api_keys", {}), **body["api_keys"]}
-    if "enabled_tools" in body:
-        config["enabled_tools"] = body["enabled_tools"]
-    if "disabled_tools" in body:
-        config["disabled_tools"] = body["disabled_tools"]
-    if "server_port" in body:
-        config["server_port"] = int(body["server_port"])
-
-    save_config(config)
-
-    # Apply API keys to environment
-    for key, value in config.get("api_keys", {}).items():
-        if value:
-            env_key = key.upper()
-            if not env_key.endswith("_API_KEY"):
-                env_key += "_API_KEY"
-            os.environ[env_key] = value
-
+    panel = get_mcp_panel()
+    config = panel.update_config(body)
     return {"status": "ok", "config": config}
 
 
@@ -264,7 +343,6 @@ async def mcp_update_config(request: Request):
 async def mcp_get_config():
     """Get current MCP configuration (masks API keys)."""
     config = load_config()
-    # Mask API keys for security
     safe_config = config.copy()
     safe_config["api_keys"] = {
         k: ("***" + v[-4:] if len(v) > 4 else ("set" if v else ""))
@@ -276,7 +354,7 @@ async def mcp_get_config():
 @router.get("/schema/{tool_name}")
 async def mcp_tool_schema(tool_name: str):
     """Get detailed schema for a specific tool."""
-    registry = get_mcp_registry()
+    registry = get_mcp_panel().get_registry()
     if not registry:
         raise HTTPException(503, "Registry not initialized")
 
@@ -304,7 +382,8 @@ async def mcp_tool_schema(tool_name: str):
 
 # ── Standalone App ─────────────────────────────────────────
 
-app = None  # Will be set if run standalone
+app = None
+
 
 def create_standalone_app():
     from fastapi import FastAPI
