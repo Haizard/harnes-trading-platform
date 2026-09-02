@@ -59,6 +59,14 @@ try:
 except Exception as e:
     print(f"[DASHBOARD] RBI web routes failed: {e}", flush=True)
 
+# Mount MCP Web Panel
+try:
+    from src.mcp_web import router as mcp_router
+    app.include_router(mcp_router)
+    print("[DASHBOARD] MCP web panel loaded", flush=True)
+except Exception as e:
+    print(f"[DASHBOARD] MCP web panel failed: {e}", flush=True)
+
 # Auth helpers
 
 def get_current_user(request: Request) -> Optional[dict]:
@@ -846,6 +854,16 @@ async def rbi_agent_page():
         return HTMLResponse("<h1>RBI Agent module not available</h1>", status_code=503)
 
 
+@app.get("/mcp/", response_class=HTMLResponse)
+async def mcp_agent_page():
+    """MCP Agent web interface."""
+    try:
+        from src.mcp_web import get_mcp_html
+        return get_mcp_html()
+    except ImportError:
+        return HTMLResponse("<h1>MCP Agent module not available</h1>", status_code=503)
+
+
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -953,7 +971,7 @@ DASHBOARD_HTML = """
         <button onclick="showPanel('wallets')">🐋 Wallets</button>
         <button onclick="showPanel('rbi')">🛡️ RBI</button>
         <button onclick="window.open('/rbi/','_blank')" style="color:#e879f9;">🧪 RBI Agent →</button>
-        <button onclick="showPanel('mcp')">🤖 MCP</button>
+        <button onclick="window.open('/mcp/','_blank')" style="color:#22d3ee;">🔌 MCP Agent →</button>
         <button onclick="showPanel('storage')">💾 Storage</button>
         <button onclick="showPanel('health')">💓 Health</button>
     </div>

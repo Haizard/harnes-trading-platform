@@ -57,6 +57,27 @@ try:
     dashboard_thread.start()
     time.sleep(1)  # Give it a moment to start
     dashboard_ok = True
+    
+    # Auto-init MCP server (pre-load registry so tools are ready immediately)
+    try:
+        from src.mcp_web import load_config, get_mcp_registry
+        mcp_config = load_config()
+        if mcp_config.get('auto_connect', True):
+            print('[MCP] Auto-connect enabled, initializing registry...', flush=True)
+            # Apply saved API keys to environment
+            for key, value in mcp_config.get('api_keys', {}).items():
+                if value:
+                    env_key = key.upper()
+                    if not env_key.endswith('_API_KEY'):
+                        env_key += '_API_KEY'
+                    os.environ[env_key] = value
+            registry = get_mcp_registry()
+            if registry:
+                print(f'[MCP] Ready — {len(registry.list_tool_names())} tools loaded', flush=True)
+        else:
+            print('[MCP] Auto-connect disabled, skipping init', flush=True)
+    except Exception as e:
+        print(f'[MCP] Init failed: {e}', flush=True)
 except Exception as e:
     print(f"[DASHBOARD] Import failed: {e}", flush=True)
 

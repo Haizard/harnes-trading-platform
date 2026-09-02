@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Agent — Model Context Protocol</title>
+    <style>
+        :root {
+            --bg: #0a0a0f; --surface: #12121a; --border: #1e1e2e;
+            --text: #e0e0e0; --dim: #666; --accent: #22d3ee;
+            --green: #4ade80; --red: #f87171; --yellow: #facc15;
+            --purple: #a78bfa; --blue: #60a5fa;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 18px; color: var(--accent); }
+        .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .status-ok { background: rgba(74,222,128,0.15); color: var(--green); }
+        .status-err { background: rgba(248,113,113,0.15); color: var(--red); }
+        .status-unknown { background: rgba(250,204,21,0.15); color: var(--yellow); }
+
+        .tabs { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; }
+        .tab { padding: 12px 20px; cursor: pointer; color: var(--dim); font-size: 13px; border-bottom: 2px solid transparent; transition: all 0.2s; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .content { padding: 24px; max-width: 1200px; margin: 0 auto; }
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        .grid { display: grid; gap: 16px; }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+        .card h3 { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+        .stat { text-align: center; }
+        .stat-value { font-size: 28px; font-weight: 700; color: var(--accent); }
+        .stat-label { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; padding: 8px 12px; font-size: 11px; color: var(--dim); text-transform: uppercase; border-bottom: 1px solid var(--border); }
+        td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border); }
+        tr:hover { background: rgba(34,211,238,0.03); }
+
+        .tool-name { color: var(--accent); font-weight: 600; }
+        .tool-source { color: var(--purple); font-size: 11px; }
+        .tool-desc { color: var(--dim); font-size: 12px; }
+
+        .btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 13px; font-family: inherit; transition: all 0.2s; }
+        .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-danger { border-color: var(--red); color: var(--red); }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+        .input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; width: 100%; }
+        .input:focus { outline: none; border-color: var(--accent); }
+        .textarea { min-height: 120px; resize: vertical; }
+
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+
+        .toggle { position: relative; width: 40px; height: 22px; display: inline-block; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border-radius: 11px; transition: 0.3s; }
+        .toggle .slider:before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: var(--text); border-radius: 50%; transition: 0.3s; }
+        .toggle input:checked + .slider { background: var(--accent); }
+        .toggle input:checked + .slider:before { transform: translateX(18px); background: #000; }
+
+        .code-block { background: #0d0d14; border: 1px solid var(--border); border-radius: 6px; padding: 16px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; max-height: 400px; overflow-y: auto; color: var(--green); }
+
+        .result-box { margin-top: 16px; }
+        .result-success { border-color: var(--green); }
+        .result-error { border-color: var(--red); }
+
+        .latency { font-size: 11px; color: var(--dim); }
+        .latency-fast { color: var(--green); }
+        .latency-slow { color: var(--red); }
+
+        .empty { text-align: center; padding: 40px; color: var(--dim); }
+
+        @media (max-width: 768px) {
+            .grid-3, .grid-2 { grid-template-columns: 1fr; }
+            .tabs { overflow-x: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔌 MCP Agent — Model Context Protocol</h1>
+        <div>
+            <span id="server-status" class="status-badge status-unknown">Checking...</span>
+            <a href="/" class="btn btn-sm" style="margin-left: 12px; text-decoration: none;">← Dashboard</a>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showTab('status')">📡 Status</div>
+        <div class="tab" onclick="showTab('tools')">🔧 Tools</div>
+        <div class="tab" onclick="showTab('tester')">⚡ Tester</div>
+        <div class="tab" onclick="showTab('history')">📋 History</div>
+        <div class="tab" onclick="showTab('config')">⚙️ Config</div>
+    </div>
+
+    <div class="content">
+        <!-- Status Panel -->
+        <div class="panel active" id="panel-status">
+            <div class="grid grid-3" id="status-stats"></div>
+            <div class="grid grid-2" style="margin-top: 16px;">
+                <div class="card">
+                    <h3>Auto-Connect</h3>
+                    <div id="auto-connect-status" style="display: flex; align-items: center; gap: 12px;">
+                        <label class="toggle">
+                            <input type="checkbox" id="auto-connect-toggle" onchange="toggleAutoConnect()">
+                            <span class="slider"></span>
+                        </label>
+                        <span id="auto-connect-label">Loading...</span>
+                    </div>
+                    <p style="font-size: 12px; color: var(--dim); margin-top: 12px;">
+                        When enabled, the MCP server starts automatically with the platform.
+                        Tools are available immediately — no manual setup needed.
+                    </p>
+                </div>
+                <div class="card">
+                    <h3>Quick Health</h3>
+                    <div id="health-detail" style="font-size: 13px;">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tools Panel -->
+        <div class="panel" id="panel-tools">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="font-size: 16px;">Registered MCP Tools</h2>
+                <button class="btn btn-sm" onclick="loadTools()">🔄 Refresh</button>
+            </div>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>Description</th>
+                            <th>Source</th>
+                            <th>Params</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tools-list"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tester Panel -->
+        <div class="panel" id="panel-tester">
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3>Call a Tool</h3>
+                    <div class="form-group">
+                        <label>Tool Name</label>
+                        <select id="tester-tool" class="input" onchange="loadToolSchema()">
+                            <option value="">Select a tool...</option>
+                        </select>
+                    </div>
+                    <div id="tester-params"></div>
+                    <div class="form-group">
+                        <label>Parameters (JSON)</label>
+                        <textarea id="tester-input" class="input textarea" placeholder='{"token_address": "..."}'></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="callTool()" id="tester-call-btn">⚡ Call Tool</button>
+                </div>
+                <div class="card">
+                    <h3>Result</h3>
+                    <div id="tester-result" class="code-block" style="min-height: 200px;">
+<span style="color: var(--dim);">// Select a tool and click Call to see results</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Panel -->
+        <div class="panel" id="panel-history">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="font-size: 16px;">Recent Tool Calls</h2>
+                <button class="btn btn-sm" onclick="loadHistory()">🔄 Refresh</button>
+            </div>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>Params</th>
+                            <th>Status</th>
+                            <th>Latency</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-list"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Config Panel -->
+        <div class="panel" id="panel-config">
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3>API Keys</h3>
+                    <div class="form-group">
+                        <label>Birdeye API Key</label>
+                        <input type="password" id="cfg-birdeye" class="input" placeholder="bx-...">
+                    </div>
+                    <div class="form-group">
+                        <label>Twitter Bearer Token</label>
+                        <input type="password" id="cfg-twitter" class="input" placeholder="AAAA...">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveConfig()">💾 Save Keys</button>
+                </div>
+                <div class="card">
+                    <h3>Server Settings</h3>
+                    <div class="form-group">
+                        <label>MCP Server Port</label>
+                        <input type="number" id="cfg-port" class="input" value="8420">
+                    </div>
+                    <div class="form-group">
+                        <label>Auto-Connect on Startup</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="cfg-auto-connect">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <button class="btn" onclick="saveConfig()">💾 Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const API = '/mcp';
+
+    // ── Tab Navigation ──
+    function showTab(name) {
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.getElementById('panel-' + name).classList.add('active');
+        event.target.classList.add('active');
+
+        if (name === 'status') loadStatus();
+        if (name === 'tools') loadTools();
+        if (name === 'tester') loadTesterTools();
+        if (name === 'history') loadHistory();
+        if (name === 'config') loadConfig();
+    }
+
+    // ── Status ──
+    async function loadStatus() {
+        try {
+            const r = await fetch(API + '/status');
+            const d = await r.json();
+
+            const statusEl = document.getElementById('server-status');
+            if (d.server_status === 'running_in_dashboard' || d.server_status === 'ok') {
+                statusEl.className = 'status-badge status-ok';
+                statusEl.textContent = '● Connected';
+            } else {
+                statusEl.className = 'status-badge status-err';
+                statusEl.textContent = '● Disconnected';
+            }
+
+            document.getElementById('status-stats').innerHTML = `
+                <div class="card stat"><div class="stat-value">${d.tools_count || 0}</div><div class="stat-label">Tools Registered</div></div>
+                <div class="card stat"><div class="stat-value">${formatUptime(d.uptime_seconds)}</div><div class="stat-label">Uptime</div></div>
+                <div class="card stat"><div class="stat-value">${d.server_port}</div><div class="stat-label">Server Port</div></div>
+            `;
+
+            document.getElementById('auto-connect-toggle').checked = d.auto_connect;
+            document.getElementById('auto-connect-label').textContent = d.auto_connect ? 'Enabled — auto-starts with platform' : 'Disabled — manual start required';
+
+            document.getElementById('health-detail').innerHTML = `
+                <div style="margin-bottom: 8px;"><strong>Status:</strong> <span style="color: ${d.server_status === 'ok' || d.server_status === 'running_in_dashboard' ? 'var(--green)' : 'var(--red)'}">${d.server_status}</span></div>
+                <div style="margin-bottom: 8px;"><strong>Tools:</strong> ${d.tools_count} registered</div>
+                <div style="margin-bottom: 8px;"><strong>Uptime:</strong> ${formatUptime(d.uptime_seconds)}</div>
+                <div><strong>Last Call:</strong> ${d.last_call || 'None'}</div>
+            `;
+        } catch (e) {
+            document.getElementById('server-status').className = 'status-badge status-err';
+            document.getElementById('server-status').textContent = '● Error';
+        }
+    }
+
+    async function toggleAutoConnect() {
+        const checked = document.getElementById('auto-connect-toggle').checked;
+        await fetch(API + '/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({auto_connect: checked})
+        });
+        document.getElementById('auto-connect-label').textContent = checked ? 'Enabled — auto-starts with platform' : 'Disabled — manual start required';
+    }
+
+    // ── Tools ──
+    async function loadTools() {
+        try {
+            const r = await fetch(API + '/tools');
+            const d = await r.json();
+
+            document.getElementById('tools-list').innerHTML = d.tools.map(t => `
+                <tr>
+                    <td><span class="tool-name">${t.name}</span></td>
+                    <td><span class="tool-desc">${(t.description || '').slice(0, 100)}</span></td>
+                    <td><span class="tool-source">${t.source || ''}</span></td>
+                    <td>${(t.parameters || []).length}</td>
+                    <td>${t.enabled ? '<span style="color:var(--green)">● Active</span>' : '<span style="color:var(--red)">● Disabled</span>'}</td>
+                    <td><button class="btn btn-sm" onclick="quickTest('${t.name}')">Test</button></td>
+                </tr>
+            `).join('');
+        } catch (e) {
+            document.getElementById('tools-list').innerHTML = '<tr><td colspan="6" class="empty">Failed to load tools</td></tr>';
+        }
+    }
+
+    // ── Tester ──
+    async function loadTesterTools() {
+        try {
+            const r = await fetch(API + '/tools');
+            const d = await r.json();
+            const sel = document.getElementById('tester-tool');
+            sel.innerHTML = '<option value="">Select a tool...</option>' +
+                d.tools.filter(t => t.enabled).map(t =>
+                    `<option value="${t.name}">${t.name} — ${(t.description || '').slice(0, 60)}</option>`
+                ).join('');
+        } catch (e) {}
+    }
+
+    async function loadToolSchema() {
+        const name = document.getElementById('tester-tool').value;
+        if (!name) {
+            document.getElementById('tester-params').innerHTML = '';
+            document.getElementById('tester-input').value = '';
+            return;
+        }
+        try {
+            const r = await fetch(API + '/schema/' + name);
+            const d = await r.json();
+
+            // Show param hints
+            document.getElementById('tester-params').innerHTML = d.parameters.map(p =>
+                `<div style="font-size: 12px; color: var(--dim); margin-bottom: 4px;">
+                    <strong>${p.name}</strong> (${p.type}) ${p.required ? '<span style="color:var(--red)">*</span>' : ''}
+                    ${p.default !== null ? `default: ${p.default}` : ''}
+                    — ${p.description}
+                </div>`
+            ).join('');
+
+            // Pre-fill JSON
+            const params = {};
+            d.parameters.forEach(p => {
+                if (p.required) params[p.name] = p.type === 'string' ? '' : p.type === 'number' ? 0 : p.type === 'integer' ? 0 : false;
+            });
+            document.getElementById('tester-input').value = JSON.stringify(params, null, 2);
+        } catch (e) {}
+    }
+
+    async function callTool() {
+        const toolName = document.getElementById('tester-tool').value;
+        if (!toolName) return alert('Select a tool first');
+
+        let params;
+        try {
+            params = JSON.parse(document.getElementById('tester-input').value || '{}');
+        } catch (e) {
+            return alert('Invalid JSON: ' + e.message);
+        }
+
+        const btn = document.getElementById('tester-call-btn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Calling...';
+
+        try {
+            const r = await fetch(API + '/call', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tool: toolName, params})
+            });
+            const d = await r.json();
+
+            const resultEl = document.getElementById('tester-result');
+            resultEl.className = 'code-block ' + (d.success ? 'result-success' : 'result-error');
+
+            const latencyClass = (d.latency_ms || 0) < 1000 ? 'latency-fast' : 'latency-slow';
+            resultEl.innerHTML = `<span style="color: var(--dim);">// ${d.success ? '✅ Success' : '❌ Error'} — ${d.latency_ms}ms — ${d.source || ''}</span>\n\n` +
+                syntaxHighlight(JSON.stringify(d.data || d.error, null, 2));
+        } catch (e) {
+            document.getElementById('tester-result').innerHTML = `<span style="color: var(--red);">Request failed: ${e.message}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '⚡ Call Tool';
+        }
+    }
+
+    function quickTest(toolName) {
+        showTab('tester');
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab')[2].classList.add('active');
+        setTimeout(() => {
+            document.getElementById('tester-tool').value = toolName;
+            loadToolSchema();
+        }, 100);
+    }
+
+    // ── History ──
+    async function loadHistory() {
+        try {
+            const r = await fetch(API + '/history?limit=50');
+            const d = await r.json();
+
+            if (!d.history || d.history.length === 0) {
+                document.getElementById('history-list').innerHTML = '<tr><td colspan="5" class="empty">No tool calls yet</td></tr>';
+                return;
+            }
+
+            document.getElementById('history-list').innerHTML = d.history.reverse().map(h => {
+                const latencyClass = (h.latency_ms || 0) < 1000 ? 'latency-fast' : 'latency-slow';
+                return `<tr>
+                    <td><span class="tool-name">${h.tool}</span></td>
+                    <td style="font-size: 11px; color: var(--dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${JSON.stringify(h.params || {}).slice(0, 80)}</td>
+                    <td>${h.success ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--red)">✗</span>'}</td>
+                    <td><span class="${latencyClass}">${(h.latency_ms || 0).toFixed(0)}ms</span></td>
+                    <td style="font-size: 11px; color: var(--dim);">${h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : ''}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            document.getElementById('history-list').innerHTML = '<tr><td colspan="5" class="empty">Failed to load history</td></tr>';
+        }
+    }
+
+    // ── Config ──
+    async function loadConfig() {
+        try {
+            const r = await fetch(API + '/config');
+            const d = await r.json();
+            document.getElementById('cfg-birdeye').placeholder = d.api_keys?.birdeye || 'bx-...';
+            document.getElementById('cfg-twitter').placeholder = d.api_keys?.twitter_bearer || 'AAAA...';
+            document.getElementById('cfg-port').value = d.server_port || 8420;
+            document.getElementById('cfg-auto-connect').checked = d.auto_connect;
+        } catch (e) {}
+    }
+
+    async function saveConfig() {
+        const updates = {
+            api_keys: {},
+            server_port: parseInt(document.getElementById('cfg-port').value) || 8420,
+            auto_connect: document.getElementById('cfg-auto-connect').checked,
+        };
+
+        const birdeye = document.getElementById('cfg-birdeye').value;
+        const twitter = document.getElementById('cfg-twitter').value;
+        if (birdeye) updates.api_keys.birdeye = birdeye;
+        if (twitter) updates.api_keys.twitter_bearer = twitter;
+
+        try {
+            await fetch(API + '/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(updates)
+            });
+            alert('Config saved!');
+            loadConfig();
+        } catch (e) {
+            alert('Failed to save: ' + e.message);
+        }
+    }
+
+    // ── Helpers ──
+    function formatUptime(seconds) {
+        if (!seconds || seconds <= 0) return '0s';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
+    }
+
+    function syntaxHighlight(json) {
+        return json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+            match => {
+                let cls = 'color: #60a5fa'; // number
+                if (/^"/.test(match)) {
+                    cls = /:$/.test(match) ? 'color: var(--purple)' : 'color: var(--green)';
+                } else if (/true|false/.test(match)) {
+                    cls = 'color: var(--yellow)';
+                } else if (/null/.test(match)) {
+                    cls = 'color: var(--red)';
+                }
+                return '<span style="' + cls + '">' + match + '</span>';
+            });
+    }
+
+    // ── Init ──
+    loadStatus();
+    </script>
+</body>
+</html>
