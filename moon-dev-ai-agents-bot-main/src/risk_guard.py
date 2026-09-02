@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Callable, Awaitable, Any, Dict
 from enum import Enum
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 class OrderSide(Enum):
@@ -225,7 +226,7 @@ class RiskGuard:
                 import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.ensure_future(self.event_bus.emit("risk_guard/rejection", entry))
+                    _fire_and_forget(self.event_bus.emit("risk_guard/rejection", entry))
                 else:
                     loop.run_until_complete(self.event_bus.emit("risk_guard/rejection", entry))
             except Exception:

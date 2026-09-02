@@ -9,6 +9,7 @@ import time
 import requests
 from dataclasses import dataclass, field
 from typing import Optional
+from src.event_bus import _fire_and_forget
 
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
@@ -122,7 +123,7 @@ class RugPullDetector:
                     }
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.ensure_future(self.event_bus.emit("rug_check/result", payload))
+                        _fire_and_forget(self.event_bus.emit("rug_check/result", payload))
                     else:
                         loop.run_until_complete(self.event_bus.emit("rug_check/result", payload))
                 except Exception:

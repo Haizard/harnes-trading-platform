@@ -15,6 +15,7 @@ import time
 import json
 from datetime import datetime, timezone, timedelta
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 class StorageTierManager:
@@ -371,7 +372,7 @@ class StorageTierManager:
         if self.event_bus:
             try:
                 import asyncio
-                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+                _fire_and_forget(self.event_bus.emit(event_name, payload))
             except Exception:
                 pass
 

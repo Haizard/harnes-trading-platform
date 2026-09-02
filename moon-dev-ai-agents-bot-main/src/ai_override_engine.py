@@ -16,6 +16,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 # ── Override Prompt ──────────────────────────────────────
@@ -172,7 +173,7 @@ class AIOverrideEngine:
                         payload = {"risk_event_type": risk_event_type, **decision}
                         loop = asyncio.get_event_loop()
                         if loop.is_running():
-                            asyncio.ensure_future(self.event_bus.emit("override/decision", payload))
+                            _fire_and_forget(self.event_bus.emit("override/decision", payload))
                         else:
                             loop.run_until_complete(self.event_bus.emit("override/decision", payload))
                     except Exception:

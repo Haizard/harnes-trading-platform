@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from random import randint
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 # ── ML Model (BERTweet) ──────────────────────────────────────
@@ -311,7 +312,7 @@ class FullSentimentAgent:
                 from src.event_bus import Events
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.ensure_future(self.event_bus.emit("sentiment/token", result))
+                    _fire_and_forget(self.event_bus.emit("sentiment/token", result))
                 else:
                     loop.run_until_complete(self.event_bus.emit("sentiment/token", result))
             except Exception:

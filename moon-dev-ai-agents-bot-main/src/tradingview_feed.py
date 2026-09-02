@@ -9,6 +9,7 @@ Free tier compatible: tradingview-ta + tradingview-screener (no auth needed)
 import os, time, asyncio
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from src.event_bus import _fire_and_forget
 
 
 class TradingViewFeed:
@@ -25,7 +26,7 @@ class TradingViewFeed:
             log_event(event_name, payload)
         except: pass
         if self.event_bus:
-            try: asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+            try: _fire_and_forget(self.event_bus.emit(event_name, payload))
             except: pass
 
     def _get_cache(self, key):

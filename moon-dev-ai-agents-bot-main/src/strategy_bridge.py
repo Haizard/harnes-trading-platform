@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 # TA-Lib for indicator calculations
 try:
@@ -1300,7 +1301,7 @@ class StrategyBridge:
                     }
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.ensure_future(self.event_bus.emit("strategy/signal", payload))
+                        _fire_and_forget(self.event_bus.emit("strategy/signal", payload))
                     else:
                         loop.run_until_complete(self.event_bus.emit("strategy/signal", payload))
                 except Exception:

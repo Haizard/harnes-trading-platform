@@ -126,6 +126,30 @@ class AbortController:
 
 # ── Event Bus ─────────────────────────────────────────────────
 
+# ── Sync-to-Async Helper ──────────────────────────────────
+
+_pending_tasks: set = set()
+
+def _fire_and_forget(coro):
+    """Schedule an async coroutine from sync code without triggering RuntimeWarning.
+
+    Stores task references to prevent GC from collecting coroutines
+    before they complete. Used by all modules that call
+    EventBus.emit() from synchronous code.
+    """
+    import asyncio, warnings
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                task = asyncio.ensure_future(coro)
+                _pending_tasks.add(task)
+                task.add_done_callback(_pending_tasks.discard)
+    except RuntimeError:
+        pass
+
+
 class EventBus:
     """
     DSH-style event bus with 4 dispatch modes.

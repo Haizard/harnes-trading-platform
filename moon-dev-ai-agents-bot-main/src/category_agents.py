@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from enum import Enum
+from src.event_bus import _fire_and_forget
 
 # DexScreener endpoints (FREE, no API key)
 DEXSCREENER_SEARCH = "https://api.dexscreener.com/latest/dex/search"
@@ -154,7 +155,7 @@ class CategoryAgent(ABC):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+                _fire_and_forget(self.event_bus.emit(event_name, payload))
             else:
                 loop.run_until_complete(self.event_bus.emit(event_name, payload))
         except RuntimeError:

@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from random import randint
+from src.event_bus import _fire_and_forget
 
 
 # Keyword lists for sentiment scoring
@@ -279,7 +280,7 @@ class LightweightSentiment:
                 }
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.ensure_future(self.event_bus.emit("sentiment/token", payload))
+                    _fire_and_forget(self.event_bus.emit("sentiment/token", payload))
                 else:
                     loop.run_until_complete(self.event_bus.emit("sentiment/token", payload))
             except Exception:

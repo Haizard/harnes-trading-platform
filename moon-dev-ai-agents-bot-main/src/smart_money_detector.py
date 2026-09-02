@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from collections import defaultdict
+from src.event_bus import _fire_and_forget
 
 
 DATA_DIR = Path("src/data")
@@ -312,10 +313,10 @@ class SmartMoneyDetector:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.ensure_future(self.event_bus.emit(Events.SMART_MONEY_CONSENSUS, payload))
+                        _fire_and_forget(self.event_bus.emit(Events.SMART_MONEY_CONSENSUS, payload))
                         # High-confidence signals get a separate alert event
                         if sig.confidence >= 0.5 and sig.wallets_buying >= 3:
-                            asyncio.ensure_future(self.event_bus.emit(Events.SMART_MONEY_ALERT, payload))
+                            _fire_and_forget(self.event_bus.emit(Events.SMART_MONEY_ALERT, payload))
                 except RuntimeError:
                     pass
         except Exception:

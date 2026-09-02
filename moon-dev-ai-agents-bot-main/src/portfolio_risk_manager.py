@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 @dataclass
@@ -260,7 +261,7 @@ class PortfolioRiskManager:
                 payload = event.to_dict()
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.ensure_future(self.event_bus.emit("risk/event", payload))
+                    _fire_and_forget(self.event_bus.emit("risk/event", payload))
                 else:
                     loop.run_until_complete(self.event_bus.emit("risk/event", payload))
             except Exception:

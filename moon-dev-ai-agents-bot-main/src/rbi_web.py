@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from src.event_bus import _fire_and_forget
 
 # ── Paths ──────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -123,7 +124,7 @@ class RunManager:
         # Emit to EventBus
         if self.event_bus:
             try:
-                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+                _fire_and_forget(self.event_bus.emit(event_name, payload))
             except Exception:
                 pass
 

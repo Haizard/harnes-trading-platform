@@ -5,6 +5,7 @@ DSH Pattern: EventBus -> DB -> Singleton
 import os, time, asyncio, json, re
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from src.event_bus import _fire_and_forget
 
 PINE_SYSTEM = """You are an expert Pine Script to Python converter.
 Convert TradingView Pine Script strategies into backtestable Python code.
@@ -31,7 +32,7 @@ class PineConverter:
             log_event(name, payload)
         except: pass
         if self.event_bus:
-            try: asyncio.ensure_future(self.event_bus.emit(name, payload))
+            try: _fire_and_forget(self.event_bus.emit(name, payload))
             except: pass
 
     async def convert(self, pine_script, strategy_name=None):

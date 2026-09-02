@@ -10,6 +10,7 @@ from typing import List, Optional, Callable, Dict
 from pathlib import Path
 
 # Category agents for discovery, scoring, and trading style
+from src.event_bus import _fire_and_forget
 from src.category_agents import (
     TokenCategory, TradeParams, get_category_params, get_all_agents,
     get_agent_for_category, classify_token, CATEGORY_PARAMS,
@@ -369,8 +370,11 @@ class TradingViewDiscoverer:
         if self.event_bus:
             try:
                 import asyncio
-                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
-            except: pass
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    _fire_and_forget(self.event_bus.emit(event_name, payload))
+            except RuntimeError:
+                pass
 
     def discover(self) -> List[dict]:
         """Scan TradingView crypto screener for momentum tokens."""

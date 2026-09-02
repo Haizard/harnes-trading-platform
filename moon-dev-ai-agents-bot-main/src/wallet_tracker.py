@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from src.event_bus import _fire_and_forget
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -485,7 +486,7 @@ class WalletTracker:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        asyncio.ensure_future(self.event_bus.emit(Events.WALLET_SWAP_DETECTED, payload))
+                        _fire_and_forget(self.event_bus.emit(Events.WALLET_SWAP_DETECTED, payload))
                 except RuntimeError:
                     pass  # No running loop — skip emit
         except Exception:

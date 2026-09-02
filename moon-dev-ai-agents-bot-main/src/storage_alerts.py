@@ -15,6 +15,7 @@ DSH Pattern: EventBus → DB → Singleton
 import time
 from datetime import datetime, timezone
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 class StorageAlerts:
@@ -250,7 +251,7 @@ class StorageAlerts:
         if self.event_bus:
             try:
                 import asyncio
-                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+                _fire_and_forget(self.event_bus.emit(event_name, payload))
             except Exception:
                 pass
 

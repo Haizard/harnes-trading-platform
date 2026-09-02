@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Optional, List
 from termcolor import cprint
+from src.event_bus import _fire_and_forget
 
 
 # ── Exit Decision Prompt ──────────────────────────────────────
@@ -116,7 +117,7 @@ class LLMExitDecider:
                     loop = asyncio.get_event_loop()
                     payload = {"symbol": position_data.get("symbol", ""), **decision}
                     if loop.is_running():
-                        asyncio.ensure_future(self.event_bus.emit("llm_exit/decision", payload))
+                        _fire_and_forget(self.event_bus.emit("llm_exit/decision", payload))
                     else:
                         loop.run_until_complete(self.event_bus.emit("llm_exit/decision", payload))
                 except Exception:
