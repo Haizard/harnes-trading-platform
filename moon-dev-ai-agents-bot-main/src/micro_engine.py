@@ -182,16 +182,16 @@ class MicroEngine:
         self._ai_skipped = 0
         self._strategy_boosts = 0
 
-        # Trading Confluence Engine — 7-in-1 validation gate
+        # Trading Confluence Engine - 7-in-1 validation gate
         try:
             from src.trading_confluence import get_trading_confluence
             self.confluence = get_trading_confluence(event_bus=self.event_bus)
-            print("[ENGINE] Trading Confluence ENABLED — 5 validation gates active")
+            print("[ENGINE] Trading Confluence ENABLED - 5 validation gates active")
         except Exception as e:
             self.confluence = None
             print("[ENGINE] Trading Confluence unavailable: " + str(e))
 
-        # Pine Backtest Pipeline — strategy validation
+        # Pine Backtest Pipeline - strategy validation
         try:
             self.pine_backtest = get_pine_backtest_pipeline(event_bus=self.event_bus)
             print("[ENGINE] Pine Backtest Pipeline connected")
@@ -787,7 +787,7 @@ class MicroEngine:
             except Exception as e:
                 print("[STRATEGY] Error analyzing " + candidate.symbol + ": " + str(e))
 
-        # Step 1.6: Trading Confluence — 5 validation gates
+        # Step 1.6: Trading Confluence - 5 validation gates
         if self.confluence:
             try:
                 # Gather smart money data if available
@@ -811,14 +811,14 @@ class MicroEngine:
                     elif confluence_result.confluence_level == "moderate":
                         candidate.score = min(100, candidate.score + 5)
                 else:
-                    print("[CONFLUENCE] BLOCKED " + candidate.symbol + " — " + confluence_result.confluence_level +
+                    print("[CONFLUENCE] BLOCKED " + candidate.symbol + " - " + confluence_result.confluence_level +
                           " (score=" + str(round(confluence_result.final_score, 1)) +
                           ", reasons=" + str(len(confluence_result.rejection_reasons)) + ")")
                     for reason in confluence_result.rejection_reasons[:3]:
                         print("[CONFLUENCE]   " + reason[:100])
                     # HARD BLOCK: if confluence is "none", skip entirely
                     if confluence_result.confluence_level == "none":
-                        print("[CONFLUENCE] HARD BLOCK — no confluence, skipping " + candidate.symbol)
+                        print("[CONFLUENCE] HARD BLOCK - no confluence, skipping " + candidate.symbol)
                         return
                 # Inject confluence data into candidate dict
                 candidate_dict = candidate.to_dict()
@@ -828,7 +828,7 @@ class MicroEngine:
         else:
             candidate_dict = candidate.to_dict()
 
-        # Step 1.7: Pine Backtest — strategy validation
+        # Step 1.7: Pine Backtest - strategy validation
         if self.pine_backtest:
             try:
                 tv_sym = self.confluence._resolve_tv_symbol(candidate.symbol) if self.confluence else None
