@@ -958,6 +958,7 @@ def create_default_mcp_registry() -> MCPRegistry:
         tool_tv_get_analysis, tool_tv_multi_analysis,
         tool_tv_scan_market, tool_tv_search_symbol, tool_tv_market_overview,
         tool_tv_get_ohlcv,
+
     )
 
     registry.register_tool(TradingMCPTool(
@@ -1025,6 +1026,30 @@ def create_default_mcp_registry() -> MCPRegistry:
         parameters=[],
         execute_fn=tool_tv_market_overview,
         source="tradingview",
+    ))
+
+    from src.pine_converter import tool_pine_to_python, tool_pine_explain
+
+    # Pine Script to Python Converter
+    registry.register_tool(TradingMCPTool(
+        name="pine_to_python",
+        description="Convert TradingView Pine Script strategy to backtestable Python code using AI.",
+        parameters=[
+            ToolParameter("pine_script", "string", True, description="Pine Script strategy code"),
+            ToolParameter("strategy_name", "string", False, "", "Strategy name (auto-detected if empty)"),
+        ],
+        execute_fn=tool_pine_to_python,
+        source="bedrock_llm",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="pine_explain",
+        description="Explain a Pine Script strategy in plain English (indicators, entry/exit rules, risk management).",
+        parameters=[
+            ToolParameter("pine_script", "string", True, description="Pine Script strategy code"),
+        ],
+        execute_fn=tool_pine_explain,
+        source="bedrock_llm",
     ))
 
     print("[MCP] Trading MCP Registry initialized with " + str(len(registry.list_tool_names())) + " tools")
