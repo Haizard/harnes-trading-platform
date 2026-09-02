@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moon Dev Charts</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root { --bg: #0a0a0f; --surface: #12121a; --border: #1e1e2e; --text: #e0e0e0; --dim: #666; --accent: #22d3ee; --green: #4ade80; --red: #f87171; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); }
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+        .header h1 { font-size: 16px; color: var(--accent); }
+        .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        select, button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; font-family: inherit; cursor: pointer; }
+        select:focus, button:focus { outline: none; border-color: var(--accent); }
+        button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+        button:hover { border-color: var(--accent); }
+        .info-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 20px; display: flex; gap: 24px; font-size: 12px; }
+        .info-item { display: flex; gap: 6px; }
+        .info-label { color: var(--dim); }
+        .info-value { font-weight: 600; }
+        .info-value.up { color: var(--green); }
+        .info-value.down { color: var(--red); }
+        #chart-container { width: 100%; height: calc(100vh - 140px); }
+        .loading { text-align: center; padding: 40px; color: var(--dim); }
+        .back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📈 Moon Dev Charts</h1>
+        <div class="controls">
+            <select id="symbol-select">
+                <option value="SOLUSDT">SOL/USDT</option>
+                <option value="BTCUSDT">BTC/USDT</option>
+                <option value="ETHUSDT">ETH/USDT</option>
+                <option value="BONKUSDT">BONK/USDT</option>
+                <option value="WIFUSDT">WIF/USDT</option>
+                <option value="PEPEUSDT">PEPE/USDT</option>
+            </select>
+            <button data-interval="1m">1m</button>
+            <button data-interval="5m">5m</button>
+            <button data-interval="15m">15m</button>
+            <button data-interval="1h" class="active">1h</button>
+            <button data-interval="4h">4h</button>
+            <button data-interval="1d">1D</button>
+            <button id="refresh-btn" onclick="loadChart()">🔄 Refresh</button>
+        </div>
+        <a href="/" class="back-link">← Dashboard</a>
+    </div>
+    <div class="info-bar" id="info-bar">
+        <div class="info-item"><span class="info-label">Loading...</span></div>
+    </div>
+    <div id="chart-container"></div>
+
+    <script>
+    const API = '/mcp';
+    let chart, candleSeries, volumeSeries;
+    let currentSymbol = 'SOLUSDT';
+    let currentInterval = '1h';
+
+    // ── Chart Setup ──
+    function initChart() {
+        const container = document.getElementById('chart-container');
+        chart = LightweightCharts.createChart(container, {
+            layout: { background: { type: 'solid', color: '#0a0a0f' }, textColor: '#666' },
+            grid: { vertLines: { color: '#1e1e2e' }, horzLines: { color: '#1e1e2e' } },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: '#1e1e2e' },
+            timeScale: { borderColor: '#1e1e2e', timeVisible: true, secondsVisible: false },
+        });
+
+        candleSeries = chart.addCandlestickSeries({
+            upColor: '#4ade80', downColor: '#f87171', borderVisible: false,
+            wickUpColor: '#4ade80', wickDownColor: '#f87171',
+        });
+
+        volumeSeries = chart.addHistogramSeries({
+            color: '#26a69a', priceFormat: { type: 'volume' },
+            priceScaleId: '', scaleMargins: { top: 0.8, bottom: 0 },
+        });
+
+        // Resize handler
+        new ResizeObserver(() => {
+            chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        }).observe(container);
+    }
+
+    // ── Load Data ──
+    async function loadChart() {
+        currentSymbol = document.getElementById('symbol-select').value;
+        document.querySelector('.loading') || (document.getElementById('chart-container').innerHTML = '<div class="loading">Loading chart data...</div>');
+
+        try {
+            // Fetch candles from our MCP endpoint
+            const r = await fetch(`${API}/call`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tool: 'tv_get_ohlcv', params: {symbol: currentSymbol, interval: currentInterval, limit: 200}})
+            });
+            const d = await r.json();
+            if (!d.success || !d.data || !d.data.candles) {
+                document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${d.error || d.data?.error || 'No data'}</span></div>`;
+                return;
+            }
+
+            const candles = d.data.candles;
+
+            // Set candle data
+            candleSeries.setData(candles.map(c => ({
+                time: c.time, open: c.open, high: c.high, low: c.low, close: c.close
+            })));
+
+            // Set volume data
+            volumeSeries.setData(candles.map(c => ({
+                time: c.time, value: c.volume,
+                color: c.close >= c.open ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'
+            })));
+
+            chart.timeScale().fitContent();
+
+            // Update info bar
+            const last = candles[candles.length - 1];
+            const prev = candles[candles.length - 2];
+            const change = prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : '0.00';
+            const changeClass = parseFloat(change) >= 0 ? 'up' : 'down';
+            const high24h = Math.max(...candles.slice(-24).map(c => c.high));
+            const low24h = Math.min(...candles.slice(-24).map(c => c.low));
+            const vol24h = candles.slice(-24).reduce((s, c) => s + c.volume, 0).toFixed(0);
+
+            document.getElementById('info-bar').innerHTML = `
+                <div class="info-item"><span class="info-label">Price:</span><span class="info-value">${last.close.toFixed(2)}</span></div>
+                <div class="info-item"><span class="info-label">Change:</span><span class="info-value ${changeClass}">${change}%</span></div>
+                <div class="info-item"><span class="info-label">24h High:</span><span class="info-value up">${high24h.toFixed(2)}</span></div>
+                <div class="info-item"><span class="info-label">24h Low:</span><span class="info-value down">${low24h.toFixed(2)}</span></div>
+                <div class="info-item"><span class="info-label">24h Volume:</span><span class="info-value">${Number(vol24h).toLocaleString()}</span></div>
+                <div class="info-item"><span class="info-label">Candles:</span><span class="info-value">${candles.length}</span></div>
+            `;
+        } catch (e) {
+            document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${e.message}</span></div>`;
+        }
+    }
+
+    // ── Interval buttons ──
+    document.querySelectorAll('[data-interval]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('[data-interval]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentInterval = btn.dataset.interval;
+            loadChart();
+        });
+    });
+
+    document.getElementById('symbol-select').addEventList

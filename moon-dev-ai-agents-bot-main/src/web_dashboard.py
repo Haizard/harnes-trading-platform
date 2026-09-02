@@ -864,6 +864,19 @@ async def mcp_agent_page():
         return HTMLResponse("<h1>MCP Agent module not available</h1>", status_code=503)
 
 
+@app.get("/charts/", response_class=HTMLResponse)
+async def charts_page():
+    """TradingView Lightweight Charts — professional candlestick visualization."""
+    try:
+        from pathlib import Path
+        html_file = Path(__file__).parent / "templates" / "charts" / "index.html"
+        if html_file.exists():
+            return HTMLResponse(html_file.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>Charts module not available</h1>", status_code=503)
+    except Exception as e:
+        return HTMLResponse(f"<h1>Charts error: {e}</h1>", status_code=500)
+
+
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>

@@ -121,6 +121,34 @@ class TradingViewFeed:
             return {"results": results, "total": count, "market": market, "source": "tradingview"}
         except Exception as e:
             return {"error": str(e), "market": market, "source": "tradingview"}
+    def get_ohlcv_candles(self, symbol="SOLUSDT", interval="1h", limit=100):
+        """Get OHLCV candle data from Binance (free, no auth)."""
+        try:
+            import requests as req
+            url = "https://api.binance.com/api/v3/klines"
+            r = req.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
+            if r.status_code != 200:
+                return {"error": f"Binance API error: {r.status_code}", "source": "binance"}
+            raw = r.json()
+            candles = []
+            for k in raw:
+                candles.append({
+                    "time": int(k[0]) // 1000,  # Unix seconds
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                })
+            self._emit_event("tradingview/ohlcv_fetch", {
+                "symbol": symbol, "interval": interval, "count": len(candles),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"candles": candles, "symbol": symbol, "interval": interval,
+                    "count": len(candles), "source": "binance"}
+        except Exception as e:
+            return {"error": str(e), "symbol": symbol, "source": "binance"}
+
     def search_symbol(self, query):
         try:
             from tradingview_ta import TradingView
@@ -167,6 +195,9 @@ async def tool_tv_scan_market(market="crypto", limit=20, min_volume=0):
 
 async def tool_tv_search_symbol(query):
     return get_tradingview_feed().search_symbol(query)
+
+async def tool_tv_get_ohlcv(symbol="SOLUSDT", interval="1h", limit=100):
+    return get_tradingview_feed().get_ohlcv_candles(symbol, interval, limit)
 
 async def tool_tv_market_overview():
     return get_tradingview_feed().get_market_overview()

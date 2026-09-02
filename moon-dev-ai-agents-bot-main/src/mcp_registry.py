@@ -957,6 +957,7 @@ def create_default_mcp_registry() -> MCPRegistry:
     from src.tradingview_feed import (
         tool_tv_get_analysis, tool_tv_multi_analysis,
         tool_tv_scan_market, tool_tv_search_symbol, tool_tv_market_overview,
+        tool_tv_get_ohlcv,
     )
 
     registry.register_tool(TradingMCPTool(
@@ -1004,6 +1005,18 @@ def create_default_mcp_registry() -> MCPRegistry:
         ],
         execute_fn=tool_tv_search_symbol,
         source="tradingview",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_get_ohlcv",
+        description="Get OHLCV candle data for any crypto pair (from Binance, free). Use for charts and backtesting.",
+        parameters=[
+            ToolParameter("symbol", "string", False, "SOLUSDT", "Trading pair (e.g. BTCUSDT, ETHUSDT, SOLUSDT)"),
+            ToolParameter("interval", "string", False, "1h", "Candle interval: 1m, 5m, 15m, 1h, 4h, 1d"),
+            ToolParameter("limit", "integer", False, 100, "Number of candles (max 1000)"),
+        ],
+        execute_fn=tool_tv_get_ohlcv,
+        source="binance",
     ))
 
     registry.register_tool(TradingMCPTool(
