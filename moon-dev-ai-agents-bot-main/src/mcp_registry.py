@@ -1028,6 +1028,10 @@ def create_default_mcp_registry() -> MCPRegistry:
         source="tradingview",
     ))
 
+    from src.trading_confluence import (
+        tool_tv_confluence_check, tool_tv_macro_context, tool_tv_mtf_check,
+    )
+    from src.pine_backtest_pipeline import tool_pine_backtest_check, tool_pine_backtest_strategies
     from src.pine_converter import tool_pine_to_python, tool_pine_explain
 
     # Pine Script to Python Converter
@@ -1050,6 +1054,95 @@ def create_default_mcp_registry() -> MCPRegistry:
         ],
         execute_fn=tool_pine_explain,
         source="bedrock_llm",
+    ))
+
+
+    # -- TradingView Confluence Tools (7-in-1 validation) --------
+    registry.register_tool(TradingMCPTool(
+        name="tv_confluence_check",
+        description="Full 5-gate confluence check for a token: confirmation, multi-timeframe, smart money+technical, OHLCV validation, cross-market.",
+        parameters=[
+            ToolParameter("token_address", "string", True, description="Solana token mint address"),
+            ToolParameter("symbol", "string", False, "auto", "Token symbol for TV lookup"),
+        ],
+        execute_fn=tool_tv_confluence_check,
+        source="trading_confluence",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_macro_context",
+        description="Get cross-market macro context: gold, DXY, BTC signals for risk-on/off assessment.",
+        parameters=[],
+        execute_fn=tool_tv_macro_context,
+        source="trading_confluence",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_mtf_check",
+        description="Multi-timeframe confluence check: daily, 4h, 1h alignment for a symbol.",
+        parameters=[
+            ToolParameter("symbol", "string", True, description="Ticker symbol (e.g. SOLUSDT)"),
+        ],
+        execute_fn=tool_tv_mtf_check,
+        source="trading_confluence",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="pine_backtest_check",
+        description="Check if 4 built-in Pine Script strategies (RSI, EMA, MACD+BB, Vol Breakout) give a signal for a symbol.",
+        parameters=[
+            ToolParameter("symbol", "string", True, description="Ticker symbol (e.g. SOLUSDT)"),
+        ],
+        execute_fn=tool_pine_backtest_check,
+        source="pine_backtest_pipeline",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="pine_backtest_strategies",
+        description="List all available converted Pine Script strategies.",
+        parameters=[],
+        execute_fn=tool_pine_backtest_strategies,
+        source="pine_backtest_pipeline",
+    ))
+
+
+    # TypeScript Converter tools
+    from src.pine_converter import tool_ts_to_python, tool_ts_explain
+
+    registry.register_tool(TradingMCPTool(
+        name="ts_to_python",
+        description="Convert a TypeScript trading bot to Python for chart rendering and backtesting.",
+        parameters=[
+            {"name": "typescript_code", "type": "string", "description": "The TypeScript code to convert"},
+            {"name": "strategy_name", "type": "string", "description": "Optional name for the strategy", "required": False},
+        ],
+        execute_fn=tool_ts_to_python,
+        source="pine_converter",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="ts_explain",
+        description="Explain a TypeScript trading bot strategy in plain English.",
+        parameters=[
+            {"name": "typescript_code", "type": "string", "description": "The TypeScript code to explain"},
+        ],
+        execute_fn=tool_ts_explain,
+        source="pine_converter",
+    ))
+
+    # SMC Pattern Detection tools
+    from src.smc_patterns import tool_smc_detect
+
+    registry.register_tool(TradingMCPTool(
+        name="smc_detect",
+        description="Detect Smart Money Concepts patterns (Order Blocks, FVGs, Liquidity, BOS, Market Structure) for a symbol.",
+        parameters=[
+            {"name": "symbol", "type": "string", "description": "Trading pair symbol (e.g. SOLUSDT)"},
+            {"name": "interval", "type": "string", "description": "Time interval (15m, 1h, 4h, 1d)", "required": False},
+            {"name": "limit", "type": "number", "description": "Number of candles to analyze", "required": False},
+        ],
+        execute_fn=tool_smc_detect,
+        source="smc_patterns",
     ))
 
     print("[MCP] Trading MCP Registry initialized with " + str(len(registry.list_tool_names())) + " tools")

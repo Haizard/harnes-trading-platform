@@ -729,6 +729,80 @@ async def get_health():
         return {"error": str(e)}
 
 
+
+# ── SMC Chart API ─────────────────────────────────────────
+
+@app.get("/api/smc")
+async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
+    """SMC pattern detection + OHLCV + indicators for chart rendering."""
+    try:
+        from src.smc_patterns import get_smc_detector
+        from src.tradingview_feed import get_tradingview_feed
+        feed = get_tradingview_feed()
+        ohlcv = feed.get_ohlcv_candles(symbol=symbol, interval=interval, limit=limit)
+        if ohlcv.get("error") or not ohlcv.get("candles"):
+            return {"error": ohlcv.get("error", "No OHLCV data"), "symbol": symbol}
+        candles = ohlcv["candles"]
+        detector = get_smc_detector()
+        smc = detector.detect_all(candles)
+        closes = [c["close"] for c in candles]
+        times = [c["time"] for c in candles]
+        ema9 = _compute_ema(closes, 9)
+        ema21 = _compute_ema(closes, 21)
+        bb_up, bb_lo = _compute_bollinger(closes, 20, 2.0)
+        indicators = {
+            "ema9": [{"time": times[i], "value": ema9[i]} for i in range(len(times)) if ema9[i] is not None],
+            "ema21": [{"time": times[i], "value": ema21[i]} for i in range(len(times)) if ema21[i] is not None],
+            "bb_upper": [{"time": times[i], "value": bb_up[i]} for i in range(len(times)) if bb_up[i] is not None],
+            "bb_lower": [{"time": times[i], "value": bb_lo[i]} for i in range(len(times)) if bb_lo[i] is not None],
+        }
+        from src.event_bus import _fire_and_forget
+        try:
+            from src.db_storage import log_event
+            log_event("smc/chart_request", {"symbol": symbol, "interval": interval, "candles": len(candles)})
+        except: pass
+        return {"symbol": symbol, "interval": interval, "candles": candles,
+                "indicators": indicators, **smc.to_dict()}
+    except Exception as e:
+        return {"error": str(e), "symbol": symbol}
+
+
+def _compute_ema(data, period):
+    if not data: return []
+    ema = [None] * (period - 1)
+    sma = sum(data[:period]) / period
+    ema.append(sma)
+    mult = 2.0 / (period + 1)
+    for i in range(period, len(data)):
+        ema.append(data[i] * mult + ema[-1] * (1 - mult))
+    return ema
+
+
+def _compute_bollinger(data, period=20, mult=2.0):
+    if len(data) < period: return [None]*len(data), [None]*len(data)
+    upper, lower = [None]*(period-1), [None]*(period-1)
+    for i in range(period - 1, len(data)):
+        window = data[i-period+1:i+1]
+        sma = sum(window) / period
+        std = (sum((x - sma) ** 2 for x in window) / period) ** 0.5
+        upper.append(sma + mult * std)
+        lower.append(sma - mult * std)
+    return upper, lower
+
+
+@app.get("/charts/smc/", response_class=HTMLResponse)
+async def smc_charts_page():
+    """SMC Charts with TradingView embed + Python bot overlays."""
+    try:
+        from pathlib import Path
+        html_file = Path(__file__).parent / "templates" / "charts" / "smc_chart.html"
+        if html_file.exists():
+            return HTMLResponse(html_file.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>SMC Charts module not available</h1>", status_code=503)
+    except Exception as e:
+        return HTMLResponse(f"<h1>SMC Charts error: {e}</h1>", status_code=500)
+
+
 # ── Auth API Endpoints ─────────────────────────────────────
 
 @app.post("/api/auth/signup")

@@ -32,6 +32,9 @@ try:
 except ImportError:
     STRATEGY_BRIDGE_AVAILABLE = False
 
+from src.trading_confluence import get_trading_confluence
+from src.pine_backtest_pipeline import get_pine_backtest_pipeline
+
 # OHLCV Collector â€” builds candle history for strategy analysis
 try:
     from src.ohlcv_collector import get_ohlcv_collector
@@ -179,7 +182,24 @@ class MicroEngine:
         self._ai_skipped = 0
         self._strategy_boosts = 0
 
-        # Strategy Bridge â€” runs backtest strategies on candidates
+        # Trading Confluence Engine — 7-in-1 validation gate
+        try:
+            from src.trading_confluence import get_trading_confluence
+            self.confluence = get_trading_confluence(event_bus=self.event_bus)
+            print("[ENGINE] Trading Confluence ENABLED — 5 validation gates active")
+        except Exception as e:
+            self.confluence = None
+            print("[ENGINE] Trading Confluence unavailable: " + str(e))
+
+        # Pine Backtest Pipeline — strategy validation
+        try:
+            self.pine_backtest = get_pine_backtest_pipeline(event_bus=self.event_bus)
+            print("[ENGINE] Pine Backtest Pipeline connected")
+        except Exception as e:
+            self.pine_backtest = None
+            print("[ENGINE] Pine Backtest Pipeline unavailable: " + str(e))
+
+                # Strategy Bridge â€” runs backtest strategies on candidates
         self.strategy_bridge = None
         if STRATEGY_BRIDGE_AVAILABLE:
             try:
@@ -767,7 +787,65 @@ class MicroEngine:
             except Exception as e:
                 print("[STRATEGY] Error analyzing " + candidate.symbol + ": " + str(e))
 
-        # Step 2: AI Orchestrator decision (consensus + feedback loop)
+        # Step 1.6: Trading Confluence — 5 validation gates
+        if self.confluence:
+            try:
+                # Gather smart money data if available
+                sm_data = None
+                if self.smart_money_detector:
+                    try:
+                        sm_signals = self.smart_money_detector.get_recent_signals(hours=1)
+                        token_sigs = [s for s in sm_signals if s.get("token_address") == candidate.address]
+                        if token_sigs:
+                            sm_data = token_sigs[-1]
+                    except Exception:
+                        pass
+                confluence_result = self.confluence.check(candidate, smart_money_data=sm_data)
+                if confluence_result.should_trade:
+                    print("[CONFLUENCE] " + candidate.symbol + " -> " + confluence_result.final_signal +
+                          " (level=" + confluence_result.confluence_level +
+                          ", score=" + str(round(confluence_result.final_score, 1)) + ")")
+                    # Boost score if strong confluence
+                    if confluence_result.confluence_level == "strong":
+                        candidate.score = min(100, candidate.score + 10)
+                    elif confluence_result.confluence_level == "moderate":
+                        candidate.score = min(100, candidate.score + 5)
+                else:
+                    print("[CONFLUENCE] BLOCKED " + candidate.symbol + " — " + confluence_result.confluence_level +
+                          " (score=" + str(round(confluence_result.final_score, 1)) +
+                          ", reasons=" + str(len(confluence_result.rejection_reasons)) + ")")
+                    for reason in confluence_result.rejection_reasons[:3]:
+                        print("[CONFLUENCE]   " + reason[:100])
+                    # HARD BLOCK: if confluence is "none", skip entirely
+                    if confluence_result.confluence_level == "none":
+                        print("[CONFLUENCE] HARD BLOCK — no confluence, skipping " + candidate.symbol)
+                        return
+                # Inject confluence data into candidate dict
+                candidate_dict = candidate.to_dict()
+                candidate_dict["confluence"] = confluence_result.to_dict()
+            except Exception as e:
+                print("[CONFLUENCE] Error: " + str(e))
+        else:
+            candidate_dict = candidate.to_dict()
+
+        # Step 1.7: Pine Backtest — strategy validation
+        if self.pine_backtest:
+            try:
+                tv_sym = self.confluence._resolve_tv_symbol(candidate.symbol) if self.confluence else None
+                if tv_sym:
+                    pine_result = self.pine_backtest.get_strategy_signals(tv_sym)
+                    if pine_result.get("signal") in ("STRONG_BUY", "BUY"):
+                        print("[PINE] " + candidate.symbol + " -> " + pine_result["signal"] +
+                              " (strategies=" + str(pine_result.get("buy_strategies", 0)) + "/4 agree)")
+                        candidate_dict["pine_signal"] = pine_result
+                        candidate.score = min(100, candidate.score + 5)
+                    elif pine_result.get("signal") in ("STRONG_SELL", "SELL"):
+                        print("[PINE] " + candidate.symbol + " -> " + pine_result["signal"] + " (warning)")
+                        candidate_dict["pine_signal"] = pine_result
+            except Exception as e:
+                print("[PINE] Error: " + str(e))
+
+                # Step 2: AI Orchestrator decision (consensus + feedback loop)
         # Inject all signals into candidate data for the orchestrator
         candidate_dict = candidate.to_dict()
         if strategy_result:

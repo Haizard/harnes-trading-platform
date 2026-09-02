@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moon Dev SMC Charts</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root { --bg: #0a0a0f; --surface: #12121a; --border: #1e1e2e; --text: #e0e0e0; --dim: #666; --accent: #22d3ee; --green: #4ade80; --red: #f87171; --yellow: #fbbf24; --purple: #a78bfa; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: "SF Mono", "Fira Code", monospace; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; }
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+        .header h1 { font-size: 16px; color: var(--accent); }
+        .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        select, button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; font-family: inherit; cursor: pointer; }
+        button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+        button:hover { border-color: var(--accent); }
+        .info-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 20px; display: flex; gap: 16px; font-size: 12px; flex-wrap: wrap; }
+        .info-item { display: flex; gap: 6px; }
+        .info-label { color: var(--dim); }
+        .info-value { font-weight: 600; }
+        .info-value.up { color: var(--green); }
+        .info-value.down { color: var(--red); }
+        .main-area { display: flex; flex: 1; overflow: hidden; }
+        #chart-container { flex: 1; height: calc(100vh - 140px); }
+        .smc-panel { width: 280px; background: var(--surface); border-left: 1px solid var(--border); padding: 16px; overflow-y: auto; font-size: 12px; }
+        .smc-panel h3 { color: var(--accent); margin-bottom: 12px; font-size: 14px; }
+        .smc-section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+        .smc-section:last-child { border-bottom: none; }
+        .smc-section h4 { color: var(--text); margin-bottom: 8px; font-size: 12px; }
+        .smc-item { padding: 4px 8px; margin: 2px 0; border-radius: 4px; background: rgba(255,255,255,0.03); }
+        .smc-item.demand { border-left: 3px solid var(--green); }
+        .smc-item.supply { border-left: 3px solid var(--red); }
+        .smc-item.bullish { border-left: 3px solid var(--green); }
+        .smc-item.bearish { border-left: 3px solid var(--red); }
+        .smc-item.fvg { border-left: 3px solid var(--yellow); }
+        .smc-item.structure { border-left: 3px solid var(--accent); }
+        .tv-embed { width: 100%; height: 400px; border-top: 1px solid var(--border); }
+        .tv-embed iframe { width: 100%; height: 100%; border: none; }
+        .toggle-btn { padding: 4px 8px; font-size: 10px; }
+        .toggle-btn.active { background: var(--accent); color: #000; }
+        .legend { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 4px; font-size: 10px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 Moon Dev SMC Charts</h1>
+        <div class="controls">
+            <select id="symbol-select">
+                <option value="SOLUSDT">SOL/USDT</option>
+                <option value="BTCUSDT">BTC/USDT</option>
+                <option value="ETHUSDT">ETH/USDT</option>
+                <option value="BONKUSDT">BONK/USDT</option>
+                <option value="WIFUSDT">WIF/USDT</option>
+            </select>
+            <select id="interval-select">
+                <option value="15m">15m</option>
+                <option value="1h" selected>1h</option>
+                <option value="4h">4h</option>
+                <option value="1d">1D</option>
+            </select>
+            <button id="load-btn" onclick="loadChart()">🔄 Load</button>
+            <button id="smc-btn" onclick="toggleSMC()" class="active">🎯 SMC</button>
+            <button id="tv-btn" onclick="toggleTVWidget()">📺 TradingView</button>
+            <a href="/" class="back-link">← Dashboard</a>
+        </div>
+    </div>
+    <div class="info-bar" id="info-bar">
+        <div class="info-item"><span class="info-label">Loading...</span></div>
+    </div>
+    <div class="main-area">
+        <div style="flex:1; display:flex; flex-direction:column;">
+            <div id="chart-container"></div>
+            <div id="tv-embed-container" class="tv-embed" style="display:none;"></div>
+        </div>
+        <div class="smc-panel" id="smc-panel">
+            <h3>🎯 SMC Analysis</h3>
+            <div class="legend">
+                <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div> Demand</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> Supply</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div> FVG</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#22d3ee"></div> BOS</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div> Liquidity</div>
+            </div>
+            <div id="smc-content">
+                <p style="color:var(--dim);">Click Load to analyze</p>
+            </div>
+        </div>
+    </div>
+<script>
+let chart, candleSeries, volumeSeries, ema9Series, ema21Series, bbUpperSeries, bbLowerSeries;
+let smcVisible = true, tvVisible = false;
+let smcData = null;
+
+function getExchangeForSymbol(sym) {
+  const base = sym.replace("USDT","").replace("PERP","");
+  if (["BTC","ETH","SOL","DOGE","XRP","ADA","AVAX","DOT","LINK","MATIC","UNI","AAVE","ATOM","LTC","BCH"].includes(base)) return "BINANCE:" + sym;
+  return "BYBIT:" + sym;
+}
+
+function toggleTVWidget() {
+  const c = document.getElementById("tv-embed-container");
+  tvVisible = !tvVisible;
+  document.getElementById("tv-btn").classList.toggle("active", tvVisible);
+  if (tvVisible) {
+    const sym = document.getElementById("symbol-select").value;
+    const tf = document.getElementById("interval-select").value;
+    const ex = getExchangeForSymbol(sym);
+    c.innerHTML = "<iframe src="https://s.tradingview.com/widgetembed/?symbol=" + ex + "&interval=" + tf.toUpperCase() + "&style=1&locale=en&toolbar_bg=%230a0a0f&theme=dark&hide_side_toolbar=0&allow_symbol_change=1" width="100%" height="100%" frameborder="0"></iframe>";
+    c.style.display = "block";
+  } else {
+    c.style.display = "none";
+    c.innerHTML = "";
+  }
+}
+
+function toggleSMC() {
+  smcVisible = !smcVisible;
+  document.getElementById("smc-btn").classList.toggle("active", smcVisible);
+  document.getElementById("smc-panel").style.display = smcVisible ? "block" : "none";
+  if (smcData && candleSeries) {
+    if (smcVisible) drawSMCOverlays();
+    else clearSMCOverlays();
+  }
+}
+
+async function loadChart() {
+  const sym = document.getElementById("symbol-select").value;
+  const tf = document.getElementById("interval-select").value;
+  document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Loading...</span></div>";
+  try {
+    const r = await fetch("/api/smc?symbol=" + sym + "&interval=" + tf);
+    const data = await r.json();
+    if (data.error) { document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Error: " + data.error + "</span></div>"; return; }
+    renderChart(data);
+  } catch(e) { document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Fetch error: " + e.message + "</span></div>"; }
+}
+
+function renderChart(data) {
+  const container = document.getElementById("chart-container");
+  container.innerHTML = "";
+  if (chart) { chart.remove(); chart = null; }
+  chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth, height: container.clientHeight || 500,
+    layout: { background: { color: "#0a0a0f" }, textColor: "#e0e0e0" },
+    grid: { vertLines: { color: "#1e1e2e" }, horzLines: { color: "#1e1e2e" } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    timeScale: { timeVisible: true, secondsVisible: false },
+  });
+  candleSeries = chart.addCandlestickSeries({ upColor: "#4ade80", downColor: "#f87171", borderUpColor: "#4ade80", borderDownColor: "#f87171", wickUpColor: "#4ade80", wickDownColor: "#f87171" });
+  volumeSeries = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  const candles = data.candles || [];
+  const vols = candles.map(c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? "rgba(74,222,128,0.3)" : "rgba(248,113,113,0.3)" }));
+  candleSeries.setData(candles);
+  volumeSeries.setData(vols);
+  if (data.indicators) {
+    if (data.indicators.ema9) { ema9Series = chart.addLineSeries({ color: "#22d3ee", lineWidth: 1 }); ema9Series.setData(data.indicators.ema9); }
+    if (data.indicators.ema21) { ema21Series = chart.addLineSeries({ color: "#a78bfa", lineWidth: 1 }); ema21Series.setData(data.indicators.ema21); }
+    if (data.indicators.bb_upper) { bbUpperSeries = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 }); bbUpperSeries.setData(data.indicators.bb_upper); }
+    if (data.indicators.bb_lower) { bbLowerSeries = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 }); bbLowerSeries.setData(data.indicators.bb_lower); }
+  }
+  smcData = data;
+  if (smcVisible) drawSMCOverlays();
+  renderInfoBar(data);
+  renderSMCPanel(data);
+  chart.timeScale().fitContent();
+}
+
+let obLines = [], fvgAreas = [], liqLines = [];
+
+function clearSMCOverlays() {
+  obLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
+  fvgAreas.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
+  liqLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
+  obLines = []; fvgAreas = []; liqLines = [];
+}
+
+function drawSMCOverlays() {
+  if (!smcData || !candleSeries) return;
+  clearSMCOverlays();
+  const obs = smcData.order_blocks || [];
+  obs.forEach(ob => {
+    const col = ob.type === "demand" ? "#4ade80" : "#f87171";
+    const lbl = ob.type === "demand" ? "Demand OB" : "Supply OB";
+    const pl = candleSeries.createPriceLine({ price: ob.high, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: lbl });
+    obLines.push(pl);
+    if (ob.low) { const pl2 = candleSeries.createPriceLine({ price: ob.low, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" }); obLines.push(pl2); }
+  });
+  const fvgs = smcData.fvgs || [];
+  fvgs.forEach(f => {
+    const col = f.type === "bullish" ? "rgba(251,191,36,0.15)" : "rgba(251,191,36,0.15)";
+    const pl = candleSeries.createPriceLine({ price: f.high, color: "#fbbf24", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "FVG" });
+    fvgAreas.push(pl);
+    const pl2 = candleSeries.createPriceLine({ price: f.low, color: "#fbbf24", lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "" });
+    fvgAreas.push(pl2);
+  });
+  const liq = smcData.liquidity || [];
+  liq.forEach(l => {
+    const col = l.type === "equal_highs" ? "#a78bfa" : "#22d3ee";
+    const lbl = l.type === "equal_highs" ? "EQH" : "EQL";
+    const pl = candleSeries.createPriceLine({ price: l.price, color: col, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: lbl });
+    liqLines.push(pl);
+  });
+  if (smcData.markers && smcData.markers.length > 0) {
+    candleSeries.setMarkers(smcData.markers.map(m => ({
+      time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text
+    })));
+  }
+}
+
+
+function renderInfoBar(data) {
+  const c = data.candles || [];
+  if (!c.length) return;
+  const last = c[c.length - 1];
+  const prev = c[c.length - 2] || last;
+  const chg = ((last.close - prev.close) / prev.max(prev.close, 1e-10) * 100).toFixed(2);
+  const cls = last.close >= prev.close ? "up" : "down";
+  const obCount = (data.order_blocks || []).length;
+  const fvgCount = (data.fvgs || []).length;
+  const liqCount = (data.liquidity || []).length;
+  const bosCount = (data.bos || []).length;
+  const structCount = (data.structure || []).length;
+  document.getElementById("info-bar").innerHTML = [
+    "<div class="info-item"><span class="info-label">Last:</span> <span class="info-value">" + last.close.toFixed(4) + "</span></div>",
+    "<div class="info-item"><span class="info-label">Change:</span> <span class="info-value " + cls + "">" + chg + "%</span></div>",
+    "<div class="info-item"><span class="info-label">OB:</span> <span class="info-value">" + obCount + "</span></div>",
+    "<div class="info-item"><span class="info-label">FVG:</span> <span class="info-value">" + fvgCount + "</span></div>",
+    "<div class="info-item"><span class="info-label">Liq:</span> <span class="info-value">" + liqCount + "</span></div>",
+    "<div class="info-item"><span class="info-label">BOS:</span> <span class="info-value">" + bosCount + "</span></div>",
+    "<div class="info-item"><span class="info-label">Structure:</span> <span class="info-value">" + structCount + "</span></div>"
+  ].join("");
+}
+
+function renderSMCPanel(data) {
+  const el = document.getElementById("smc-content");
+  let html = "";
+  const obs = data.order_blocks || [];
+  if (obs.length) {
+    html += "<div class="smc-section"><h4>Order Blocks</h4>";
+    obs.slice(-8).forEach(ob => {
+      const cls = ob.type === "demand" ? "demand" : "supply";
+      html += "<div class="smc-item " + cls +">" + ob.type.toUpperCase() + " | " + ob.low.toFixed(4) + " - " + ob.high.toFixed(4) + (ob.mitigated ? " [mitigated]" : "") + "</div>";
+    });
+    html += "</div>";
+  }
+  const fvgs = data.fvgs || [];
+  if (fvgs.length) {
+    html += "<div class="smc-section"><h4>Fair Value Gaps</h4>";
+    fvgs.slice(-8).forEach(f => {
+      html += "<div class="smc-item fvg">" + f.type.toUpperCase() + " | " + f.low.toFixed(4) + " - " + f.high.toFixed(4) + (f.filled ? " [filled]" : "") + "</div>";
+    });
+    html += "</div>";
+  }
+  const liq = data.liquidity || [];
+  if (liq.length) {
+    html += "<div class="smc-section"><h4>Liquidity Levels</h4>";
+    liq.slice(-6).forEach(l => {
+      html += "<div class="smc-item structure">" + l.type + " | " + l.price.toFixed(4) + " (" + l.touches + "x)</div>";
+    });
+    html += "</div>";
+  }
+  const struct = data.structure || [];
+  if (struct.length) {
+    html += "<div class="smc-section"><h4>Market Structure</h4>";
+    struct.slice(-10).forEach(s => {
+      const cls = ["HH","HL"].includes(s.type) ? "bullish" : "bearish";
+      html += "<div class="smc-item " + cls +">" + s.type + " | " + s.price.toFixed(4) + "</div>";
+    });
+    html += "</div>";
+  }
+  const bos = data.bos || [];
+  if (bos.length) {
+    html += "<div class="smc-section"><h4>Break of Structure</h4>";
+    bos.slice(-6).forEach(b => {
+      const cls = b.direction === "bullish" ? "bullish" : "bearish";
+      html += "<div class="smc-item " + cls +">BOS " + b.direction.toUpperCase() + " @ " + b.price.toFixed(4) + "</div>";
+    });
+    html += "</div>";
+  }
+  if (!html) html = "<p style="color:var(--dim);">No SMC patterns detected</p>";
+  el.innerHTML = html;
+}
+
+
+window.addEventListener("resize", () => {
+  if (chart) chart.applyOptions({ width: document.getElementById("chart-container").clientWidth });
+});
+
+window.addEventListener("load", () => {
+  loadChart();
+});
+</script>
+</body>
+</html>
