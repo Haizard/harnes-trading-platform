@@ -985,6 +985,7 @@ DASHBOARD_HTML = """
         <button onclick="showPanel('rbi')">🛡️ RBI</button>
         <button onclick="window.open('/rbi/','_blank')" style="color:#e879f9;">🧪 RBI Agent →</button>
         <button onclick="window.open('/mcp/','_blank')" style="color:#22d3ee;">🔌 MCP Agent →</button>
+        <button onclick="window.open('/charts/','_blank')" style="color:#4ade80;">📈 Charts →</button>
         <button onclick="showPanel('storage')">💾 Storage</button>
         <button onclick="showPanel('health')">💓 Health</button>
     </div>

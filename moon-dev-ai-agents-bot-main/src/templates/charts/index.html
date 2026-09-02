@@ -152,4 +152,15 @@
         });
     });
 
-    document.getElementById('symbol-select').addEventList
+    
+document.getElementById('symbol-select').addEventListener('change', loadChart);
+
+    // Init
+    initChart();
+    loadChart();
+
+    // Auto-refresh every 30s
+    setInterval(loadChart, 30000);
+    </script>
+</body>
+</html>
