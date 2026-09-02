@@ -344,6 +344,100 @@ class TrendingDiscoverer:
         return [s for s, _, _ in self._trending_cache]
 
 
+class TradingViewDiscoverer:
+    """Discover tokens via TradingView Screener (FREE, no auth).
+
+    Scans global crypto markets for momentum signals:
+    - High relative volume
+    - RSI oversold/overbought
+    - MACD crossover
+    - Strong recommendation (BUY/STRONG_BUY)
+
+    Filters for Solana-related pairs when possible.
+    """
+
+    def __init__(self):
+        self._last_scan = 0
+        self._scan_interval = 300  # Scan every 5 min
+        self._cache = []
+
+    def discover(self) -> List[dict]:
+        """Scan TradingView crypto screener for momentum tokens."""
+        now = time.time()
+        if now - self._last_scan < self._scan_interval:
+            return []
+        self._last_scan = now
+
+        try:
+            from tradingview_screener import Query, col
+
+            # Scan top crypto by volume with momentum signals
+            q = (Query()
+                .select(
+                    'name', 'close', 'volume', 'market_cap_basic',
+                    'change', 'change_abs', 'relative_volume_10d_calc',
+                    'Recommend.All', 'RSI', 'MACD.macd', 'MACD.signal',
+                    'price_52_week_high', 'price_52_week_low',
+                )
+                .where(
+                    col('volume') > 1_000_000,  # Min $1M volume
+                    col('market_cap_basic') > 100_000,  # Min $100K mcap
+                )
+                .order_by('relative_volume_10d_calc', ascending=False)
+                .limit(30)
+            )
+
+            count, df = q.get_scanner_data()
+
+            results = []
+            for _, row in df.iterrows():
+                name = str(row.get('name', ''))
+                # Filter for Solana-related or major memecoins
+                sol_keywords = ['SOL', 'BONK', 'WIF', 'POPCAT', 'FARTCOIN', 'MEW',
+                               'BOME', 'MYRO', 'RETARDIO', 'GUMMY', 'TRUMP', 'PEPE']
+                is_sol_related = any(kw.upper() in name.upper() for kw in sol_keywords)
+
+                rec = float(row.get('Recommend.All', 0) or 0)
+                rsi = float(row.get('RSI', 50) or 50)
+                macd = float(row.get('MACD.macd', 0) or 0)
+                macd_signal = float(row.get('MACD.signal', 0) or 0)
+                rel_vol = float(row.get('relative_volume_10d_calc', 1) or 1)
+                change = float(row.get('change', 0) or 0)
+
+                # Build a pair-like dict for compatibility with scanner
+                pair = {
+                    'baseToken': {
+                        'address': '',  # Will be resolved later if needed
+                        'symbol': name.split(':')[1] if ':' in name else name,
+                        'name': name,
+                    },
+                    'priceUsd': str(row.get('close', 0)),
+                    'volume': {'h24': row.get('volume', 0)},
+                    'priceChange': {'h24': change},
+                    'liquidity': {'usd': row.get('market_cap_basic', 0) or 0},
+                    'marketCap': row.get('market_cap_basic', 0),
+                    'chainId': 'solana' if is_sol_related else 'unknown',
+                    'dexId': 'tradingview',
+                    # TradingView-specific data for scoring
+                    '_tv_recommendation': rec,
+                    '_tv_rsi': rsi,
+                    '_tv_macd': macd,
+                    '_tv_macd_signal': macd_signal,
+                    '_tv_rel_volume': rel_vol,
+                    '_tv_change': change,
+                    '_tv_source': True,  # Flag: came from TradingView
+                }
+                results.append(pair)
+
+            self._cache = results
+            print('[TRADINGVIEW] Screener found ' + str(len(results)) + ' candidates', flush=True)
+            return results
+
+        except Exception as e:
+            print('[TRADINGVIEW] Screener error: ' + str(e), flush=True)
+            return []
+
+
 class TokenScorer:
     """Score a token candidate 0-100 based on metrics."""
 
@@ -416,6 +510,41 @@ class TokenScorer:
         elif c.market_cap > 0:
             s += 2; sig.append("Large-cap")
 
+        # TradingView signal bonus (max 15) — TV technical analysis boost
+        tv_data = getattr(c, '_tv_data', None)
+        if tv_data:
+            rec = tv_data.get('recommendation', 0)
+            rsi = tv_data.get('rsi', 50)
+            macd = tv_data.get('macd', 0)
+            macd_sig = tv_data.get('macd_signal', 0)
+            rel_vol = tv_data.get('rel_volume', 1)
+
+            # STRONG_BUY (+12-15), BUY (+8-10), NEUTRAL (+2-3)
+            if rec >= 2:
+                s += 15; sig.append('TV: STRONG BUY')
+            elif rec >= 0.5:
+                s += 10; sig.append('TV: BUY signal')
+            elif rec >= 0:
+                s += 3; sig.append('TV: NEUTRAL')
+            elif rec >= -0.5:
+                s += 1; sig.append('TV: SELL signal')
+
+            # RSI oversold bonus (potential reversal)
+            if rsi < 30:
+                s += 5; sig.append('TV: RSI oversold (' + str(int(rsi)) + ')')
+            elif rsi < 40:
+                s += 2; sig.append('TV: RSI low (' + str(int(rsi)) + ')')
+
+            # MACD bullish crossover
+            if macd > macd_sig and macd_sig != 0:
+                s += 3; sig.append('TV: MACD bullish')
+
+            # High relative volume = strong momentum
+            if rel_vol > 3:
+                s += 5; sig.append('TV: High rel volume (' + str(round(rel_vol, 1)) + 'x)')
+            elif rel_vol > 2:
+                s += 3; sig.append('TV: Elevated volume (' + str(round(rel_vol, 1)) + 'x)')
+
         # Category bonus (max 5) — trending/boosted tokens get a small edge
         if c.source == "trending":
             s += 5; sig.append("Trending category")
@@ -440,6 +569,7 @@ class TokenScanner:
         self.jupiter = JupiterChecker()
         self.scorer = TokenScorer()
         self.trending = TrendingDiscoverer(self.dexscreener)
+        self.tradingview = TradingViewDiscoverer()
         self.callback = callback
         self.event_bus = event_bus
         self.scheduler = scheduler
@@ -499,6 +629,17 @@ class TokenScanner:
                 all_pairs[addr] = pair
                 agent_sources[addr] = (None, "trending")
 
+        # --- TradingView Screener discovery ---
+        tv_pairs = self.tradingview.discover()
+        for pair in tv_pairs:
+            addr = pair.get("baseToken", {}).get("address", "")
+            symbol = pair.get("baseToken", {}).get("symbol", "")
+            # Use symbol as key if no address (TradingView pairs may not have Solana addresses)
+            key = addr if addr else symbol
+            if key and key not in all_pairs:
+                all_pairs[key] = pair
+                agent_sources[key] = (None, "tradingview")
+
         print("[SCANNER] Total unique tokens from all sources: " + str(len(all_pairs)), flush=True)
 
         # --- Score and filter all candidates ---
@@ -522,6 +663,19 @@ class TokenScanner:
                 continue
             if candidate.market_cap > MAX_MARKET_CAP:
                 continue
+
+            # Attach TradingView data if available
+            tv_source = pair.get('_tv_source', False)
+            if tv_source:
+                candidate._tv_data = {
+                    'recommendation': pair.get('_tv_recommendation', 0),
+                    'rsi': pair.get('_tv_rsi', 50),
+                    'macd': pair.get('_tv_macd', 0),
+                    'macd_signal': pair.get('_tv_macd_signal', 0),
+                    'rel_volume': pair.get('_tv_rel_volume', 1),
+                }
+                if "tradingview" not in candidate.signals:
+                    candidate.signals.append("TradingView screener")
 
             # Classify and assign category
             candidate.category = classify_token(candidate.name, candidate.symbol)
