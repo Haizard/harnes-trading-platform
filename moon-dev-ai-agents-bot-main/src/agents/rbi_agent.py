@@ -22,6 +22,7 @@ Key integrations (bridging DSH modules into the live pipeline):
 
 import os
 import sys
+import asyncio
 import io
 import time
 import re
@@ -30,6 +31,9 @@ import shutil
 import itertools
 import threading
 import json
+import urllib.request
+import urllib.error
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from termcolor import cprint
@@ -41,8 +45,11 @@ if sys.platform == 'win32':
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
+    # New API (>=0.6) uses instance methods, not class methods
+    _ytt_api = YouTubeTranscriptApi()
 except ImportError:
     YouTubeTranscriptApi = None
+    _ytt_api = None
 
 # Local imports
 from src.config import *
@@ -412,16 +419,272 @@ def run_with_animation(func, agent_name: str, *args, **kwargs):
 
 
 def get_idea_content(idea_url: str) -> str:
-    """Extract content from a trading idea URL"""
+    """Extract content from a trading idea URL.
+
+    Handles:
+    - Single YouTube video URLs
+    - YouTube channel URLs (discovers recent videos, extracts all transcripts)
+    - Plain text ideas
+    """
     try:
         if "youtube.com" in idea_url or "youtu.be" in idea_url:
-            if YouTubeTranscriptApi:
-                video_id = idea_url.split("v=")[1].split("&")[0] if "v=" in idea_url else idea_url.split("/")[-1]
-                transcript = YouTubeTranscriptApi.get_transcript(video_id)
-                return f"YouTube Transcript: {' '.join([t['text'] for t in transcript])}"
+            # Check if this is a channel URL
+            channel_id = _extract_channel_id(idea_url)
+            if channel_id:
+                return _extract_channel_content(channel_id, idea_url)
+
+            # Single video — use the helper that handles both API versions
+            video_id = _extract_video_id(idea_url)
+            if video_id:
+                transcript = _extract_video_transcript(video_id)
+                if transcript:
+                    return f"YouTube Transcript: {transcript}"
         return f"Trading Idea: {idea_url}"
-    except Exception:
+    except Exception as e:
+        cprint(f"[YOUTUBE] Content extraction failed: {e}", "yellow")
         return idea_url
+
+
+# ── YouTube Channel Scraper ─────────────────────────────────
+# No API key needed — uses YouTube's public RSS feed + transcript API
+
+def _extract_video_id(url: str) -> str:
+    """Extract video ID from any YouTube URL format."""
+    # youtube.com/watch?v=VIDEO_ID
+    if "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    # youtu.be/VIDEO_ID
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0].split("/")[0]
+    # youtube.com/embed/VIDEO_ID
+    if "/embed/" in url:
+        return url.split("/embed/")[1].split("?")[0]
+    # youtube.com/shorts/VIDEO_ID
+    if "/shorts/" in url:
+        return url.split("/shorts/")[1].split("?")[0]
+    return None
+
+
+def _extract_channel_id(url: str) -> str:
+    """Extract channel ID from various YouTube channel URL formats.
+
+    Supports:
+    - youtube.com/channel/UCxxxxxx
+    - youtube.com/@handle
+    - youtube.com/c/CustomName
+    - youtube.com/user/UserName
+
+    Returns channel ID (UC...) or None if not a channel URL.
+    """
+    url = url.strip().rstrip('/')
+
+    # Direct channel ID: youtube.com/channel/UCxxxxxx
+    if '/channel/' in url:
+        return url.split('/channel/')[-1].split('/')[0]
+
+    # Handle: youtube.com/@handle
+    if '/@' in url:
+        handle = url.split('/@')[-1].split('/')[0]
+        return _resolve_handle_to_channel_id(handle)
+
+    # Custom URL: youtube.com/c/CustomName
+    if '/c/' in url:
+        custom_name = url.split('/c/')[-1].split('/')[0]
+        return _resolve_handle_to_channel_id(custom_name)
+
+    # Legacy user URL: youtube.com/user/UserName
+    if '/user/' in url:
+        user_name = url.split('/user/')[-1].split('/')[0]
+        return _resolve_handle_to_channel_id(user_name)
+
+    return None
+
+
+def _resolve_handle_to_channel_id(handle: str) -> str:
+    """Resolve a YouTube handle/custom name to a channel ID.
+
+    Method: Fetch the channel page and parse the canonical URL
+    which always contains /channel/UCxxxxx.
+    """
+    try:
+        url = f"https://www.youtube.com/@{handle}"
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/120.0.0.0 Safari/537.36'
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+
+        # Look for canonical URL containing channel ID
+        match = re.search(r'href="https://www\.youtube\.com/channel/(UC[\w-]+)"', html)
+        if match:
+            return match.group(1)
+
+        # Alternative: look for externalId in page data
+        match = re.search(r'"externalId":"(UC[\w-]+)"', html)
+        if match:
+            return match.group(1)
+
+        # Another pattern: channelId in meta tags
+        match = re.search(r'"channelId":"(UC[\w-]+)"', html)
+        if match:
+            return match.group(1)
+
+        cprint(f"[YOUTUBE] Could not resolve channel ID for @{handle}", "yellow")
+        return None
+    except Exception as e:
+        cprint(f"[YOUTUBE] Failed to resolve handle @{handle}: {e}", "yellow")
+        return None
+
+
+def _get_channel_video_ids(channel_id: str, max_videos: int = 15) -> list:
+    """Fetch recent video IDs from a channel using YouTube's RSS feed.
+
+    No API key needed. Returns up to max_videos video IDs.
+    RSS feed typically contains the last 15 videos.
+    """
+    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    cprint(f"[YOUTUBE] Fetching RSS feed for channel {channel_id}...", "cyan")
+
+    try:
+        req = urllib.request.Request(rss_url, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; RBI-Bot/1.0)'
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            xml_data = resp.read().decode('utf-8')
+
+        # Parse XML — YouTube uses Atom namespace
+        root = ET.fromstring(xml_data)
+
+        # Namespace handling
+        ns = {'atom': 'http://www.w3.org/2005/Atom',
+              'media': 'http://search.yahoo.com/mrss/',
+              'yt': 'http://www.youtube.com/xml/schemas/2015'}
+
+        videos = []
+        for entry in root.findall('atom:entry', ns):
+            video_id_el = entry.find('yt:videoId', ns)
+            title_el = entry.find('atom:title', ns)
+            if video_id_el is not None and video_id_el.text:
+                videos.append({
+                    'video_id': video_id_el.text,
+                    'title': title_el.text if title_el is not None else 'Unknown',
+                    'url': f'https://www.youtube.com/watch?v={video_id_el.text}'
+                })
+            if len(videos) >= max_videos:
+                break
+
+        cprint(f"[YOUTUBE] Found {len(videos)} videos on channel", "green")
+        return videos
+    except Exception as e:
+        cprint(f"[YOUTUBE] RSS feed failed: {e}", "yellow")
+        return []
+
+
+def _extract_video_transcript(video_id: str) -> str:
+    """Extract transcript from a single YouTube video.
+
+    Supports both old API (class method) and new API (instance method).
+    """
+    if not _ytt_api:
+        return None
+    try:
+        # New API (>=0.6): instance.fetch() returns FetchedTranscript
+        result = _ytt_api.fetch(video_id)
+        if hasattr(result, 'snippets'):
+            return ' '.join([s.text for s in result.snippets])
+        # Fallback: old API returns list of dicts
+        elif isinstance(result, list):
+            return ' '.join([t['text'] for t in result])
+        return str(result)
+    except AttributeError:
+        # Very old API fallback
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            return ' '.join([t['text'] for t in transcript])
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _extract_channel_content(channel_id: str, original_url: str) -> str:
+    """Discover videos from a YouTube channel and extract transcripts.
+
+    Returns a combined string of all video transcripts with titles,
+    formatted for the Research AI to analyze.
+    """
+    cprint(f"\n[YOUTUBE] 🎬 Channel detected — discovering videos...", "magenta")
+
+    videos = _get_channel_video_ids(channel_id)
+    if not videos:
+        cprint("[YOUTUBE] No videos found — falling back to raw URL", "yellow")
+        return f"Trading Idea: {original_url}"
+
+    # Filter for likely trading-related videos by title keywords
+    trading_keywords = [
+        'trading', 'strategy', 'backtest', 'indicator', 'signal',
+        'buy', 'sell', 'entry', 'exit', 'stop loss', 'take profit',
+        'rsi', 'ema', 'sma', 'macd', 'bollinger', 'atr',
+        'scalp', 'swing', 'day trad', 'crypto', 'bitcoin', 'btc',
+        'solana', 'sol', 'forex', 'chart', 'technical', 'price action',
+        'candlestick', 'momentum', 'reversal', 'breakout', 'trend',
+        'algorithm', 'algo', 'bot', 'automat', 'quant', 'edge',
+        'profit', 'risk management', 'portfolio', 'alpha',
+    ]
+
+    def is_trading_related(title: str) -> bool:
+        title_lower = title.lower()
+        return any(kw in title_lower for kw in trading_keywords)
+
+    # Sort: trading-related first, then by recency
+    videos.sort(key=lambda v: (not is_trading_related(v['title'])))
+
+    cprint(f"[YOUTUBE] Extracting transcripts from {len(videos)} videos...", "cyan")
+
+    combined_parts = []
+    successful = 0
+    failed = 0
+
+    for i, video in enumerate(videos):
+        title = video['title']
+        video_id = video['video_id']
+        trading_tag = "📊" if is_trading_related(title) else "  "
+
+        cprint(f"  {trading_tag} [{i+1}/{len(videos)}] {title[:60]}...", "cyan")
+
+        transcript = _extract_video_transcript(video_id)
+        if transcript and len(transcript) > 50:  # Skip very short transcripts
+            combined_parts.append(
+                f"\n{'='*60}\n"
+                f"VIDEO: {title}\n"
+                f"URL: https://www.youtube.com/watch?v={video_id}\n"
+                f"{'='*60}\n"
+                f"{transcript}\n"
+            )
+            successful += 1
+        else:
+            failed += 1
+
+    if not combined_parts:
+        cprint("[YOUTUBE] No transcripts extracted — falling back to raw URL", "yellow")
+        return f"Trading Idea: {original_url}"
+
+    result = (
+        f"YouTube Channel Content — {successful} transcripts extracted "
+        f"({failed} unavailable)\n"
+        f"Analyze the following videos and identify the best trading strategy to backtest.\n"
+        f"Focus on the videos marked with 📊 as they are most likely trading-related.\n"
+        f"\n{'#'*60}\n"
+        f"{'#'*60}\n"
+        + '\n'.join(combined_parts)
+    )
+
+    cprint(f"[YOUTUBE] ✅ Extracted {successful} transcripts ({failed} failed)", "green")
+    cprint(f"[YOUTUBE] Total content length: {len(result):,} characters", "cyan")
+
+    return result
 
 
 def _parse_backtest_stats(output: str) -> dict:
@@ -481,7 +744,7 @@ _INJECTION_PATTERNS = [
     r'(?i)<\s*script',
 ]
 
-MAX_IDEA_LENGTH = 5000
+MAX_IDEA_LENGTH = 15000
 
 
 def sanitize_user_input(text: str) -> str:
@@ -1159,25 +1422,35 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
         try:
             # Load the backtest data for walk-forward
             import pandas as pd
-            df = pd.read_csv(DATA_PATH)
-            if 'close' in df.columns:
-                prices = df['close'].tolist()
-            elif 'Close' in df.columns:
-                prices = df['Close'].tolist()
+            wf_df = pd.read_csv(DATA_PATH)
+            wf_df.columns = wf_df.columns.str.strip().str.lower()
+            mapping = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
+            wf_df = wf_df.rename(columns=mapping)
+            if 'datetime' in wf_df.columns:
+                wf_df['datetime'] = pd.to_datetime(wf_df['datetime'])
+                wf_df.set_index('datetime', inplace=True)
+            elif 'timestamp' in wf_df.columns:
+                wf_df['timestamp'] = pd.to_datetime(wf_df['timestamp'])
+                wf_df.set_index('timestamp', inplace=True)
+            wf_df = wf_df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+
+            # Run walk-forward using actual OHLCV DataFrame slices
+            from src.strategy_runner import create_strategy_return_fn
+            backtest_path = str(FINAL_BACKTEST_DIR / f"{name}_BTFinal.py")
+            if os.path.exists(backtest_path):
+                strategy_return_fn = create_strategy_return_fn(backtest_path, str(DATA_PATH))
+                # Use DataFrame-based walk-forward with 15-min data (96 bars/day)
+                wf_result = asyncio.run(walk_forward_validator.validate_with_dataframes(
+                    strategy_return_fn, name, wf_df, bars_per_day=96
+                ))
             else:
-                # Try to find price column
-                df.columns = df.columns.str.strip().str.lower()
-                prices = df['close'].tolist()
-
-            # Run walk-forward on the price data
-            # We use a lambda that simulates the strategy's return
-            def strategy_return_fn(prices_window):
-                """Simple price-based return for walk-forward."""
-                if len(prices_window) < 2:
-                    return 0.0
-                return (prices_window[-1] - prices_window[0]) / prices_window[0]
-
-            wf_result = walk_forward_validator.validate(strategy_return_fn, name, prices)
+                # Fallback: use price-only walk-forward with buy-and-hold
+                prices = wf_df['Close'].tolist()
+                def strategy_return_fn(prices_window):
+                    if len(prices_window) < 2:
+                        return 0.0
+                    return (prices_window[-1] - prices_window[0]) / prices_window[0]
+                wf_result = asyncio.run(walk_forward_validator.validate(strategy_return_fn, name, prices))
             cprint(f"[PHASE 4.5] Walk-forward: IS={wf_result.in_sample_return:.2%}, "
                    f"OOS={wf_result.out_of_sample_return:.2%}, "
                    f"Overfit={wf_result.overfit_score:.2f}", "cyan")
@@ -1281,16 +1554,145 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
         strategy_memory.record_pipeline_run(memory_record)
 
 
+def process_channel(channel_url: str, auto_mode: bool = False, max_videos: int = 15):
+    """Process a YouTube channel — discover videos, extract transcripts, run RBI on each.
+
+    Args:
+        channel_url: YouTube channel URL (any format)
+        auto_mode: Skip human approval gates
+        max_videos: Max videos to process from channel
+    """
+    cprint(f"\n{'='*60}", "magenta")
+    cprint(f"RBI CHANNEL MODE: {channel_url[:60]}", "magenta")
+    cprint(f"{'='*60}\n", "magenta")
+
+    # Step 1: Resolve channel ID
+    channel_id = _extract_channel_id(channel_url)
+    if not channel_id:
+        cprint("[RBI] Could not extract channel ID from URL", "red")
+        cprint("[RBI] Supported formats:", "yellow")
+        cprint("  - https://www.youtube.com/@handle", "yellow")
+        cprint("  - https://www.youtube.com/channel/UCxxxxx", "yellow")
+        cprint("  - https://www.youtube.com/c/CustomName", "yellow")
+        return
+
+    cprint(f"[RBI] Channel ID: {channel_id}", "cyan")
+
+    # Step 2: Discover recent videos
+    videos = _get_channel_video_ids(channel_id, max_videos=max_videos)
+    if not videos:
+        cprint("[RBI] No videos found on channel", "red")
+        return
+
+    # Step 3: Filter for trading-related videos
+    trading_keywords = [
+        'trading', 'strategy', 'backtest', 'indicator', 'signal',
+        'buy', 'sell', 'entry', 'exit', 'stop loss', 'take profit',
+        'rsi', 'ema', 'sma', 'macd', 'bollinger', 'atr',
+        'scalp', 'swing', 'day trad', 'crypto', 'bitcoin', 'btc',
+        'solana', 'sol', 'forex', 'chart', 'technical', 'price action',
+        'candlestick', 'momentum', 'reversal', 'breakout', 'trend',
+        'algorithm', 'algo', 'bot', 'automat', 'quant', 'edge',
+        'profit', 'risk management', 'portfolio', 'alpha',
+    ]
+
+    def is_trading_related(title: str) -> bool:
+        title_lower = title.lower()
+        return any(kw in title_lower for kw in trading_keywords)
+
+    # Separate trading videos from others
+    trading_videos = [v for v in videos if is_trading_related(v['title'])]
+    other_videos = [v for v in videos if not is_trading_related(v['title'])]
+
+    cprint(f"\n[RBI] Found {len(trading_videos)} trading-related videos, "
+           f"{len(other_videos)} other videos", "cyan")
+
+    # Show video list
+    cprint("\n[RBI] Trading videos:", "green")
+    for i, v in enumerate(trading_videos, 1):
+        cprint(f"  {i}. {v['title'][:70]}", "green")
+
+    if other_videos:
+        cprint("\n[RBI] Other videos (will still be analyzed):", "yellow")
+        for i, v in enumerate(other_videos, 1):
+            cprint(f"  {i}. {v['title'][:70]}", "yellow")
+
+    # Step 4: Process each video through RBI pipeline
+    # Combine all videos — trading ones first
+    all_videos = trading_videos + other_videos
+
+    cprint(f"\n[RBI] Processing {len(all_videos)} videos through RBI pipeline...", "magenta")
+    cprint(f"[RBI] Each video becomes a separate strategy idea\n", "cyan")
+
+    for i, video in enumerate(all_videos, 1):
+        cprint(f"\n{'─'*60}", "magenta")
+        cprint(f"[VIDEO {i}/{len(all_videos)}] {video['title'][:60]}", "magenta")
+        cprint(f"{'─'*60}", "magenta")
+
+        # Extract transcript for this video
+        transcript = _extract_video_transcript(video['video_id'])
+        if not transcript or len(transcript) < 50:
+            cprint(f"[RBI] Skipping — no transcript available", "yellow")
+            continue
+
+        # Build the idea content with full context
+        idea_content = (
+            f"YouTube Video: {video['title']}\n"
+            f"URL: {video['url']}\n"
+            f"Channel: {channel_url}\n\n"
+            f"VIDEO TRANSCRIPT:\n{transcript}"
+        )
+
+        # Sanitize and process through RBI pipeline
+        idea_content = sanitize_user_input(idea_content)
+        process_trading_idea(idea_content, auto_mode=auto_mode)
+
+    # Print session summary
+    cprint(f"\n{'='*60}", "magenta")
+    cprint("RBI CHANNEL PIPELINE COMPLETE — Summary", "magenta")
+    cprint(f"{'='*60}", "magenta")
+    try:
+        history = strategy_memory.get_strategy_history(limit=10)
+        for record in history:
+            name = record.get("strategy_name", "Unknown")
+            result = record.get("result", "UNKNOWN")
+            elapsed = record.get("elapsed_seconds", 0)
+            status = "✅" if result == "GO_LIVE" else "❌"
+            cprint(f"  {status} {name}: {result} ({elapsed:.0f}s)", "green" if result == "GO_LIVE" else "yellow")
+    except Exception:
+        pass
+
+
 def main():
-    """Process all ideas from ideas.txt"""
+    """Process ideas from ideas.txt, or a YouTube channel.
+
+    Usage:
+      python rbi_agent.py                          # Process ideas.txt
+      python rbi_agent.py --channel @handle        # Scrape channel videos
+      python rbi_agent.py --channel https://...    # Scrape channel videos
+      python rbi_agent.py --auto                   # Skip human approval
+    """
     import argparse
     parser = argparse.ArgumentParser(description="Moon Dev RBI Agent")
     parser.add_argument("--auto", action="store_true", help="Auto-mode: skip human approval gates")
+    parser.add_argument("--channel", type=str, help="YouTube channel URL to scrape for strategy ideas")
+    parser.add_argument("--max-videos", type=int, default=15, help="Max videos to process from channel (default: 15)")
     args, _ = parser.parse_known_args()
 
+    # Channel mode: scrape YouTube channel
+    if args.channel:
+        process_channel(args.channel, auto_mode=args.auto, max_videos=args.max_videos)
+        return
+
+    # Default mode: process ideas.txt
     ideas_file = DATA_DIR / "ideas.txt"
     if not ideas_file.exists():
         cprint("[RBI] No ideas.txt found", "yellow")
+        cprint("[RBI] Usage:", "cyan")
+        cprint("  python rbi_agent.py --channel @moondevonyt", "cyan")
+        cprint("  python rbi_agent.py --channel https://www.youtube.com/@handle", "cyan")
+        cprint("  echo 'https://www.youtube.com/watch?v=xxx' > data/rbi/ideas.txt", "cyan")
+        cprint("  python rbi_agent.py", "cyan")
         return
 
     with open(ideas_file, 'r', encoding='utf-8') as f:
