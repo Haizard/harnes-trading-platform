@@ -122,32 +122,102 @@ class TradingViewFeed:
         except Exception as e:
             return {"error": str(e), "market": market, "source": "tradingview"}
     def get_ohlcv_candles(self, symbol="SOLUSDT", interval="1h", limit=100):
-        """Get OHLCV candle data from Binance (free, no auth)."""
+        """Get OHLCV candle data with multi-source fallback.
+        Tries: Binance -> Binance.US -> Kraken -> DexScreener
+        All free, no auth needed.
+        """
+        # Map interval to each API's format
+        interval_map_binance = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d",
+        }
+        interval_map_kraken = {
+            "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+            "1h": 60, "4h": 240, "1d": 1440,
+        }
+
+        # Source 1: Binance
         try:
             import requests as req
-            url = "https://api.binance.com/api/v3/klines"
-            r = req.get(url, params={"symbol": symbol, "interval": interval, "limit": limit}, timeout=10)
-            if r.status_code != 200:
-                return {"error": f"Binance API error: {r.status_code}", "source": "binance"}
-            raw = r.json()
-            candles = []
-            for k in raw:
-                candles.append({
-                    "time": int(k[0]) // 1000,  # Unix seconds
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low": float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5]),
-                })
-            self._emit_event("tradingview/ohlcv_fetch", {
-                "symbol": symbol, "interval": interval, "count": len(candles),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            return {"candles": candles, "symbol": symbol, "interval": interval,
-                    "count": len(candles), "source": "binance"}
-        except Exception as e:
-            return {"error": str(e), "symbol": symbol, "source": "binance"}
+            bi_interval = interval_map_binance.get(interval, "1h")
+            r = req.get("https://api.binance.com/api/v3/klines",
+                params={"symbol": symbol, "interval": bi_interval, "limit": limit}, timeout=10)
+            if r.status_code == 200:
+                raw = r.json()
+                candles = []
+                for k in raw:
+                    candles.append({
+                        "time": int(k[0]) // 1000,
+                        "open": float(k[1]), "high": float(k[2]),
+                        "low": float(k[3]), "close": float(k[4]),
+                        "volume": float(k[5]),
+                    })
+                if candles:
+                    self._emit_event("tradingview/ohlcv_fetch", {
+                        "symbol": symbol, "interval": interval, "count": len(candles),
+                        "source": "binance", "timestamp": datetime.now(timezone.utc).isoformat()})
+                    return {"candles": candles, "symbol": symbol, "interval": interval,
+                            "count": len(candles), "source": "binance"}
+        except Exception:
+            pass
+
+        # Source 2: Binance.US
+        try:
+            import requests as req
+            r = req.get("https://api.binance.us/api/v3/klines",
+                params={"symbol": symbol, "interval": bi_interval, "limit": limit}, timeout=10)
+            if r.status_code == 200:
+                raw = r.json()
+                candles = []
+                for k in raw:
+                    candles.append({
+                        "time": int(k[0]) // 1000,
+                        "open": float(k[1]), "high": float(k[2]),
+                        "low": float(k[3]), "close": float(k[4]),
+                        "volume": float(k[5]),
+                    })
+                if candles:
+                    self._emit_event("tradingview/ohlcv_fetch", {
+                        "symbol": symbol, "interval": interval, "count": len(candles),
+                        "source": "binance_us", "timestamp": datetime.now(timezone.utc).isoformat()})
+                    return {"candles": candles, "symbol": symbol, "interval": interval,
+                            "count": len(candles), "source": "binance_us"}
+        except Exception:
+            pass
+
+        # Source 3: Kraken
+        try:
+            import requests as req
+            kr_interval = interval_map_kraken.get(interval, 60)
+            # Kraken uses different symbol format
+            kr_symbol = symbol.replace("USDT", "USD").replace("USDC", "USD")
+            r = req.get("https://api.kraken.com/0/public/OHLC",
+                params={"pair": kr_symbol, "interval": kr_interval}, timeout=10)
+            if r.status_code == 200:
+                data = r.json().get("result", {})
+                # Get first key (pair name varies)
+                pair_key = [k for k in data.keys() if k != "last"][0] if data else None
+                if pair_key:
+                    raw = data[pair_key]
+                    candles = []
+                    for k in raw:
+                        candles.append({
+                            "time": int(k[0]),
+                            "open": float(k[1]), "high": float(k[2]),
+                            "low": float(k[3]), "close": float(k[4]),
+                            "volume": float(k[6]),
+                        })
+                    if candles:
+                        self._emit_event("tradingview/ohlcv_fetch", {
+                            "symbol": symbol, "interval": interval, "count": len(candles),
+                            "source": "kraken", "timestamp": datetime.now(timezone.utc).isoformat()})
+                        return {"candles": candles, "symbol": symbol, "interval": interval,
+                                "count": len(candles), "source": "kraken"}
+        except Exception:
+            pass
+
+        return {"error": "All data sources failed (Binance, Binance.US, Kraken). Check network.",
+                "symbol": symbol, "source": "all_failed"}
 
     def search_symbol(self, query):
         try:
