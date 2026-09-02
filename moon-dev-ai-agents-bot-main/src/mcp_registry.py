@@ -953,6 +953,67 @@ def create_default_mcp_registry() -> MCPRegistry:
         source="wallet_tracker",
     ))
 
+    # ── TradingView Data Feed Tools ─────────────────────────
+    from src.tradingview_feed import (
+        tool_tv_get_analysis, tool_tv_multi_analysis,
+        tool_tv_scan_market, tool_tv_search_symbol, tool_tv_market_overview,
+    )
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_get_analysis",
+        description="Get TradingView technical analysis for any asset: RSI, MACD, Bollinger, EMAs, recommendation. Free, no auth.",
+        parameters=[
+            ToolParameter("symbol", "string", True, description="Ticker symbol (e.g. BTCUSDT, SOLUSDT, AAPL)"),
+            ToolParameter("exchange", "string", False, "BINANCE", "Exchange (BINANCE, NASDAQ, etc.)"),
+            ToolParameter("screener", "string", False, "crypto", "Screener: crypto, america, forex"),
+            ToolParameter("interval", "string", False, "1h", "Timeframe: 1m, 5m, 15m, 1h, 4h, 1d"),
+        ],
+        execute_fn=tool_tv_get_analysis,
+        source="tradingview",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_multi_analysis",
+        description="Get TradingView analysis for multiple symbols at once.",
+        parameters=[
+            ToolParameter("symbols", "string", True, description="Comma-separated symbols (e.g. BINANCE:BTCUSDT,BINANCE:ETHUSDT)"),
+            ToolParameter("screener", "string", False, "crypto", "Screener: crypto, america, forex"),
+            ToolParameter("interval", "string", False, "1h", "Timeframe: 1m, 5m, 15m, 1h, 4h, 1d"),
+        ],
+        execute_fn=tool_tv_multi_analysis,
+        source="tradingview",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_scan_market",
+        description="Scan global markets using TradingView screener: top crypto/stocks/forex by volume, with RSI, MACD, recommendations.",
+        parameters=[
+            ToolParameter("market", "string", False, "crypto", "Market: crypto, america, forex"),
+            ToolParameter("limit", "integer", False, 20, "Max results"),
+            ToolParameter("min_volume", "number", False, 0, "Minimum volume filter"),
+        ],
+        execute_fn=tool_tv_scan_market,
+        source="tradingview",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_search_symbol",
+        description="Search TradingView for any asset symbol.",
+        parameters=[
+            ToolParameter("query", "string", True, description="Search query (e.g. tesla, bitcoin, gold)"),
+        ],
+        execute_fn=tool_tv_search_symbol,
+        source="tradingview",
+    ))
+
+    registry.register_tool(TradingMCPTool(
+        name="tv_market_overview",
+        description="Quick overview of BTC, ETH, SOL: price, RSI, MACD, TradingView recommendation.",
+        parameters=[],
+        execute_fn=tool_tv_market_overview,
+        source="tradingview",
+    ))
+
     print("[MCP] Trading MCP Registry initialized with " + str(len(registry.list_tool_names())) + " tools")
     print("[MCP] Tools: " + ", ".join(registry.list_tool_names()))
 
