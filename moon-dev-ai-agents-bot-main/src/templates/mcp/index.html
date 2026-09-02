@@ -354,10 +354,20 @@
                 </div>`
             ).join('');
 
-            // Pre-fill JSON
+            // Pre-fill JSON with example values for common params
+            const examples = {
+                token_address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+                wallet_address: '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
+                symbol: 'FART',
+            };
             const params = {};
             d.parameters.forEach(p => {
-                if (p.required) params[p.name] = p.type === 'string' ? '' : p.type === 'number' ? 0 : p.type === 'integer' ? 0 : false;
+                if (p.required) {
+                    if (examples[p.name]) params[p.name] = examples[p.name];
+                    else if (p.type === 'number') params[p.name] = 0.01;
+                    else if (p.type === 'integer') params[p.name] = 10;
+                    else params[p.name] = '';
+                }
             });
             document.getElementById('tester-input').value = JSON.stringify(params, null, 2);
         } catch (e) {}

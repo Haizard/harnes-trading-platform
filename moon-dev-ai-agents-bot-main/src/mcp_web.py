@@ -195,13 +195,15 @@ async def mcp_call(request: Request):
     if not tool:
         raise HTTPException(404, f"Unknown tool: {tool_name}")
 
-    # Validate required params
+    # Validate required params (reject missing AND empty-string values)
     for param in tool.parameters:
-        if param.required and param.name not in params:
-            if param.default is not None:
-                params[param.name] = param.default
-            else:
-                raise HTTPException(422, f"Missing required parameter: {param.name}")
+        if param.required:
+            val = params.get(param.name)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                if param.default is not None and isinstance(param.default, str) and param.default.strip():
+                    params[param.name] = param.default
+                else:
+                    raise HTTPException(422, f"Missing required parameter: '{param.name}'. {param.description}")
 
     result = await registry.call_tool(tool_name, params)
 
