@@ -3,6 +3,10 @@ import os
 import time
 import subprocess
 
+print('[STARTUP] run_deploy.py beginning...', flush=True)
+print(f'[STARTUP] Python: {sys.version}', flush=True)
+print(f'[STARTUP] CWD: {os.getcwd()}', flush=True)
+
 # Force-install required packages if missing
 def ensure_package(name, version=None):
     try:
@@ -12,15 +16,18 @@ def ensure_package(name, version=None):
         print(f"[SETUP] Installing {pkg}...", flush=True)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
+print('[STARTUP] Checking packages...', flush=True)
 ensure_package("fastapi", "0.109.0")
 ensure_package("uvicorn", "0.25.0")
 ensure_package("pydantic", "2.5.3")
+print('[STARTUP] Packages OK', flush=True)
 
 print('=' * 60, flush=True)
 print('MOON DEV TRADING PLATFORM', flush=True)
 print(f'Python: {sys.version}', flush=True)
 print(f'CWD: {os.getcwd()}', flush=True)
 print(f'PORT env: {os.environ.get("PORT", "not set")}', flush=True)
+print(f'DB URL set: {bool(os.environ.get("LUCERIS_DATABASE_URL"))}', flush=True)
 print('=' * 60, flush=True)
 
 # Start HTTP server on the PORT Northflank gives us
@@ -71,7 +78,9 @@ sys.stdout.flush()
 
 # Now start the trading engine in a background thread
 def start_engine():
+    print("[ENGINE] Background thread starting (5s delay)...", flush=True)
     time.sleep(5)
+    print("[ENGINE] Initializing...", flush=True)
     try:
         sys.path.insert(0, ".")
         # In Docker/Northflank, env vars are injected directly.
@@ -139,11 +148,9 @@ def start_engine():
         print("[ENGINE] Starting...", flush=True)
         asyncio.run(engine.run())
     except RuntimeError as e:
-        # DB unavailable — crash so container restarts and retries
         print(f"[ENGINE] FATAL: {e}", flush=True)
-        print("[ENGINE] Container will restart to retry DB connection...", flush=True)
-        import os
-        os._exit(1)
+        import traceback
+        traceback.print_exc()
     except Exception as e:
         print(f"[ENGINE] Error: {e}", flush=True)
         import traceback
@@ -152,7 +159,7 @@ def start_engine():
 import threading
 t = threading.Thread(target=start_engine, daemon=True)
 t.start()
-print("[ENGINE] Background thread started", flush=True)
+print("[ENGINE] Background thread launched", flush=True)
 
 # Keep container alive — dashboard runs in thread, just sleep forever
 while True:

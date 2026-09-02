@@ -18,6 +18,7 @@ from src.paper_trader import PaperTrader
 from src.rug_pull_detector import RugPullDetector
 from src.event_bus import EventBus, Events, DispatchMode
 from datetime import datetime, timezone
+from termcolor import cprint
 from src.agent_orchestrator import AgentOrchestrator
 from src.telegram_reporter import get_telegram_reporter
 from src.lightweight_sentiment import get_lightweight_sentiment
@@ -199,7 +200,7 @@ class MicroEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._events = []
 
-        # DB availability — CRASH if DB unavailable (data must persist)
+        # DB availability — start with JSON fallback if DB unavailable
         self._db_available = False
         try:
             from src.db_storage import get_pool
@@ -208,9 +209,9 @@ class MicroEngine:
             pass
 
         if not self._db_available:
-            cprint("[ENGINE] FATAL: Database unavailable! Cannot start without DB.", "white", "on_red")
-            cprint("[ENGINE] Check LUCERIS_DATABASE_URL and PostgreSQL status.", "white", "on_red")
-            raise RuntimeError("Database connection required — cannot start without persistent storage")
+            print("[ENGINE] WARNING: Database unavailable — using JSON fallback", flush=True)
+            print("[ENGINE] Trades and events will be saved to local JSON files", flush=True)
+            print("[ENGINE] Set LUCERIS_DATABASE_URL to enable PostgreSQL storage", flush=True)
 
         # Restore engine counters from DB
         self._restore_counters_from_db()
