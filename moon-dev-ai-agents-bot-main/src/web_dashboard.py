@@ -827,7 +827,10 @@ async def dashboard(request: Request):
             return DASHBOARD_HTML
 
     # Not authenticated — show login page
-    return LOGIN_HTML@app.get("/login", response_class=HTMLResponse)
+    return LOGIN_HTML
+
+
+@app.get("/login", response_class=HTMLResponse)
 async def login_page():
     """Login page."""
     return LOGIN_HTML
@@ -837,8 +840,8 @@ async def login_page():
 async def rbi_agent_page():
     """RBI Agent web interface."""
     try:
-        from src.rbi_web import RBI_HTML
-        return RBI_HTML
+        from src.rbi_web import get_rbi_html
+        return get_rbi_html()
     except ImportError:
         return HTMLResponse("<h1>RBI Agent module not available</h1>", status_code=503)
 
