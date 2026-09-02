@@ -269,7 +269,7 @@ async def tool_get_token_profile(token_address: str) -> dict:
     """Get token profile from Birdeye (requires BIRDEYE_API_KEY)."""
     birdeye_key = os.getenv("BIRDEYE_API_KEY")
     if not birdeye_key:
-        return {"error": "BIRDEYE_API_KEY not configured", "token_address": token_address}
+        return {"error": "BIRDEYE_API_KEY not configured. Set it in MCP Panel > Config tab.", "token_address": token_address, "setup_url": "/mcp/"}
 
     try:
         r = requests.get(BIRDEYE_API + "/defi/v3/token/profile",
@@ -290,14 +290,14 @@ async def tool_get_token_profile(token_address: str) -> dict:
     except Exception as e:
         return {"error": str(e), "token_address": token_address}
 
-    return {"token_address": token_address, "error": "Birdeye API error"}
+    return {"token_address": token_address, "error": "Birdeye API returned an error. Check your BIRDEYE_API_KEY in MCP Panel > Config.", "setup_url": "/mcp/"}
 
 
 async def tool_get_token_security(token_address: str) -> dict:
     """Get token security metrics from Birdeye (holders, top holder %, creator %)."""
     birdeye_key = os.getenv("BIRDEYE_API_KEY")
     if not birdeye_key:
-        return {"error": "BIRDEYE_API_KEY not configured", "token_address": token_address}
+        return {"error": "BIRDEYE_API_KEY not configured. Set it in MCP Panel > Config tab.", "token_address": token_address, "setup_url": "/mcp/"}
 
     try:
         r = requests.get(BIRDEYE_API + "/defi/v3/token/security",
@@ -320,7 +320,7 @@ async def tool_get_token_security(token_address: str) -> dict:
     except Exception as e:
         return {"error": str(e), "token_address": token_address}
 
-    return {"token_address": token_address, "error": "Birdeye API error"}
+    return {"token_address": token_address, "error": "Birdeye API returned an error. Check your BIRDEYE_API_KEY in MCP Panel > Config.", "setup_url": "/mcp/"}
 
 
 async def tool_get_whale_data(token_address: str) -> dict:

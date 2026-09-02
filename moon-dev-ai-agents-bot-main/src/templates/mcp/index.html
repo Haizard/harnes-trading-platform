@@ -108,6 +108,7 @@
     <div class="content">
         <!-- Status Panel -->
         <div class="panel active" id="panel-status">
+            <div id="mcp-warnings"></div>
             <div class="grid grid-3" id="status-stats"></div>
             <div class="grid grid-2" style="margin-top: 16px;">
                 <div class="card">
@@ -284,6 +285,9 @@
                 <div style="margin-bottom: 8px;"><strong>Uptime:</strong> ${formatUptime(d.uptime_seconds)}</div>
                 <div><strong>Last Call:</strong> ${d.last_call || 'None'}</div>
             `;
+
+            // Check for missing API keys via a test call
+            loadWarnings();
         } catch (e) {
             document.getElementById('server-status').className = 'status-badge status-err';
             document.getElementById('server-status').textContent = '● Error';
@@ -298,6 +302,38 @@
             body: JSON.stringify({auto_connect: checked})
         });
         document.getElementById('auto-connect-label').textContent = checked ? 'Enabled — auto-starts with platform' : 'Disabled — manual start required';
+    }
+
+    // ── Warnings ──
+    async function loadWarnings() {
+        const warnings = [];
+        // Quick-check tools that need API keys
+        const keyTools = [
+            {tool: 'get_token_profile', param: 'token_address', val: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', key: 'BIRDEYE_API_KEY', name: 'Birdeye'},
+        ];
+        for (const kt of keyTools) {
+            try {
+                const r = await fetch(API + '/call', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({tool: kt.tool, params: {[kt.param]: kt.val}})
+                });
+                const d = await r.json();
+                if (d.data && d.data.error && d.data.error.includes('not configured')) {
+                    warnings.push({key: kt.key, name: kt.name, setup_url: d.data.setup_url || '/mcp/'});
+                }
+            } catch (e) {}
+        }
+        const el = document.getElementById('mcp-warnings');
+        if (warnings.length > 0) {
+            el.innerHTML = warnings.map(w => 
+                `<div class="card" style="border-color: var(--yellow); margin-bottom: 12px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between;">
+                    <span style="color: var(--yellow); font-size: 13px;">⚠️ <strong>${w.name}</strong> API key not set — 2 tools disabled. <a href="/mcp/#config" style="color: var(--accent);">Set ${w.key} →</a></span>
+                </div>`
+            ).join('');
+        } else {
+            el.innerHTML = '';
+        }
     }
 
     // ── Tools ──
