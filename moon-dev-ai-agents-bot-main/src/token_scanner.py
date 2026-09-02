@@ -589,9 +589,9 @@ class TokenScanner:
         self.jupiter = JupiterChecker()
         self.scorer = TokenScorer()
         self.trending = TrendingDiscoverer(self.dexscreener)
-        self.tradingview = TradingViewDiscoverer(event_bus=self.event_bus)
         self.callback = callback
         self.event_bus = event_bus
+        self.tradingview = TradingViewDiscoverer(event_bus=self.event_bus)
         self.scheduler = scheduler
         self._seen_tokens = set()
         self._seen_tokens_last_reset = time.time()
