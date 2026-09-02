@@ -22,7 +22,7 @@
         .info-value { font-weight: 600; }
         .info-value.up { color: var(--green); }
         .info-value.down { color: var(--red); }
-        #chart-container { width: 100%; height: calc(100vh - 140px); }
+        #chart-container { width: 100%; height: calc(100vh - 140px); transition: opacity 0.3s; }
         .loading { text-align: center; padding: 40px; color: var(--dim); }
         .back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
     </style>
@@ -90,7 +90,7 @@
     // ── Load Data ──
     async function loadChart() {
         currentSymbol = document.getElementById('symbol-select').value;
-        document.querySelector('.loading') || (document.getElementById('chart-container').innerHTML = '<div class="loading">Loading chart data...</div>');
+        document.getElementById('chart-container').style.opacity = '0.3';
 
         try {
             // Fetch candles from our MCP endpoint
@@ -102,6 +102,7 @@
             const d = await r.json();
             if (!d.success || !d.data || !d.data.candles) {
                 document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${d.error || d.data?.error || 'No data'}</span></div>`;
+                document.getElementById('chart-container').style.opacity = '1';
                 return;
             }
 
@@ -119,6 +120,7 @@
             })));
 
             chart.timeScale().fitContent();
+            document.getElementById('chart-container').style.opacity = '1';
 
             // Update info bar
             const last = candles[candles.length - 1];
@@ -139,6 +141,7 @@
             `;
         } catch (e) {
             document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${e.message}</span></div>`;
+            document.getElementById('chart-container').style.opacity = '1';
         }
     }
 
