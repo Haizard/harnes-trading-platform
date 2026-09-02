@@ -31,3 +31,7 @@ alpha_vantage
 twikit==2.3.3
 httpx
 schedule
+
+# === TradingView (data feed, screener, indicators) ===
+tradingview-ta>=3.3.0
+tradingview-screener>=3.2.0

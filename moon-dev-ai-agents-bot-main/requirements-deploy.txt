@@ -21,4 +21,8 @@ psycopg_pool>=3.2.0
 twikit==2.3.3
 httpx>=0.27.0
 
+# === TradingView (data feed, screener, indicators) ===
+tradingview-ta>=3.3.0
+tradingview-screener>=3.2.0
+
 # === No torch, transformers, selenium, moviepy, TA-Lib, etc ===
