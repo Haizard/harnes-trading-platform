@@ -559,10 +559,27 @@ async def get_health():
         
         # EventBus
         try:
-            from src.event_bus import EventBus
-            modules["event_bus"] = {"status": "ok"}
+            from src.event_bus import EventBus, _pending_tasks, _fire_and_forget
+            modules["event_bus"] = {
+                "status": "ok",
+                "pending_tasks": len(_pending_tasks),
+                "note": "fire_and_forget active"
+            }
         except Exception:
             modules["event_bus"] = {"status": "error"}
+
+        # MCP Registry
+        try:
+            from src.mcp_registry import get_mcp_registry
+            reg = get_mcp_registry()
+            tools = reg.get_tools() if hasattr(reg, 'get_tools') else []
+            modules["mcp_registry"] = {
+                "status": "ok",
+                "tools_loaded": len(tools),
+                "tool_names": [t["name"] for t in tools[:5]] if tools else [],
+            }
+        except Exception as e:
+            modules["mcp_registry"] = {"status": "error", "error": str(e)}
         
         # Scanner
         try:
