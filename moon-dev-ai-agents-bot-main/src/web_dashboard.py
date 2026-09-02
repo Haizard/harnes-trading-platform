@@ -51,6 +51,14 @@ app.add_middleware(
 
 DATA_DIR = Path("src/data")
 
+# Mount RBI Agent Web Interface
+try:
+    from src.rbi_web import router as rbi_router
+    app.include_router(rbi_router)
+    print("[DASHBOARD] RBI Agent web routes loaded", flush=True)
+except Exception as e:
+    print(f"[DASHBOARD] RBI web routes failed: {e}", flush=True)
+
 # Auth helpers
 
 def get_current_user(request: Request) -> Optional[dict]:
@@ -819,15 +827,20 @@ async def dashboard(request: Request):
             return DASHBOARD_HTML
 
     # Not authenticated — show login page
-    return LOGIN_HTML
-
-
-@app.get("/login", response_class=HTMLResponse)
+    return LOGIN_HTML@app.get("/login", response_class=HTMLResponse)
 async def login_page():
     """Login page."""
     return LOGIN_HTML
 
 
+@app.get("/rbi/", response_class=HTMLResponse)
+async def rbi_agent_page():
+    """RBI Agent web interface."""
+    try:
+        from src.rbi_web import RBI_HTML
+        return RBI_HTML
+    except ImportError:
+        return HTMLResponse("<h1>RBI Agent module not available</h1>", status_code=503)
 
 
 
@@ -936,6 +949,7 @@ DASHBOARD_HTML = """
         <button onclick="showPanel('scanner')">🔍 Scanner</button>
         <button onclick="showPanel('wallets')">🐋 Wallets</button>
         <button onclick="showPanel('rbi')">🛡️ RBI</button>
+        <button onclick="window.open('/rbi/','_blank')" style="color:#e879f9;">🧪 RBI Agent →</button>
         <button onclick="showPanel('mcp')">🤖 MCP</button>
         <button onclick="showPanel('storage')">💾 Storage</button>
         <button onclick="showPanel('health')">💓 Health</button>
