@@ -347,19 +347,30 @@ class TrendingDiscoverer:
 class TradingViewDiscoverer:
     """Discover tokens via TradingView Screener (FREE, no auth).
 
-    Scans global crypto markets for momentum signals:
-    - High relative volume
-    - RSI oversold/overbought
-    - MACD crossover
-    - Strong recommendation (BUY/STRONG_BUY)
+    DSH Pattern: EventBus -> DB -> Singleton
 
+    Scans global crypto markets for momentum signals:
+    - High relative volume, RSI, MACD, recommendation
     Filters for Solana-related pairs when possible.
     """
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
+        self.event_bus = event_bus
         self._last_scan = 0
-        self._scan_interval = 300  # Scan every 5 min
+        self._scan_interval = 300
         self._cache = []
+
+    def _emit_event(self, event_name, payload):
+        """Emit event via EventBus (DSH pattern)."""
+        try:
+            from src.db_storage import log_event
+            log_event(event_name, payload)
+        except: pass
+        if self.event_bus:
+            try:
+                import asyncio
+                asyncio.ensure_future(self.event_bus.emit(event_name, payload))
+            except: pass
 
     def discover(self) -> List[dict]:
         """Scan TradingView crypto screener for momentum tokens."""
@@ -431,6 +442,15 @@ class TradingViewDiscoverer:
 
             self._cache = results
             print('[TRADINGVIEW] Screener found ' + str(len(results)) + ' candidates', flush=True)
+
+            # DSH: emit event
+            from datetime import datetime, timezone
+            self._emit_event('tradingview/screener_discovery', {
+                'count': len(results),
+                'candidates': [r['baseToken']['symbol'] for r in results[:10]],
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+            })
+
             return results
 
         except Exception as e:
@@ -569,7 +589,7 @@ class TokenScanner:
         self.jupiter = JupiterChecker()
         self.scorer = TokenScorer()
         self.trending = TrendingDiscoverer(self.dexscreener)
-        self.tradingview = TradingViewDiscoverer()
+        self.tradingview = TradingViewDiscoverer(event_bus=self.event_bus)
         self.callback = callback
         self.event_bus = event_bus
         self.scheduler = scheduler

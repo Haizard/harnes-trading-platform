@@ -25,7 +25,7 @@ class PineConverter:
         self.event_bus = event_bus
         self._count = 0
 
-    def _emit(self, name, payload):
+    def _emit_event(self, name, payload):
         try:
             from src.db_storage import log_event
             log_event(name, payload)
@@ -56,7 +56,7 @@ class PineConverter:
             elif "`{BT}" in code:
                 code = code.split("`{BT}")[1].split("`{BT}")[0]
             self._count += 1
-            self._emit("pine/conversion", {"name": strategy_name, "len": len(pine_script),
+            self._emit_event("pine/conversion", {"name": strategy_name, "len": len(pine_script),
                 "ts": datetime.now(timezone.utc).isoformat()})
             return {"success": True, "strategy_name": strategy_name,
                     "python_code": code.strip(), "pine_length": len(pine_script),
@@ -79,8 +79,10 @@ class PineConverter:
 _inst = None
 
 def get_pine_converter(event_bus=None):
+    """Get or create the singleton PineConverter instance (DSH pattern)."""
     global _inst
-    if _inst is None: _inst = PineConverter(event_bus=event_bus)
+    if _inst is None:
+        _inst = PineConverter(event_bus=event_bus)
     return _inst
 
 
