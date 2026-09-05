@@ -832,9 +832,14 @@ class MicroEngine:
             except Exception as e:
                 print("[PINE] Error: " + str(e))
 
-                # Step 2: AI Orchestrator decision (consensus + feedback loop)
-        # Inject all signals into candidate data for the orchestrator
-        candidate_dict = candidate.to_dict()
+        # Step 2: AI Orchestrator decision (consensus + feedback loop)
+        # Inject all signals into candidate data for the orchestrator.
+        # NOTE: do NOT reassign candidate_dict = candidate.to_dict() here —
+        # that wiped the confluence and pine_signal data injected above.
+        # Only build a fresh dict if the confluence block errored before
+        # creating one.
+        if 'candidate_dict' not in locals():
+            candidate_dict = candidate.to_dict()
         if strategy_result:
             candidate_dict["strategy_signals"] = strategy_result.to_dict()
         if prediction_signal:
