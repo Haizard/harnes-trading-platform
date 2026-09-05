@@ -183,8 +183,8 @@ class OrderBookCollector:
             if resp.status_code != 200:
                 return None
 
-            data = resp.json()
-            pairs = data if isinstance(data, list) else data.get("pairs", [])
+            data = resp.json() or {}
+            pairs = data if isinstance(data, list) else (data.get("pairs") or [])
 
             # Find best Solana pair
             pair = None

@@ -558,8 +558,8 @@ class OHLCVCollector:
             if resp.status_code != 200:
                 return None
 
-            data = resp.json()
-            pairs = data if isinstance(data, list) else data.get("pairs", [])
+            data = resp.json() or {}
+            pairs = data if isinstance(data, list) else (data.get("pairs") or [])
 
             # Find best Solana pair
             for p in pairs:
@@ -567,7 +567,8 @@ class OHLCVCollector:
                     return p
             return pairs[0] if pairs else None
 
-        except Exception:
+        except Exception as e:
+            cprint(f"[OHLCV] Fetch pair error for {token_address[:8]}...: {e}", "yellow")
             return None
 
     def _save_candle_to_db(self, token_address: str, candle: Candle, timeframe: str = "1m"):

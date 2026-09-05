@@ -557,6 +557,7 @@ class MicroEngine:
             return
         try:
             new_events = self.wallet_tracker.poll_wallets()
+            new_events = [e for e in (new_events or []) if (getattr(e, "amount_sol", 0) or 0) > 0]
             if new_events:
                 print("[WALLET] Detected " + str(len(new_events)) + " new swap events from tracked wallets")
                 for evt in new_events:
@@ -641,26 +642,10 @@ class MicroEngine:
                 # Check risk limits
                 risk_event = self.portfolio_risk.check_risk()
                 if risk_event and not self.portfolio_risk.is_trading_allowed():
-                    # Circuit breaker active — ask AI for override
-                    if self.override_engine and risk_event.severity == "critical":
-                        override = self.override_engine.should_override(
-                            risk_event.event_type,
-                            self.portfolio_risk.get_portfolio_stats(),
-                            self.paper.get_positions_for_risk(),
-                        )
-                        if override.get("decision") == "OVERRIDE":
-                            self.portfolio_risk.set_override(True)
-                            print("[RISK] AI override approved — trading continues")
-                        else:
-                            self.portfolio_risk.activate_circuit_breaker(risk_event.message)
-                            print("[RISK] Circuit breaker active — no new trades")
-                            self._log_event_to_db("risk/circuit_breaker", risk_event.to_dict())
-                            return
-                    else:
-                        self.portfolio_risk.activate_circuit_breaker(risk_event.message)
-                        print("[RISK] Circuit breaker active — no new trades")
-                        self._log_event_to_db("risk/circuit_breaker", risk_event.to_dict())
-                        return
+                    # Circuit breaker is latched - block without re-consulting the
+                    # AI override or re-activating the breaker on every candidate.
+                    print("[RISK] Circuit breaker active - no new trades")
+                    return
             except Exception as e:
                 print("[RISK] Risk check error: " + str(e))
 
@@ -984,18 +969,21 @@ class MicroEngine:
                     self._log_event_to_db("risk/event", risk_event.to_dict())
                     # If critical, try AI override or activate circuit breaker
                     if risk_event.severity == "critical":
-                        if self.override_engine:
-                            override = self.override_engine.should_override(
-                                risk_event.event_type,
-                                self.portfolio_risk.get_portfolio_stats(),
-                                self.paper.get_positions_for_risk(),
-                            )
-                            if override.get("decision") == "OVERRIDE":
-                                self.portfolio_risk.set_override(True)
+                        # Latch: only consult the AI override / fire the breaker
+                        # on the FIRST breach, not every exit-check cycle.
+                        if not self.portfolio_risk.circuit_breaker_active:
+                            if self.override_engine:
+                                override = self.override_engine.should_override(
+                                    risk_event.event_type,
+                                    self.portfolio_risk.get_portfolio_stats(),
+                                    self.paper.get_positions_for_risk(),
+                                )
+                                if override.get("decision") == "OVERRIDE":
+                                    self.portfolio_risk.set_override(True)
+                                else:
+                                    self.portfolio_risk.activate_circuit_breaker(risk_event.message)
                             else:
                                 self.portfolio_risk.activate_circuit_breaker(risk_event.message)
-                        else:
-                            self.portfolio_risk.activate_circuit_breaker(risk_event.message)
             except Exception as e:
                 print("[RISK] Exit risk check error: " + str(e))
 

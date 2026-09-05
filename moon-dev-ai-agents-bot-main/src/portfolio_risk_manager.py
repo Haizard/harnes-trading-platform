@@ -205,7 +205,11 @@ class PortfolioRiskManager:
         return None
 
     def activate_circuit_breaker(self, reason: str):
-        """Activate the circuit breaker to block new trades."""
+        """Activate the circuit breaker to block new trades (idempotent)."""
+        if self.circuit_breaker_active:
+            # Already latched - don't reset the trip time or re-print/spam.
+            self.circuit_breaker_reason = reason
+            return
         self.circuit_breaker_active = True
         self.circuit_breaker_reason = reason
         self.circuit_breaker_since = datetime.now(timezone.utc)
