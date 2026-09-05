@@ -15,6 +15,7 @@ DSH Pattern: Candidate → OHLCV Fetch → Indicators → Strategy Signals → O
 import os
 import time
 import json
+import importlib.util
 import requests
 import pandas as pd
 import numpy as np
@@ -24,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from termcolor import cprint
 from src.event_bus import _fire_and_forget
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 # TA-Lib for indicator calculations
 try:
@@ -1141,17 +1144,131 @@ class PressureStrategy:
         )
 
 
+# ── Custom Strategy Loader (RBI Phase 6 output) ──────────────
+def adapt_custom_strategy(name: str, cls: type) -> type:
+    """
+    Adapt a deployed RBI strategy (BaseStrategy contract: instance method
+    `generate_signals()` reading `self.data`) into a bridge-compatible
+    strategy class exposing a static `evaluate(indicators, candidate_metrics)`
+    returning a StrategySignal — the interface `_run_strategies` expects.
+    """
+    # StrategySignal is defined earlier in this module — no import needed
+
+    class CustomStrategyAdapter:
+        NAME = name
+
+        @staticmethod
+        def evaluate(indicators: Dict, candidate_metrics: Dict = None):
+            try:
+                instance = cls()
+                # BaseStrategy strategies consume self.data for market data —
+                # provide the live indicator snapshot from the bridge pipeline
+                instance.data = indicators or {}
+                instance.symbol = (candidate_metrics or {}).get("symbol", "")
+                output = instance.generate_signals()
+                if not isinstance(output, dict):
+                    return None
+                direction = str(output.get("direction", "NEUTRAL")).upper()
+                if direction not in ("BUY", "SELL", "NEUTRAL"):
+                    direction = "NEUTRAL"
+                strength = float(output.get("signal", 0) or 0)
+                return StrategySignal(
+                    strategy_name=name,
+                    direction=direction,
+                    strength=max(0.0, min(strength, 1.0)),
+                    confidence=max(0.0, min(strength, 1.0)),
+                    reasons=[f"RBI custom strategy {name}"],
+                    indicators=output.get("metadata", {}) or {},
+                )
+            except Exception as e:
+                cprint(f"[CUSTOM_LOADER] {name}.evaluate error: {e}", "yellow")
+                return None
+
+    CustomStrategyAdapter.__name__ = f"Custom_{name}"
+    return CustomStrategyAdapter
+
+
+class CustomStrategyLoader:
+    """
+    Loads RBI-deployed strategies from strategies/custom/*.py so the
+    pipeline's GO_LIVE output actually runs live (fixes the dead-end where
+    deployed files were never loaded by anything).
+
+    Contract: each file defines a subclass of BaseStrategy (or any class with
+    a `name` attribute and a `generate(df) -> dict` method matching the
+    bridge strategy interface). Invalid/silent files are skipped.
+    """
+
+    def __init__(self, custom_dir: Path = None):
+        self.custom_dir = custom_dir or (PROJECT_ROOT / "strategies" / "custom")
+        self.loaded: Dict[str, type] = {}
+        self._raw_classes: Dict[str, type] = {}
+        self._mtimes: Dict[str, float] = {}
+
+    def scan(self) -> Dict[str, type]:
+        """Scan the custom dir and (re)load new/changed strategy files."""
+        if not self.custom_dir.exists():
+            return self.loaded
+        for py_file in sorted(self.custom_dir.glob("*.py")):
+            if py_file.name.startswith("_") or py_file.name == "__init__.py":
+                continue
+            try:
+                mtime = py_file.stat().st_mtime
+                if (py_file.name in self._mtimes
+                        and self._mtimes[py_file.name] == mtime):
+                    continue  # unchanged
+                spec = importlib.util.spec_from_file_location(
+                    f"custom_strategy_{py_file.stem}", py_file)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                found = False
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (isinstance(attr, type)
+                            and (hasattr(attr, "generate_signals")
+                                 or hasattr(attr, "generate"))
+                            and attr.__module__ == spec.name
+                            and not attr_name.startswith("_")):
+                        # Wrap into the bridge's evaluate() interface —
+                        # deployed strategies implement generate_signals()
+                        # (BaseStrategy contract), the bridge calls
+                        # evaluate(indicators, candidate_metrics)
+                        adapted = adapt_custom_strategy(attr_name, attr)
+                        self.loaded[attr_name] = adapted
+                        self._raw_classes[attr_name] = attr
+                        found = True
+                if found:
+                    cprint(f"[CUSTOM_LOADER] Loaded {py_file.name}", "green")
+                self._mtimes[py_file.name] = mtime
+            except Exception as e:
+                cprint(f"[CUSTOM_LOADER] Skip {py_file.name}: {e}", "yellow")
+        return self.loaded
+
+    def unload_removed(self):
+        """Drop strategies whose source files no longer exist."""
+        if not self.custom_dir.exists():
+            self.loaded.clear(); self._mtimes.clear(); return
+        existing = {p.name for p in self.custom_dir.glob("*.py")}
+        for fname in list(self._mtimes):
+            if fname not in existing:
+                stem = Path(fname).stem
+                for cls_name in [k for k, v in self.loaded.items()
+                                 if k.lower() == stem.lower()]:
+                    self.loaded.pop(cls_name, None)
+                self._mtimes.pop(fname, None)
+
+
 # ── Main Strategy Bridge ─────────────────────────────────────
 class StrategyBridge:
     """
     The bridge between backtest strategies and the live MicroEngine.
-    
+
     Flow:
       Candidate → Fetch OHLCV → Calculate Indicators → Run Strategies → Combine Signals
-    
+
     Usage:
         bridge = StrategyBridge()
-        result = bridge.analyze(candidate.address, candidate.symbol, 
+        result = bridge.analyze(candidate.address, candidate.symbol,
                                 pair_address=candidate.pair_address,
                                 candidate_metrics=candidate.to_dict())
     """
@@ -1191,10 +1308,46 @@ class StrategyBridge:
             SwingLevelStrategy,
             DemandZoneStrategy,
         ]
+        # RBI-deployed custom strategies (Phase 6 output) — hot-loaded so
+        # GO_LIVE strategies actually participate in live analysis
+        self.custom_loader = CustomStrategyLoader()
+        self._load_custom_strategies()
+        # Decay detector: skips disabled strategies when combining signals
+        self._decay_detector = None
         # Stats
         self._analyses = 0
         self._signals_generated = 0
         self._errors = 0
+
+    def _load_custom_strategies(self):
+        """Hot-load RBI custom strategies into the live strategy list."""
+        try:
+            loaded = self.custom_loader.scan()
+            for name, cls in loaded.items():
+                if cls not in self.strategies:
+                    self.strategies.append(cls)
+                    cprint(f"[STRATEGY_BRIDGE] Custom strategy live: {name}", "green")
+        except Exception as e:
+            cprint(f"[STRATEGY_BRIDGE] Custom loader error: {e}", "yellow")
+
+    def reload_custom_strategies(self):
+        """Public hook — call after RBI deploys a new strategy (or periodically)."""
+        self.custom_loader.unload_removed()
+        # Remove previously-loaded custom classes that were removed on disk
+        self.strategies = [s for s in self.strategies
+                           if s not in self.custom_loader.loaded
+                           or s in self.custom_loader.scan().values()]
+        self._load_custom_strategies()
+
+    def _get_decay_detector(self):
+        """Lazy singleton for the alpha decay detector (skip disabled strategies)."""
+        if self._decay_detector is None:
+            try:
+                from src.alpha_decay import AlphaDecayDetector
+                self._decay_detector = AlphaDecayDetector()
+            except Exception:
+                self._decay_detector = False  # sentinel: unavailable
+        return self._decay_detector or None
 
     def analyze(self, token_address: str, symbol: str,
                 pair_address: str = "",
@@ -1212,6 +1365,12 @@ class StrategyBridge:
             BridgeResult with combined signals from all strategies
         """
         self._analyses += 1
+        # Periodically pick up newly-deployed RBI strategies (cheap mtime check)
+        if self._analyses % 50 == 1:
+            try:
+                self.reload_custom_strategies()
+            except Exception:
+                pass
         timestamp = datetime.now(timezone.utc).isoformat()
 
         result = BridgeResult(
@@ -1327,6 +1486,18 @@ class StrategyBridge:
 
         for signal in result.signals:
             weight = self.STRATEGY_WEIGHTS.get(signal.strategy_name, 1.0)
+
+            # Skip strategies disabled by the alpha-decay detector (fix #2):
+            # decayed strategies must not vote on live trades
+            detector = self._get_decay_detector()
+            if detector:
+                try:
+                    if detector.is_disabled(signal.strategy_name):
+                        total_weight += weight  # keep denominator stable
+                        continue
+                except Exception:
+                    pass
+
             weighted_score = weight * signal.strength * signal.confidence
 
             if signal.direction == "BUY":

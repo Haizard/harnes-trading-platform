@@ -49,6 +49,7 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_MEMORY_RUNS = 200          # max runs kept in RAM (older ones pruned from memory)
 MAX_FINISHED_LOG_LINES = 1000  # trim in-RAM logs of finished runs (full log on disk)
 MAX_WS_LIFETIME_SECONDS = 3600 # WebSocket stream hard cap (defensive)
+MAX_CONCURRENT_RUNS = 2        # pipeline concurrency limit (#6) — extra runs queue
 
 
 # ── Run Manager ────────────────────────────────────────────
@@ -135,6 +136,8 @@ class RunManager:
         self.logs: Dict[str, List[str]] = {}
         self.websocket_clients: Dict[str, Set[WebSocket]] = {}
         self._lock = threading.Lock()
+        self._pipeline_slots = threading.Semaphore(MAX_CONCURRENT_RUNS)
+        self._approval_gates: Dict[str, tuple] = {}  # run_id -> (Event, result-dict)
         self._load_runs_from_disk()
 
     def _load_runs_from_disk(self):
@@ -242,49 +245,97 @@ class RunManager:
         capture = OutputCapture(run_id, self)
         STDOUT_ROUTER.register(capture)
 
+        # Concurrency limit (#6): pipeline threads queue on this semaphore
+        # so N rapid submissions can't hammer the model API / CPU at once
+        self._pipeline_slots.acquire()
         try:
-            # Import and run the pipeline
-            sys.path.insert(0, str(PROJECT_ROOT / "moon-dev-ai-agents-bot-main"))
-            sys.path.insert(0, str(PROJECT_ROOT))
-            from src.agents.rbi_agent import process_trading_idea
+            self.append_log(run_id, f"[WEB] Pipeline slot acquired "
+                                    f"({MAX_CONCURRENT_RUNS} max concurrent)\n")
 
-            # Set auto_mode to True for web runs (skip human gate)
-            process_trading_idea(idea_text, auto_mode=True)
-
-            # Mark completed
+            # Real human approval (#3): web runs block here for dashboard
+            # approval instead of silently auto-deploying (auto_mode=True bug)
+            approval_event = threading.Event()
+            approval_result = {"approved": False}
+            # Register the gate so the approve/reject endpoints can signal it
             with self._lock:
-                self.runs[run_id]["status"] = "completed"
-                self.runs[run_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+                self._approval_gates[run_id] = (approval_event, approval_result)
 
-            # Try to extract strategy name from logs
-            self._extract_result(run_id)
+            def approval_callback(name, stats, reasoning):
+                with self._lock:
+                    self.runs[run_id]["status"] = "awaiting_approval"
+                    self.runs[run_id]["approval"] = {
+                        "strategy_name": name,
+                        "reasoning": (reasoning or "")[:300],
+                        "stats": stats or {},
+                    }
+                self._persist_run(self.runs[run_id])
+                self._broadcast_status(run_id)
+                self.append_log(run_id, f"[WEB] ⏸ Awaiting approval for "
+                                        f"'{name}' via dashboard (1h timeout)...\n")
+                approved = approval_event.wait(timeout=3600)
+                with self._lock:
+                    self.runs[run_id]["status"] = "running"
+                    self.runs[run_id].pop("approval", None)
+                self._persist_run(self.runs[run_id])
+                if not approved:
+                    self.append_log(run_id, "[WEB] Approval timed out — rejected\n")
+                return approved and approval_result["approved"]
 
-            # DSH: emit event
-            self._emit_event("rbi/run_completed", {
-                "run_id": run_id,
-                "idea": idea_text[:200],
-                "strategy_name": self.runs[run_id].get("strategy_name"),
-                "result": self.runs[run_id].get("result"),
-                "phases": self.runs[run_id].get("phases", {}),
-                "timestamp": self.runs[run_id]["finished_at"],
-            })
+            def cancel_check():
+                return bool(self.runs.get(run_id, {}).get("cancel_requested"))
 
-        except Exception as e:
-            with self._lock:
-                self.runs[run_id]["status"] = "error"
-                self.runs[run_id]["error"] = str(e)
-                self.runs[run_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
-            self.append_log(run_id, f"\n[FATAL ERROR] {e}\n")
+            try:
+                # Import and run the pipeline
+                sys.path.insert(0, str(PROJECT_ROOT / "moon-dev-ai-agents-bot-main"))
+                sys.path.insert(0, str(PROJECT_ROOT))
+                from src.agents.rbi_agent import process_trading_idea
 
-            # DSH: emit error event
-            self._emit_event("rbi/run_error", {
-                "run_id": run_id,
-                "idea": idea_text[:200],
-                "error": str(e),
-                "timestamp": self.runs[run_id]["finished_at"],
-            })
+                process_trading_idea(idea_text, auto_mode=False,
+                                     approval_callback=approval_callback,
+                                     cancel_check=cancel_check)
+
+                # Mark completed (or cancelled if cancel was requested)
+                with self._lock:
+                    if self.runs[run_id].get("cancel_requested"):
+                        self.runs[run_id]["status"] = "cancelled"
+                    else:
+                        self.runs[run_id]["status"] = "completed"
+                    self.runs[run_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+                # Try to extract strategy name from logs
+                self._extract_result(run_id)
+
+                # DSH: emit event
+                self._emit_event("rbi/run_completed", {
+                    "run_id": run_id,
+                    "idea": idea_text[:200],
+                    "strategy_name": self.runs[run_id].get("strategy_name"),
+                    "result": self.runs[run_id].get("result"),
+                    "phases": self.runs[run_id].get("phases", {}),
+                    "timestamp": self.runs[run_id]["finished_at"],
+                })
+
+            except Exception as e:
+                with self._lock:
+                    self.runs[run_id]["status"] = "error"
+                    self.runs[run_id]["error"] = str(e)
+                    self.runs[run_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+                self.append_log(run_id, f"\n[FATAL ERROR] {e}\n")
+
+                # DSH: emit error event
+                self._emit_event("rbi/run_error", {
+                    "run_id": run_id,
+                    "idea": idea_text[:200],
+                    "error": str(e),
+                    "timestamp": self.runs[run_id]["finished_at"],
+                })
         finally:
+            self._pipeline_slots.release()
             STDOUT_ROUTER.unregister()
+            with self._lock:
+                self._approval_gates.pop(run_id, None)
+                # Unblock a pending approval wait if the run ended otherwise
+                gate = self._approval_gates.get(run_id)
             self._persist_run(self.runs[run_id])
             self._broadcast_status(run_id)
             self._broadcast_log(run_id, "__DONE__")
@@ -293,6 +344,42 @@ class RunManager:
                 logs = self.logs.get(run_id)
                 if logs and len(logs) > MAX_FINISHED_LOG_LINES:
                     self.logs[run_id] = logs[-MAX_FINISHED_LOG_LINES:]
+
+    # ── Approval / Cancel control (#3, #9) ────────────────────
+
+    def resolve_approval(self, run_id: str, approved: bool) -> tuple:
+        """Approve or reject a run awaiting the human gate.
+        Returns (ok, message)."""
+        with self._lock:
+            gate = self._approval_gates.get(run_id)
+            run = self.runs.get(run_id)
+            if not gate or not run or run.get("status") != "awaiting_approval":
+                return False, "Run is not awaiting approval"
+            gate[1]["approved"] = approved
+            gate[0].set()
+            self.append_log(run_id, f"[WEB] {'✅ APPROVED' if approved else '❌ REJECTED'} "
+                                    f"by dashboard operator\n")
+        self._persist_run(self.runs[run_id])
+        return True, f"Run {'approved' if approved else 'rejected'}"
+
+    def cancel_run(self, run_id: str) -> tuple:
+        """Request cancellation of a running/queued run (#9).
+        Returns (ok, message)."""
+        with self._lock:
+            run = self.runs.get(run_id)
+            if not run:
+                return False, "Run not found"
+            if run.get("status") in ("completed", "error", "cancelled"):
+                return False, f"Run already {run['status']}"
+            run["cancel_requested"] = True
+            # If waiting on the approval gate, wake it up (rejected) so it exits
+            gate = self._approval_gates.get(run_id)
+            if gate and run.get("status") == "awaiting_approval":
+                gate[1]["approved"] = False
+                gate[0].set()
+        self.append_log(run_id, "[WEB] 🛑 Cancel requested by operator\n")
+        self._persist_run(self.runs[run_id])
+        return True, "Cancel requested"
 
     def _extract_result(self, run_id: str):
         """Extract strategy result from the pipeline logs."""
@@ -572,6 +659,33 @@ async def get_run_logs(run_id: str, offset: int = 0):
     if not run:
         raise HTTPException(404, "Run not found")
     return {"logs": run_manager.get_logs(run_id, offset)}
+
+
+@router.post("/api/rbi/run/{run_id}/approve")
+async def approve_run(run_id: str):
+    """Approve a run awaiting the human deployment gate (#3)."""
+    ok, msg = run_manager.resolve_approval(run_id, approved=True)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"status": msg}
+
+
+@router.post("/api/rbi/run/{run_id}/reject")
+async def reject_run(run_id: str):
+    """Reject a run awaiting the human deployment gate (#3)."""
+    ok, msg = run_manager.resolve_approval(run_id, approved=False)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"status": msg}
+
+
+@router.post("/api/rbi/run/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    """Cancel a queued/running run (#9)."""
+    ok, msg = run_manager.cancel_run(run_id)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"status": msg}
 
 
 @router.get("/api/rbi/results")

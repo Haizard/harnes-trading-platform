@@ -84,20 +84,78 @@ class AlphaDecayDetector:
 
         self._strategy_data: Dict[str, List[dict]] = {}
         self._disabled: Dict[str, bool] = {}
+        self._persist = config.get('persist', True)
+        self._loaded = False
+        self._disabled_path = os.path.join("src", "data", "rbi", "decay_disabled.json")
+        self._load_disabled()
+
+    def _load_disabled(self):
+        """Load persisted disabled/re-enabled strategy map (survives restarts)."""
+        if not self._persist:
+            return
+        try:
+            if os.path.exists(self._disabled_path):
+                with open(self._disabled_path, "r", encoding="utf-8") as f:
+                    self._disabled = {k: bool(v) for k, v in json.load(f).items()}
+        except Exception:
+            pass
+
+    def _save_disabled(self):
+        if not self._persist:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._disabled_path), exist_ok=True)
+            with open(self._disabled_path, "w", encoding="utf-8") as f:
+                json.dump(self._disabled, f, indent=2)
+        except Exception:
+            pass
+
+    def _load_history(self):
+        """Load persisted trade history from DB (JSONL fallback) — fixes the
+        in-memory-only bug where decay state evaporated on restart."""
+        if self._loaded or not self._persist:
+            return
+        self._loaded = True
+        try:
+            from src.db_storage import get_decay_trades
+            for row in get_decay_trades(limit=5000):
+                name = row.get("strategy_name")
+                if not name:
+                    continue
+                ts = row.get("timestamp")
+                if hasattr(ts, "isoformat"):
+                    ts = ts.isoformat()
+                self._strategy_data.setdefault(name, []).append({
+                    'pnl_pct': row.get("pnl_pct", 0.0),
+                    'timestamp': ts or datetime.utcnow().isoformat(),
+                })
+            if self._strategy_data:
+                cprint(f"[ALPHA_DECAY] Loaded history for {len(self._strategy_data)} strategies", "cyan")
+        except Exception as e:
+            cprint(f"[ALPHA_DECAY] History load skipped: {e}", "yellow")
 
     def record_trade(self, strategy: str, pnl_pct: float, timestamp: str = None):
-        """Record a trade outcome for a strategy."""
+        """Record a trade outcome for a strategy (memory + DB/JSONL persistence)."""
+        self._load_history()
         if strategy not in self._strategy_data:
             self._strategy_data[strategy] = []
 
+        ts = timestamp or datetime.utcnow().isoformat()
         self._strategy_data[strategy].append({
             'pnl_pct': pnl_pct,
-            'timestamp': timestamp or datetime.utcnow().isoformat(),
+            'timestamp': ts,
         })
+        if self._persist:
+            try:
+                from src.db_storage import record_decay_trade
+                record_decay_trade(strategy, pnl_pct, timestamp=ts)
+            except Exception:
+                pass
 
     def check_strategy(self, strategy: str,
                       recent_window: int = 20) -> StrategyHealth:
         """Check the health of a single strategy."""
+        self._load_history()
         trades = self._strategy_data.get(strategy, [])
 
         if len(trades) < self.min_trades:
@@ -162,14 +220,26 @@ class AlphaDecayDetector:
         }
 
     def auto_disable(self, strategy: str):
-        """Auto-disable a decayed strategy."""
+        """Auto-disable a decayed strategy (persisted across restarts)."""
         self._disabled[strategy] = True
+        self._save_disabled()
         cprint(f"📉 AUTO-DISABLED: Strategy '{strategy}' — alpha decay detected", "red")
+        try:
+            from src.db_storage import log_event
+            log_event("strategy/disabled", {"strategy": strategy, "reason": "alpha_decay"})
+        except Exception:
+            pass
 
     def re_enable(self, strategy: str):
-        """Re-enable a previously disabled strategy."""
+        """Re-enable a previously disabled strategy (persisted across restarts)."""
         self._disabled[strategy] = False
+        self._save_disabled()
         cprint(f"📈 RE-ENABLED: Strategy '{strategy}'", "green")
+        try:
+            from src.db_storage import log_event
+            log_event("strategy/enabled", {"strategy": strategy, "reason": "manual"})
+        except Exception:
+            pass
 
     def is_disabled(self, strategy: str) -> bool:
         """Check if a strategy is disabled."""

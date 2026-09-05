@@ -1031,9 +1031,12 @@ class MicroEngine:
         if self.mode == "live":
             closed = self.sniper.check_exits()
             for pos in closed:
-                self.orchestrator.record_trade_outcome(pos.symbol, pos.pnl_usd, pos.pnl_pct, 0)
+                self.orchestrator.record_trade_outcome(pos.symbol, pos.pnl_usd, pos.pnl_pct, 0,
+                                                       strategy_name=getattr(pos, 'strategy_name', None))
                 if self.portfolio_risk:
                     self.portfolio_risk.record_trade_pnl(pos.pnl_usd)
+                # Alpha decay: live trade outcomes feed the decay detector (#2)
+                self._record_decay_outcome(getattr(pos, 'strategy_name', None), pos.pnl_pct)
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": pos.symbol, "amount_usd": pos.amount_usd,
                     "pnl_usd": pos.pnl_usd, "pnl_pct": pos.pnl_pct,
@@ -1044,9 +1047,12 @@ class MicroEngine:
         else:
             closed = self.paper.check_exits()
             for trade in closed:
-                self.orchestrator.record_trade_outcome(trade.symbol, trade.pnl_usd, trade.pnl_pct, 0)
+                self.orchestrator.record_trade_outcome(trade.symbol, trade.pnl_usd, trade.pnl_pct, 0,
+                                                       strategy_name=getattr(trade, 'strategy_name', None))
                 if self.portfolio_risk:
                     self.portfolio_risk.record_trade_pnl(trade.pnl_usd)
+                # Alpha decay: live trade outcomes feed the decay detector (#2)
+                self._record_decay_outcome(getattr(trade, 'strategy_name', None), trade.pnl_pct)
                 self._emit_event(Events.POSITION_CLOSED, {
                     "symbol": trade.symbol, "amount_usd": trade.amount_usd,
                     "pnl_usd": trade.pnl_usd, "pnl_pct": trade.pnl_pct,
@@ -1054,6 +1060,22 @@ class MicroEngine:
                     "token": trade.token_address,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
+
+    def _record_decay_outcome(self, strategy_name, pnl_pct):
+        """Feed live trade outcomes into the alpha decay detector (#2).
+
+        This is what makes decay tracking real: previously only the
+        deploy-time 0.0 baseline was ever recorded, so decay status could
+        never change. Best-effort — never breaks the exit path.
+        """
+        if not strategy_name or pnl_pct is None:
+            return
+        try:
+            detector = self.strategy_bridge._get_decay_detector() if self.strategy_bridge else None
+            if detector:
+                detector.record_trade(strategy_name, pnl_pct=float(pnl_pct))
+        except Exception:
+            pass
 
     async def run(self):
         """Main engine loop."""

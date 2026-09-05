@@ -598,8 +598,14 @@ class AgentOrchestrator:
         except Exception:
             pass
 
-    def record_trade_outcome(self, symbol, pnl_usd, pnl_pct, holding_minutes):
-        """Record trade outcome (DB + JSONL fallback)."""
+    def record_trade_outcome(self, symbol, pnl_usd, pnl_pct, holding_minutes,
+                             strategy_name=None):
+        """Record trade outcome (DB + JSONL fallback).
+
+        If strategy_name is provided (RBI custom strategy attribution),
+        the outcome is also fed to the alpha-decay detector and feedback
+        loop so the strategy's live health actually gets tracked (#4).
+        """
         try:
             # Record via feedback loop
             import asyncio
@@ -632,6 +638,24 @@ class AgentOrchestrator:
                         pass
         except Exception:
             pass
+
+        # Strategy-level attribution (#4): close the feedback loop for
+        # RBI-deployed strategies and keep alpha-decay data current
+        if strategy_name:
+            try:
+                from src.alpha_decay import AlphaDecayDetector
+                AlphaDecayDetector().record_trade(strategy_name, pnl_pct=pnl_pct)
+            except Exception:
+                pass
+            try:
+                from src.db_storage import save_feedback_outcome
+                save_feedback_outcome(
+                    signal_id="", symbol=strategy_name,
+                    pnl_usd=pnl_usd, pnl_pct=pnl_pct,
+                    holding_minutes=holding_minutes,
+                )
+            except Exception:
+                pass
 
     def get_stats(self):
         mcp_tools = 0

@@ -24,6 +24,7 @@ import os
 import sys
 import asyncio
 import io
+import hashlib
 import time
 import re
 import subprocess
@@ -64,11 +65,15 @@ from src.feedback_loop import TradeFeedbackLoop
 # ── Model Configuration ──────────────────────────────────────
 # Coding tasks use qwen.qwen3-coder-next (best for code generation)
 # Evaluation uses deepseek.v3.2 (best for reasoning)
-RESEARCH_CONFIG  = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
-BACKTEST_CONFIG  = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
-DEBUG_CONFIG     = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
-EVALUATE_CONFIG  = {"type": "bedrock", "name": "deepseek.v3.2"}
-DEPLOY_CONFIG    = {"type": "bedrock", "name": "qwen.qwen3-coder-next"}
+# All overridable via env (#11): RBI_MODEL_TYPE, RBI_MODEL_CODER, RBI_MODEL_EVAL
+_MODEL_TYPE = os.environ.get("RBI_MODEL_TYPE", "bedrock")
+_MODEL_CODER = os.environ.get("RBI_MODEL_CODER", "qwen.qwen3-coder-next")
+_MODEL_EVAL = os.environ.get("RBI_MODEL_EVAL", "deepseek.v3.2")
+RESEARCH_CONFIG  = {"type": _MODEL_TYPE, "name": _MODEL_CODER}
+BACKTEST_CONFIG  = {"type": _MODEL_TYPE, "name": _MODEL_CODER}
+DEBUG_CONFIG     = {"type": _MODEL_TYPE, "name": _MODEL_CODER}
+EVALUATE_CONFIG  = {"type": _MODEL_TYPE, "name": _MODEL_EVAL}
+DEPLOY_CONFIG    = {"type": _MODEL_TYPE, "name": _MODEL_CODER}
 
 # ── Directory Setup ──────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -834,8 +839,25 @@ def download_asset_data(asset: str) -> str:
 
 
 def resolve_data_path(strategy_text: str) -> str:
+    """Resolve backtest data for a strategy.
+
+    Priority (#5):
+      1. Fresh OHLCV from our own ohlcv_candles DB table (live-collected,
+         asset-appropriate: SOL-USDC for Solana strategies) written to a
+         temp CSV — avoids validating every idea against the same stale
+         BTC file.
+      2. Static per-asset CSV (ASSET_DATA) if it exists.
+      3. Downloaded data.
+      4. Fallback: BTC-USD-15m.csv.
+    """
     asset = get_strategy_asset_target(strategy_text)
     cprint(f"[DATA] Strategy targets: {asset}", "cyan")
+
+    # Prefer fresh DB-collected candles (#5)
+    fresh = _fresh_data_from_db(asset)
+    if fresh:
+        return fresh
+
     path = ASSET_DATA.get(asset, DATA_PATH)
     if os.path.exists(path):
         return path
@@ -844,6 +866,38 @@ def resolve_data_path(strategy_text: str) -> str:
         return downloaded
     cprint("[DATA] Falling back to BTC data", "yellow")
     return DATA_PATH
+
+
+def _fresh_data_from_db(asset: str, min_bars: int = 300) -> str:
+    """Export recent candles from ohlcv_candles to a temp CSV (#5).
+
+    Solana strategies use SOL-USDC (the ecosystem's base pair); BTC uses
+    BTC-USDC. Returns None when the DB lacks enough recent bars, so the
+    caller falls back to static/downloaded data.
+    """
+    symbol_map = {"SOL": "SOL", "BTC": "BTC"}
+    base = symbol_map.get(asset.split("/")[0].strip().upper()
+                          if "/" in asset else asset.upper())
+    if not base:
+        return None
+    token_address = f"{base}-USDC"  # collector's symbol-keyed addresses
+    try:
+        from src.db_storage import get_ohlcv_candles
+        rows = get_ohlcv_candles(token_address, hours=24 * 14, limit=1500)
+        if not rows or len(rows) < min_bars:
+            cprint(f"[DATA] DB has {len(rows) if rows else 0} fresh {base} bars "
+                   f"(<{min_bars}) — using static data", "yellow")
+            return None
+        import tempfile
+        df = pd.DataFrame(rows)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        path = os.path.join(tempfile.gettempdir(), f"rbi_{base}_fresh.csv")
+        df[["datetime", "Open", "High", "Low", "Close", "Volume"]].to_csv(path, index=False)
+        cprint(f"[DATA] Using {len(df)} fresh DB bars for {base} -> {path}", "green")
+        return path
+    except Exception as e:
+        cprint(f"[DATA] Fresh DB data unavailable ({e}) — using static data", "yellow")
+        return None
 
 
 # ── Dynamic Timeout Calculator ───────────────────────────────
@@ -1252,9 +1306,17 @@ def evaluate_performance(stats: str, walk_forward_result=None,
         stats, EVALUATE_CONFIG,
     )
 
+    # Robust decision parsing (#7): substring matching produced false
+    # positives on reasoning like "do NOT GO_LIVE". Require the decision
+    # marker on its own (word boundary), not preceded by NOT/never.
     decision = "REJECT"
-    if output and "GO_LIVE" in output.upper():
-        decision = "GO_LIVE"
+    if output:
+        upper = output.upper()
+        for m in re.finditer(r"GO[_\s]?LIVE", upper):
+            prefix = upper[max(0, m.start() - 30):m.start()]
+            if not re.search(r"\b(NOT|NEVER|NO|REJECT\w*|DENY\w*|REFUSE\w*)\s*$", prefix):
+                decision = "GO_LIVE"
+                break
 
     # Hard overrides — AI can't override these safety checks
     if walk_forward_result and not walk_forward_result.deployable:
@@ -1279,12 +1341,16 @@ def evaluate_performance(stats: str, walk_forward_result=None,
 
 
 def human_approval_gate(name: str, stats: dict, reasoning: str,
-                        auto_mode: bool = False) -> bool:
+                        auto_mode: bool = False,
+                        approval_callback=None) -> bool:
     """
     Human approval gate before live deployment.
 
     Shows backtest stats and asks for confirmation.
-    Skipped in auto_mode (batch processing).
+    Priority (#3):
+      1. approval_callback (web UI) — real human review, no skipping
+      2. auto_mode — explicit opt-in for unattended batch runs
+      3. CLI interactive input()
     """
     cprint("\n" + "=" * 60, "magenta")
     cprint("🛑 HUMAN APPROVAL REQUIRED", "white", "on_red")
@@ -1299,6 +1365,14 @@ def human_approval_gate(name: str, stats: dict, reasoning: str,
     if reasoning:
         # Show first 200 chars of reasoning
         cprint(f"\n   AI Assessment: {reasoning[:200]}", "blue")
+
+    if approval_callback is not None:
+        cprint("\n   [WEB] Waiting for approval via dashboard...", "cyan")
+        try:
+            return bool(approval_callback(name, stats, reasoning))
+        except Exception as e:
+            cprint(f"\n   [GATE ERROR] {e} — rejecting", "yellow")
+            return False
 
     if auto_mode:
         cprint("\n   [AUTO MODE] Skipping human approval", "yellow")
@@ -1357,7 +1431,8 @@ def archive_strategy(name: str, session_log: RBISessionLogger):
 
 # ── Main Pipeline ────────────────────────────────────────────
 
-def process_trading_idea(idea: str, auto_mode: bool = False):
+def process_trading_idea(idea: str, auto_mode: bool = False,
+                         approval_callback=None, cancel_check=None):
     """
     Process a single trading idea through the full integrated RBI pipeline.
 
@@ -1369,8 +1444,9 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
     - Runtime retry loop in Execute phase
     - Walk-Forward validation before Evaluate
     - Alpha Decay check before Deploy
-    - Human approval gate before Deploy
-    - Strategy Memory tracks full lifecycle
+    - Human approval gate before Deploy (or approval_callback from web UI)
+    - Strategy Memory tracks full lifecycle + code-hash dedupe (#8)
+    - cancel_check() polled between phases for cooperative cancel (#9)
     """
     cprint(f"\n{'='*60}", "magenta")
     cprint(f"RBI PIPELINE (INTEGRATED): {idea[:50]}...", "magenta")
@@ -1382,6 +1458,18 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
     memory_record = {"idea": idea[:500], "signal_id": signal_id,
                      "session_id": session_log.session_id}
 
+    def _cancelled() -> bool:
+        try:
+            return bool(cancel_check()) if cancel_check else False
+        except Exception:
+            return False
+
+    def _bail(reason: str):
+        memory_record["result"] = "CANCELLED"
+        memory_record["reason"] = reason
+        strategy_memory.record_pipeline_run(memory_record)
+        cprint(f"[RBI] Pipeline cancelled: {reason}", "yellow")
+
     try:
         content = get_idea_content(idea)
 
@@ -1389,6 +1477,9 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
         content = sanitize_user_input(content)
 
         session_log.log("model/call", {"phase": "init", "idea_preview": content[:200]}, signal_id)
+
+        if _cancelled():
+            return _bail("before research")
 
         # Phase 1: Research
         strategy, name = research_strategy(content, session_log)
@@ -1399,6 +1490,9 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
             strategy_memory.record_pipeline_run(memory_record)
             return
         memory_record["strategy_name"] = name
+
+        if _cancelled():
+            return _bail("after research")
 
         # Phase 2: Backtest (with validation + backtesting.lib check)
         # Resolve appropriate data file based on strategy content
@@ -1411,8 +1505,35 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
             strategy_memory.record_pipeline_run(memory_record)
             return
 
+        if _cancelled():
+            return _bail("after backtest codegen")
+
         # Phase 3: Debug (with retry loop)
         code = debug_backtest(code, name, session_log)
+
+        # Code-hash dedupe (#8): identical generated code already evaluated
+        # → reuse the prior decision instead of burning another full run
+        code_hash = hashlib.md5(code.encode("utf-8")).hexdigest()
+        memory_record["code_hash"] = code_hash
+        try:
+            prior = [h for h in strategy_memory.get_strategy_history(limit=200)
+                     if h.get("code_hash") == code_hash and h.get("result")]
+            if prior:
+                last = prior[-1]
+                cprint(f"[RBI] Duplicate code detected (hash {code_hash[:8]}) — "
+                       f"prior decision: {last.get('result')} ({last.get('reasoning', '')[:80]})",
+                       "yellow")
+                memory_record["result"] = last.get("result")
+                memory_record["decision"] = last.get("result")
+                memory_record["reason"] = f"Duplicate of prior run {last.get('session_id', '?')}"
+                memory_record["deduped"] = True
+                strategy_memory.record_pipeline_run(memory_record)
+                return
+        except Exception:
+            pass  # dedupe is best-effort; never block the pipeline
+
+        if _cancelled():
+            return _bail("after debug")
 
         # Phase 4: Execute (with runtime retry + error context)
         stats_output, error_context = execute_backtest(name, session_log)
@@ -1434,9 +1555,10 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
         cprint("\n[PHASE 4.5] Walk-forward validation...", "cyan")
         wf_result = None
         try:
-            # Load the backtest data for walk-forward
+            # Load the backtest data for walk-forward — use the SAME fresh,
+            # asset-resolved file the backtest ran on (#5), not stale BTC CSV
             import pandas as pd
-            wf_df = pd.read_csv(DATA_PATH)
+            wf_df = pd.read_csv(data_path)
             wf_df.columns = wf_df.columns.str.strip().str.lower()
             mapping = {'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}
             wf_df = wf_df.rename(columns=mapping)
@@ -1452,7 +1574,7 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
             from src.strategy_runner import create_strategy_return_fn
             backtest_path = str(FINAL_BACKTEST_DIR / f"{name}_BTFinal.py")
             if os.path.exists(backtest_path):
-                strategy_return_fn = create_strategy_return_fn(backtest_path, str(DATA_PATH))
+                strategy_return_fn = create_strategy_return_fn(backtest_path, str(data_path))
                 # Use DataFrame-based walk-forward with 15-min data (96 bars/day)
                 wf_result = asyncio.run(walk_forward_validator.validate_with_dataframes(
                     strategy_return_fn, name, wf_df, bars_per_day=96
@@ -1513,8 +1635,11 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
 
         # Phase 6: Deploy or Archive
         if decision == "GO_LIVE":
-            # Human approval gate
-            approved = human_approval_gate(name, parsed_stats, reasoning or "", auto_mode=auto_mode)
+            # Human approval gate (#3) — approval_callback (web UI) takes
+            # priority over auto_mode so web runs are never auto-deployed
+            approved = human_approval_gate(name, parsed_stats, reasoning or "",
+                                           auto_mode=auto_mode,
+                                           approval_callback=approval_callback)
 
             if approved:
                 cprint("\n[RBI] Strategy APPROVED — deploying...", "green")
@@ -1530,6 +1655,7 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
                     cprint(f"[RBI] Registered '{name}' with alpha decay detector for monitoring", "cyan")
                 else:
                     memory_record["deployed"] = False
+                    memory_record["deploy_error"] = "Deployment AI failed to produce valid live code (#10)"
                     memory_record["reason"] = "Deployment failed"
             else:
                 cprint(f"\n[RBI] Strategy REJECTED by human gate", "yellow")
@@ -1542,9 +1668,10 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
             if reasoning:
                 cprint(f"[RBI] Reason: {reasoning[:200]}", "blue")
 
-        # Record to feedback loop
+        # Record to feedback loop — signal AND outcome (#4): previously only
+        # the prediction was recorded, so the loop never had pairs to learn from
         try:
-            feedback_loop.record_signal(
+            asyncio.run(feedback_loop.record_signal(
                 symbol=name,
                 signal="GO_LIVE" if decision == "GO_LIVE" else "REJECT",
                 confidence=parsed_stats.get("Win Rate [%]", 50) / 100,
@@ -1553,7 +1680,15 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
                          "sharpe": parsed_stats.get("Sharpe Ratio", 0)},
                 regime="backtest",
                 signal_id=signal_id,
-            )
+            ))
+            # Close the loop: the backtest result IS the outcome for this signal
+            asyncio.run(feedback_loop.record_outcome(
+                symbol=name,
+                pnl_usd=parsed_stats.get("Return [%]", 0),
+                pnl_pct=parsed_stats.get("Return [%]", 0),
+                holding_minutes=0.0,
+                signal_id=signal_id,
+            ))
         except Exception:
             pass
 

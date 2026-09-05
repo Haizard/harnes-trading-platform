@@ -299,6 +299,19 @@ def _init_tables():
                 signal_id TEXT
             )
         """)
+        # ── Alpha decay trade history (persistent — fixes in-memory-only decay) ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alpha_decay_trades (
+                id SERIAL PRIMARY KEY,
+                strategy_name TEXT NOT NULL,
+                pnl_pct REAL NOT NULL,
+                timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS live_active BOOLEAN DEFAULT FALSE")
+        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS code_hash TEXT")
+        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS status TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alpha_decay_trades_name ON alpha_decay_trades(strategy_name)")
         # Trades ↔ strategy linkage (live PnL attribution back to RBI pipeline)
         conn.execute("""
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy_name TEXT
@@ -855,6 +868,121 @@ def get_rbi_events(limit: int = 100, event_type: str = None, session_id: str = N
             return [dict(r) for r in rows]
     except Exception as e:
         print(f"[DB] get_rbi_events error: {e}")
+        return []
+
+
+def update_rbi_strategy_status(strategy_name: str, status: str = None,
+                               live_active: bool = None, code_hash: str = None) -> bool:
+    """Update runtime status fields on an rbi_strategies record
+    (awaiting_approval / approved / rejected / deployed / failed)."""
+    pool = get_pool()
+    if not pool:
+        return False
+    sets, params = [], []
+    if status is not None:
+        sets.append("status = %s"); params.append(status)
+    if live_active is not None:
+        sets.append("live_active = %s"); params.append(live_active)
+    if code_hash is not None:
+        sets.append("code_hash = %s"); params.append(code_hash)
+    if not sets:
+        return False
+    sets.append("updated_at = NOW()")
+    params.append(strategy_name)
+    try:
+        with pool.connection() as conn:
+            conn.execute(
+                f"UPDATE rbi_strategies SET {', '.join(sets)} WHERE strategy_name = %s",
+                params)
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] update_rbi_strategy_status error: {e}")
+        return False
+
+
+def get_rbi_strategy_by_hash(code_hash: str) -> Optional[dict]:
+    """Find a previously validated strategy with the same generated-code hash
+    (dedupe: reuse prior validation instead of re-running the pipeline)."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM rbi_strategies WHERE code_hash = %s "
+                "ORDER BY updated_at DESC LIMIT 1", (code_hash,)).fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        print(f"[DB] get_rbi_strategy_by_hash error: {e}")
+        return None
+
+
+# ── Alpha Decay Persistence ──────────────────────────────────
+
+def record_decay_trade(strategy_name: str, pnl_pct: float, timestamp: str = None) -> bool:
+    """Persist a strategy trade outcome for alpha-decay analysis (DB + JSONL fallback)."""
+    # JSONL always (survives DB outages)
+    try:
+        jsonl_path = Path("src/data/rbi/alpha_decay_trades.jsonl")
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"strategy_name": strategy_name, "pnl_pct": pnl_pct,
+                 "timestamp": timestamp or datetime.now(timezone.utc).isoformat()}
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+
+    pool = get_pool()
+    if not pool:
+        return False
+    try:
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO alpha_decay_trades (strategy_name, pnl_pct, timestamp) "
+                "VALUES (%s, %s, %s)",
+                (strategy_name, pnl_pct,
+                 timestamp or datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] record_decay_trade error: {e}")
+        return False
+
+
+def get_decay_trades(strategy_name: str = None, limit: int = 500) -> List[dict]:
+    """Load decay trade history — DB first, JSONL fallback."""
+    pool = get_pool()
+    if pool:
+        try:
+            with pool.connection() as conn:
+                if strategy_name:
+                    rows = conn.execute(
+                        "SELECT strategy_name, pnl_pct, timestamp FROM alpha_decay_trades "
+                        "WHERE strategy_name = %s ORDER BY timestamp ASC LIMIT %s",
+                        (strategy_name, limit)).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT strategy_name, pnl_pct, timestamp FROM alpha_decay_trades "
+                        "ORDER BY timestamp ASC LIMIT %s", (limit,)).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            print(f"[DB] get_decay_trades error: {e}")
+    # JSONL fallback
+    try:
+        jsonl_path = Path("src/data/rbi/alpha_decay_trades.jsonl")
+        if not jsonl_path.exists():
+            return []
+        out = []
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if strategy_name and entry.get("strategy_name") != strategy_name:
+                continue
+            out.append(entry)
+        return out[-limit:]
+    except Exception:
         return []
 
 
