@@ -42,6 +42,32 @@ class PineBacktestPipeline:
                 self._check_macd_bb(closes),
                 self._check_vol_breakout(closes, volumes),
             ]
+            # Gap 3: deployed RBI custom strategies also vote here — the
+            # pine validation step now reflects the strategies RBI deployed,
+            # not just the 4 hardcoded checks
+            try:
+                from src.strategy_bridge import CustomStrategyLoader, IndicatorEngine
+                custom_classes = list(CustomStrategyLoader().scan().values())[:5]
+                if custom_classes and len(candles) >= 35:
+                    df = pd.DataFrame([{
+                        "Open": float(c["open"]), "High": float(c["high"]),
+                        "Low": float(c["low"]), "Close": float(c["close"]),
+                        "Volume": float(c.get("volume") or 0),
+                    } for c in candles])
+                    indicators = IndicatorEngine().calculate(df)
+                    for cls in custom_classes:
+                        try:
+                            sig = cls.evaluate(indicators, None)
+                            if sig:
+                                signals.append({
+                                    "name": f"RBI:{cls.NAME}",
+                                    "signal": sig.direction,
+                                    "reason": "; ".join(sig.reasons[:2]) or f"strength={sig.strength:.2f}",
+                                })
+                        except Exception:
+                            continue
+            except Exception:
+                pass
             buy_count = sum(1 for s in signals if s["signal"] == "BUY")
             sell_count = sum(1 for s in signals if s["signal"] == "SELL")
             total = len(signals)

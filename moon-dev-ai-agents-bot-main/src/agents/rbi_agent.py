@@ -858,6 +858,12 @@ def resolve_data_path(strategy_text: str) -> str:
     if fresh:
         return fresh
 
+    # TradingView feed candles (gap 1): same data source family the live
+    # chart/pine systems use — better regime match than the stale BTC file
+    tv = _tv_data_for_asset(asset)
+    if tv:
+        return tv
+
     path = ASSET_DATA.get(asset, DATA_PATH)
     if os.path.exists(path):
         return path
@@ -866,6 +872,40 @@ def resolve_data_path(strategy_text: str) -> str:
         return downloaded
     cprint("[DATA] Falling back to BTC data", "yellow")
     return DATA_PATH
+
+
+def _tv_data_for_asset(asset: str, min_bars: int = 300) -> str:
+    """Fetch recent candles from the TradingView feed to a temp CSV (gap 1).
+
+    Same data source family as the live chart/pine systems, so backtest
+    validation happens on data with the same regime as live trading.
+    """
+    tv_map = {"BTC": "BTCUSDT", "SOL": "SOLUSDT", "ETH": "ETHUSDT"}
+    base = asset.split("/")[0].strip().upper() if "/" in asset else asset.upper()
+    tv_sym = tv_map.get(base)
+    if not tv_sym:
+        return None
+    try:
+        from src.tradingview_feed import get_tradingview_feed
+        ohlcv = get_tradingview_feed().get_ohlcv_candles(
+            symbol=tv_sym, interval="15m", limit=1000)
+        candles = ohlcv.get("candles") if isinstance(ohlcv, dict) else None
+        if not candles or len(candles) < min_bars:
+            return None
+        import tempfile
+        df = pd.DataFrame([{
+            "datetime": pd.to_datetime(c["time"], unit="s", utc=True),
+            "Open": float(c["open"]), "High": float(c["high"]),
+            "Low": float(c["low"]), "Close": float(c["close"]),
+            "Volume": float(c.get("volume") or 0),
+        } for c in candles])
+        path = os.path.join(tempfile.gettempdir(), f"rbi_{base}_tv.csv")
+        df.to_csv(path, index=False)
+        cprint(f"[DATA] Using {len(df)} TradingView bars for {base} -> {path}", "green")
+        return path
+    except Exception as e:
+        cprint(f"[DATA] TradingView data unavailable ({e})", "yellow")
+        return None
 
 
 def _fresh_data_from_db(asset: str, min_bars: int = 300) -> str:

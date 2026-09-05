@@ -1549,6 +1549,77 @@ class StrategyBridge:
         }
 
 
+# ── RBI Chart Markers (#4) ────────────────────────────────────
+
+def get_custom_strategy_chart_markers(candles: List[dict],
+                                      max_strategies: int = 8,
+                                      max_markers: int = 80) -> Dict:
+    """Replay deployed RBI custom strategies over chart candles (#4).
+
+    For each bar (from the 30th onward) recompute indicators on the
+    window-so-far and evaluate every hot-loaded custom strategy. Bars where
+    a strategy fires (direction != NEUTRAL, strength >= 0.3) become chart
+    markers so the strategy's pattern is VISIBLE on the TradingView chart.
+
+    Args:
+        candles: list of dicts {time, open, high, low, close, volume}
+    Returns:
+        {"markers": [...], "strategies": [names], "bars_evaluated": int}
+    """
+    out = {"markers": [], "strategies": [], "bars_evaluated": 0}
+    try:
+        custom = CustomStrategyLoader().scan()
+        if not custom or not candles or len(candles) < 35:
+            return out
+        classes = list(custom.values())[:max_strategies]
+        out["strategies"] = [c.NAME for c in classes]
+
+        df = pd.DataFrame([{
+            "Open": float(c["open"]), "High": float(c["high"]),
+            "Low": float(c["low"]), "Close": float(c["close"]),
+            "Volume": float(c.get("volume") or 0),
+        } for c in candles])
+
+        engine = IndicatorEngine()
+        markers = []
+        for i in range(30, len(df)):
+            out["bars_evaluated"] += 1
+            try:
+                indicators = engine.calculate(df.iloc[:i + 1])
+            except Exception:
+                continue
+            for cls in classes:
+                try:
+                    sig = cls.evaluate(indicators, None)
+                except Exception:
+                    continue
+                if not sig or sig.direction == "NEUTRAL" or sig.strength < 0.3:
+                    continue
+                markers.append({
+                    "time": candles[i]["time"],
+                    "position": "belowBar" if sig.direction == "BUY" else "aboveBar",
+                    "color": "#22d3ee" if sig.direction == "BUY" else "#f472b6",
+                    "shape": "arrowUp" if sig.direction == "BUY" else "arrowDown",
+                    "text": f"{cls.NAME} {sig.direction}",
+                    "strategy": cls.NAME,
+                    "direction": sig.direction,
+                    "strength": round(sig.strength, 2),
+                    "reasons": sig.reasons[:3],
+                })
+                if len(markers) >= max_markers:
+                    markers.sort(key=lambda m: m["time"])
+                    out["markers"] = markers
+                    return out
+        markers.sort(key=lambda m: m["time"])
+        out["markers"] = markers
+    except Exception as e:
+        try:
+            cprint(f"[RBI_CHART] marker replay error: {e}", "yellow")
+        except Exception:
+            pass
+    return out
+
+
 # ── Singleton ──────────────────────────────────────────────
 _bridge_instance = None
 

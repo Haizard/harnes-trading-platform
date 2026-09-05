@@ -821,6 +821,17 @@ async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 10
 
         result_dict = {"symbol": symbol, "interval": interval, "candles": candles,
                 "indicators": indicators, **smc.to_dict()}
+        # RBI deployed-strategy pattern markers (#4): replay hot-loaded
+        # custom strategies over the candles so their signals render on
+        # the TradingView chart
+        try:
+            from src.strategy_bridge import get_custom_strategy_chart_markers
+            rbi = get_custom_strategy_chart_markers(candles)
+            result_dict["rbi_markers"] = rbi.get("markers", [])
+            result_dict["rbi_strategies"] = rbi.get("strategies", [])
+        except Exception:
+            result_dict["rbi_markers"] = []
+            result_dict["rbi_strategies"] = []
         # Run custom chart bots
         try:
             from src.custom_chart_bots import run_custom_bots

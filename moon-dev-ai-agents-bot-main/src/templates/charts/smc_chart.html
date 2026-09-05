@@ -167,7 +167,32 @@ function renderChart(data) {
   if (smcVisible) drawSMCOverlays();
   renderInfoBar(data);
   renderSMCPanel(data);
+  renderRBILegend(data);
   chart.timeScale().fitContent();
+}
+
+function renderRBILegend(data) {
+  let el = document.getElementById("rbi-legend");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "rbi-legend";
+    el.style.cssText = "position:absolute;top:8px;right:8px;z-index:5;background:rgba(10,10,15,0.85);" +
+      "border:1px solid #22d3ee;border-radius:6px;padding:6px 10px;font-size:11px;color:#e0e0e2;max-width:260px;";
+    const container = document.getElementById("chart-container");
+    if (container) { container.style.position = "relative"; container.appendChild(el); }
+  }
+  const strats = data.rbi_strategies || [];
+  const mkts = data.rbi_markers || [];
+  if (!strats.length) {
+    el.innerHTML = "<span style='color:#6b7280'>No RBI strategies deployed</span>";
+    return;
+  }
+  const buys = mkts.filter(m => m.direction === "BUY").length;
+  const sells = mkts.length - buys;
+  el.innerHTML = "<div style='color:#22d3ee;font-weight:bold;margin-bottom:2px'>🤖 RBI Live Strategies (" + strats.length + ")</div>" +
+    strats.map(s => "<div>• " + s + "</div>").join("") +
+    "<div style='margin-top:4px;color:#4ade80'>▲ " + buys + " BUY</div>" +
+    "<div style='color:#f472b6'>▼ " + sells + " SELL</div>";
 }
 
 let obLines = [], fvgAreas = [], liqLines = [];
@@ -211,8 +236,10 @@ function drawSMCOverlays() {
     const pl = candleSeries.createPriceLine({ price: cl.price, color: cl.color, lineWidth: 1, lineStyle: cl.lineStyle || 0, axisLabelVisible: true, title: cl.title || "" });
     liqLines.push(pl);
   });
-  if (smcData.markers && smcData.markers.length > 0) {
-    candleSeries.setMarkers(smcData.markers.map(m => ({
+  if ((smcData.markers && smcData.markers.length > 0) || (smcData.rbi_markers && smcData.rbi_markers.length > 0)) {
+    const all = [...(smcData.markers || []), ...(smcData.rbi_markers || [])]
+      .sort((a, b) => a.time - b.time);
+    candleSeries.setMarkers(all.map(m => ({
       time: m.time, position: m.position, color: m.color, shape: m.shape, text: m.text
     })));
   }
