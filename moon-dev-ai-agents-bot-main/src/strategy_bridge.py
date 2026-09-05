@@ -20,7 +20,7 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from termcolor import cprint
@@ -1161,8 +1161,6 @@ def adapt_custom_strategy(name: str, cls: type) -> type:
         def evaluate(indicators: Dict, candidate_metrics: Dict = None):
             try:
                 instance = cls()
-                # BaseStrategy strategies consume self.data for market data —
-                # provide the live indicator snapshot from the bridge pipeline
                 instance.data = indicators or {}
                 instance.symbol = (candidate_metrics or {}).get("symbol", "")
                 output = instance.generate_signals()
@@ -1172,13 +1170,20 @@ def adapt_custom_strategy(name: str, cls: type) -> type:
                 if direction not in ("BUY", "SELL", "NEUTRAL"):
                     direction = "NEUTRAL"
                 strength = float(output.get("signal", 0) or 0)
+                # Preserve the strategy's own reasons/pattern metadata so the
+                # chart marker can render WHAT the pattern saw, not just BUY/SELL
+                raw_reasons = output.get("reasons") or output.get("reason")
+                reasons = list(raw_reasons) if isinstance(raw_reasons, (list, tuple)) else (
+                    [str(raw_reasons)] if raw_reasons else [f"RBI custom strategy {name}"])
+                metadata = output.get("metadata", {}) or {}
+                pattern = output.get("pattern", metadata.get("pattern", ""))
                 return StrategySignal(
                     strategy_name=name,
                     direction=direction,
                     strength=max(0.0, min(strength, 1.0)),
                     confidence=max(0.0, min(strength, 1.0)),
-                    reasons=[f"RBI custom strategy {name}"],
-                    indicators=output.get("metadata", {}) or {},
+                    reasons=reasons,
+                    indicators={**metadata, "pattern": pattern} if pattern else metadata,
                 )
             except Exception as e:
                 cprint(f"[CUSTOM_LOADER] {name}.evaluate error: {e}", "yellow")
@@ -1289,6 +1294,11 @@ class StrategyBridge:
         "SwingLevels": 1.0,         # Swing breakout (from ValidatedBreakthrough)
         "DemandZone": 1.2,          # Demand/supply zones (from StructuralDemandReversal)
     }
+
+    # Weight for RBI-deployed custom strategies (not in STRATEGY_WEIGHTS).
+    # Tuned lower initially since they haven't been validated as long as the
+    # backtest-package strategies; raise as they prove themselves live.
+    RBI_STRATEGY_WEIGHT = 0.9
 
     def __init__(self, event_bus=None):
         self.fetcher = OHLCVFetcher()
@@ -1485,7 +1495,11 @@ class StrategyBridge:
         total_weight = 0.0
 
         for signal in result.signals:
-            weight = self.STRATEGY_WEIGHTS.get(signal.strategy_name, 1.0)
+            # Use RBI weight for deployed custom strategies; STRATEGY_WEIGHTS for the rest
+            if signal.strategy_name not in self.STRATEGY_WEIGHTS:
+                weight = self.RBI_STRATEGY_WEIGHT
+            else:
+                weight = self.STRATEGY_WEIGHTS.get(signal.strategy_name, 1.0)
 
             # Skip strategies disabled by the alpha-decay detector (fix #2):
             # decayed strategies must not vote on live trades
@@ -1556,15 +1570,16 @@ def get_custom_strategy_chart_markers(candles: List[dict],
                                       max_markers: int = 80) -> Dict:
     """Replay deployed RBI custom strategies over chart candles (#4).
 
-    For each bar (from the 30th onward) recompute indicators on the
-    window-so-far and evaluate every hot-loaded custom strategy. Bars where
-    a strategy fires (direction != NEUTRAL, strength >= 0.3) become chart
-    markers so the strategy's pattern is VISIBLE on the TradingView chart.
+    Enhancements:
+    #1 — marker tooltip includes strategy threshold configuration
+    #2 — markers where the signal resulted in an actual trade are tagged
+         traded=true and rendered with a distinct shape
 
-    Args:
-        candles: list of dicts {time, open, high, low, close, volume}
     Returns:
         {"markers": [...], "strategies": [names], "bars_evaluated": int}
+        Each marker: {time, position, color, shape, text, strategy,
+                      direction, strength, reasons, pattern, indicator_summary,
+                      thresholds, traded}
     """
     out = {"markers": [], "strategies": [], "bars_evaluated": 0}
     try:
@@ -1573,6 +1588,10 @@ def get_custom_strategy_chart_markers(candles: List[dict],
             return out
         classes = list(custom.values())[:max_strategies]
         out["strategies"] = [c.NAME for c in classes]
+
+        # Fetch live trades for these strategies so we can tag traded markers (#2)
+        strategy_names = set(out["strategies"])
+        traded_times = _fetch_traded_times(strategy_names)
 
         df = pd.DataFrame([{
             "Open": float(c["open"]), "High": float(c["high"]),
@@ -1595,16 +1614,34 @@ def get_custom_strategy_chart_markers(candles: List[dict],
                     continue
                 if not sig or sig.direction == "NEUTRAL" or sig.strength < 0.3:
                     continue
+                # Build a short indicator summary for the chart tooltip
+                ind_summary = _format_indicator_summary(sig.indicators)
+                # #1: Include threshold configuration if the strategy exposes it
+                thresholds = _extract_thresholds(sig.indicators)
+                if thresholds:
+                    ind_summary = f"{ind_summary} | {thresholds}" if ind_summary else thresholds
+                pattern = (sig.indicators or {}).get("pattern", "")
+                text = f"{cls.NAME} {sig.direction} · {ind_summary}"
+                candle_time = candles[i]["time"]
+                # #2: Tag markers that resulted in an actual trade
+                traded = candle_time in traded_times.get(cls.NAME, set())
                 markers.append({
-                    "time": candles[i]["time"],
+                    "time": candle_time,
                     "position": "belowBar" if sig.direction == "BUY" else "aboveBar",
-                    "color": "#22d3ee" if sig.direction == "BUY" else "#f472b6",
-                    "shape": "arrowUp" if sig.direction == "BUY" else "arrowDown",
-                    "text": f"{cls.NAME} {sig.direction}",
+                    "color": _pattern_color(sig.direction, pattern),
+                    "shape": _pattern_shape(sig.direction, pattern, traded),
+                    "text": text,
                     "strategy": cls.NAME,
                     "direction": sig.direction,
                     "strength": round(sig.strength, 2),
                     "reasons": sig.reasons[:3],
+                    "pattern": pattern,
+                    "indicator_summary": ind_summary,
+                    "thresholds": thresholds,
+                    "traded": traded,
+                    "indicators": {k: round(v, 4) if isinstance(v, float) else v
+                                   for k, v in (sig.indicators or {}).items()
+                                   if k != "pattern"},
                 })
                 if len(markers) >= max_markers:
                     markers.sort(key=lambda m: m["time"])
@@ -1618,6 +1655,98 @@ def get_custom_strategy_chart_markers(candles: List[dict],
         except Exception:
             pass
     return out
+
+
+def _fetch_traded_times(strategy_names: Set[str]) -> Dict[str, Set[str]]:
+    """Fetch timestamps of actual trades for each strategy (#2).
+
+    Returns {strategy_name: set_of_candle_times} so chart markers can
+    distinguish signals that resulted in trades from those that were
+    filtered/suppressed.
+    """
+    if not strategy_names:
+        return {}
+    try:
+        from src.db_storage import get_trades_by_strategies
+        trades = get_trades_by_strategies(list(strategy_names), limit=500)
+        result: Dict[str, Set[str]] = {n: set() for n in strategy_names}
+        for t in trades:
+            strat = t.get("strategy_name", "")
+            ts = t.get("entry_time") or t.get("created_at")
+            if strat in result and ts:
+                result[strat].add(str(ts))
+        return result
+    except Exception:
+        return {n: set() for n in strategy_names}
+
+
+def _extract_thresholds(indicators: Dict) -> str:
+    """Extract strategy threshold configuration from indicator metadata (#1).
+
+    Strategies that expose their thresholds via metadata get them rendered
+    in the chart tooltip so traders can see WHY the strategy fired.
+    """
+    if not indicators:
+        return ""
+    parts = []
+    for key in ("rsi_oversold", "rsi_overbought", "stoch_oversold", "stoch_overbought",
+                "bb_squeeze_width", "atr_min_pct", "volume_min_ratio"):
+        v = indicators.get(key)
+        if v is not None:
+            parts.append(f"{key}={v:.2f}" if isinstance(v, float) else f"{key}={v}")
+    return " ".join(parts[:4])
+    """Short human-readable summary of the key indicators driving the signal."""
+    if not indicators:
+        return ""
+    parts = []
+    for key in ("rsi", "stoch_k", "macd_hist", "bb_pct", "atr_pct",
+                "volume_ratio", "momentum_5"):
+        v = indicators.get(key)
+        if v is None:
+            continue
+        if isinstance(v, float):
+            parts.append(f"{key}={v:.2f}")
+        else:
+            parts.append(f"{key}={v}")
+    return " ".join(parts[:4])
+
+
+def _pattern_color(direction: str, pattern: str) -> str:
+    """Color by direction + pattern type for visual distinction."""
+    if direction == "BUY":
+        if "demand" in pattern.lower() or "support" in pattern.lower():
+            return "#10b981"   # emerald for demand zone
+        if "breakout" in pattern.lower():
+            return "#22d3ee"   # cyan for breakout
+        if "momentum" in pattern.lower():
+            return "#3b82f6"   # blue for momentum
+        return "#22c55e"       # green default BUY
+    else:
+        if "supply" in pattern.lower() or "resistance" in pattern.lower():
+            return "#f97316"   # orange for supply zone
+        if "reversal" in pattern.lower():
+            return "#f472b6"   # pink for reversal
+        if "distribution" in pattern.lower():
+            return "#ef4444"   # red for distribution
+        return "#dc2626"       # red default SELL
+
+
+def _pattern_shape(direction: str, pattern: str, traded: bool = False) -> str:
+    """Shape encodes pattern type + whether the signal was actually traded (#2).
+
+    Traded signals get filled shapes (arrowUp/arrowDown), filtered/suppressed
+    signals get hollow shapes (circle/triangle) — so traders can instantly
+    see which signals resulted in trades at a glance.
+    """
+    p = pattern.lower()
+    if "demand" in p or "supply" in p or "zone" in p:
+        return "circle" if not traded else ("arrowUp" if direction == "BUY" else "arrowDown")
+    if "breakout" in p or "bos" in p:
+        return "arrowUp" if direction == "BUY" else "arrowDown"
+    if "crossover" in p:
+        return "triangleUp" if direction == "BUY" else "triangleDown"
+    # Default: directional arrows (traded = filled, filtered = hollow circle)
+    return "arrowUp" if direction == "BUY" else "arrowDown"
 
 
 # ── Singleton ──────────────────────────────────────────────

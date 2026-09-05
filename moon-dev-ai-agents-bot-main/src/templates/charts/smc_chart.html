@@ -168,16 +168,20 @@ function renderChart(data) {
   renderInfoBar(data);
   renderSMCPanel(data);
   renderRBILegend(data);
+  renderRBIStrategyPanel(data);
+  subscribeRBIClickHandler(data);
   chart.timeScale().fitContent();
 }
+
+let rbiHighlightedStrategy = null;
 
 function renderRBILegend(data) {
   let el = document.getElementById("rbi-legend");
   if (!el) {
     el = document.createElement("div");
     el.id = "rbi-legend";
-    el.style.cssText = "position:absolute;top:8px;right:8px;z-index:5;background:rgba(10,10,15,0.85);" +
-      "border:1px solid #22d3ee;border-radius:6px;padding:6px 10px;font-size:11px;color:#e0e0e2;max-width:260px;";
+    el.style.cssText = "position:absolute;top:8px;right:8px;z-index:5;background:rgba(10,10,15,0.92);" +
+      "border:1px solid #22d3ee;border-radius:6px;padding:6px 10px;font-size:11px;color:#e0e0e2;max-width:280px;";
     const container = document.getElementById("chart-container");
     if (container) { container.style.position = "relative"; container.appendChild(el); }
   }
@@ -187,12 +191,108 @@ function renderRBILegend(data) {
     el.innerHTML = "<span style='color:#6b7280'>No RBI strategies deployed</span>";
     return;
   }
+  const stratStats = {};
+  strats.forEach(s => { stratStats[s] = { buys: 0, sells: 0, traded: 0, patterns: new Set() }; });
+  mkts.forEach(m => {
+    const st = stratStats[m.strategy];
+    if (!st) return;
+    if (m.direction === "BUY") st.buys++; else st.sells++;
+    if (m.traded) st.traded++;
+    if (m.pattern) st.patterns.add(m.pattern);
+  });
   const buys = mkts.filter(m => m.direction === "BUY").length;
   const sells = mkts.length - buys;
-  el.innerHTML = "<div style='color:#22d3ee;font-weight:bold;margin-bottom:2px'>🤖 RBI Live Strategies (" + strats.length + ")</div>" +
-    strats.map(s => "<div>• " + s + "</div>").join("") +
-    "<div style='margin-top:4px;color:#4ade80'>▲ " + buys + " BUY</div>" +
-    "<div style='color:#f472b6'>▼ " + sells + " SELL</div>";
+  const tradedCount = mkts.filter(m => m.traded).length;
+  let html = "<div style='color:#22d3ee;font-weight:bold;margin-bottom:4px'>🤖 RBI Live Strategies (" + strats.length + ")</div>";
+  html += "<div style='display:flex;gap:8px;margin-bottom:4px;font-size:10px'>" +
+    "<span style='color:#4ade80'>▲ " + buys + " BUY</span>" +
+    "<span style='color:#f472b6'>▼ " + sells + " SELL</span>" +
+    "<span style='color:#fbbf24'>● " + tradedCount + " traded</span></div>";
+  html += strats.map(s => {
+    const st = stratStats[s];
+    const active = (rbiHighlightedStrategy === s) ? "background:rgba(34,211,238,0.2);" : "";
+    const patStr = st.patterns.size > 0 ? " <span style='color:#6b7280'>[" + [...st.patterns].slice(0,2).join(", ") + "]</span>" : "";
+    return "<div class='rbi-strat-item' data-strat='" + s + "' style='cursor:pointer;padding:2px 4px;border-radius:3px;margin:1px 0;" + active + "'>" +
+      "• " + s + patStr + " <span style='color:#6b7280'>(" + st.buys + "↑ " + st.sells + "↓)</span>" + "</div>";
+  }).join("");
+  el.innerHTML = html;
+  el.querySelectorAll(".rbi-strat-item").forEach(item => {
+    item.addEventListener("click", () => {
+      const strat = item.getAttribute("data-strat");
+      highlightRBIStrategy(strat, data);
+    });
+  });
+}
+
+function highlightRBIStrategy(strategyName, data) {
+  rbiHighlightedStrategy = (rbiHighlightedStrategy === strategyName) ? null : strategyName;
+  renderRBILegend(data);
+  const mkts = data.rbi_markers || [];
+  if (!candleSeries) return;
+  const all = [...(data.markers || []), ...mkts].sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(all.map(m => {
+    const isRBI = mkts.includes(m);
+    const isHighlighted = isRBI && rbiHighlightedStrategy && m.strategy === rbiHighlightedStrategy;
+    const isDimmed = isRBI && rbiHighlightedStrategy && m.strategy !== rbiHighlightedStrategy;
+    return {
+      time: m.time, position: m.position,
+      color: isDimmed ? "rgba(100,100,100,0.3)" : m.color,
+      shape: m.shape,
+      text: isDimmed ? "" : m.text,
+    };
+  }));
+  const smcPanel = document.getElementById("smc-content");
+  const stratDetail = smcPanel.querySelector("[data-strat-detail='" + strategyName + "']");
+  if (stratDetail) stratDetail.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function subscribeRBIClickHandler(data) {
+  if (!chart) return;
+  chart.subscribeClick((param) => {
+    if (!param.time || !data.rbi_markers) return;
+    const m = data.rbi_markers.find(mk => mk.time === param.time);
+    if (m && m.strategy) {
+      highlightRBIStrategy(m.strategy, data);
+      renderRBIStrategyPanel(data, m.strategy);
+    }
+  });
+}
+
+function renderRBIStrategyPanel(data, highlightStrat = null) {
+  const el = document.getElementById("smc-content");
+  if (!el) return;
+  let stratHtml = "<div class='smc-section'><h4>🤖 RBI Deployed Strategies</h4>";
+  const mkts = data.rbi_markers || [];
+  const strats = data.rbi_strategies || [];
+  strats.forEach(s => {
+    const sMkts = mkts.filter(m => m.strategy === s);
+    const buys = sMkts.filter(m => m.direction === "BUY");
+    const sells = sMkts.filter(m => m.direction === "SELL");
+    const traded = sMkts.filter(m => m.traded);
+    const patterns = [...new Set(sMkts.map(m => m.pattern).filter(Boolean))];
+    const thresholds = [...new Set(sMkts.map(m => m.thresholds).filter(Boolean))];
+    const isHighlighted = (highlightStrat === s);
+    const bg = isHighlighted ? "background:rgba(34,211,238,0.1);" : "";
+    stratHtml += "<div class='smc-item structure' data-strat-detail='" + s + "' style='cursor:pointer;" + bg + "'>" +
+      "<strong>" + s + "</strong> <span style='color:#6b7280'>(" + sMkts.length + " signals)</span>" +
+      "<div style='color:#4ade80'>▲ " + buys.length + " BUY (" + traded.filter(m=>m.direction==="BUY").length + " traded)</div>" +
+      "<div style='color:#f472b6'>▼ " + sells.length + " SELL (" + traded.filter(m=>m.direction==="SELL").length + " traded)</div>";
+    if (patterns.length) stratHtml += "<div style='color:#fbbf24'>Patterns: " + patterns.join(", ") + "</div>";
+    if (thresholds.length) stratHtml += "<div style='color:#a78bfa'>Thresholds: " + thresholds.join(" | ") + "</div>";
+    const recentReasons = [...new Set(sMkts.slice(-5).flatMap(m => m.reasons || []))].slice(0, 3);
+    if (recentReasons.length) stratHtml += "<div style='color:#9ca3af;font-size:10px'>" + recentReasons.join(" · ") + "</div>";
+    stratHtml += "</div>";
+  });
+  stratHtml += "</div>";
+  const existing = el.innerHTML;
+  const existingWithoutRBI = existing.replace(/<div class="smc-section"><h4>🤖 RBI.*$/s, "");
+  el.innerHTML = stratHtml + existingWithoutRBI;
+  el.querySelectorAll("[data-strat-detail]").forEach(item => {
+    item.addEventListener("click", () => {
+      const strat = item.getAttribute("data-strat-detail");
+      highlightRBIStrategy(strat, data);
+    });
+  });
 }
 
 let obLines = [], fvgAreas = [], liqLines = [];

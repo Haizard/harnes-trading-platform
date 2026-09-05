@@ -526,6 +526,29 @@ def get_trade_stats() -> dict:
         return {}
 
 
+def get_trades_by_strategies(strategy_names: List[str], limit: int = 500) -> List[dict]:
+    """Query trades attributed to specific RBI strategies (for chart marker tagging #2)."""
+    if not strategy_names:
+        return []
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            placeholders = ", ".join(["%s"] * len(strategy_names))
+            rows = conn.execute(
+                f"SELECT id, token_address, symbol, strategy_name, entry_time, exit_time, "
+                f"pnl_usd, pnl_pct, status, created_at FROM trades "
+                f"WHERE strategy_name IN ({placeholders}) "
+                f"ORDER BY created_at DESC LIMIT %s",
+                strategy_names + [limit]
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_trades_by_strategies error: {e}")
+        return []
+
+
 # ── Portfolio Operations ─────────────────────────────────────
 
 def save_portfolio(initial_capital: float, current_capital: float, total_pnl: float,
