@@ -642,6 +642,22 @@ def create_integrated_bus(session_log=None, risk_guard=None,
     return bus
 
 
+# ── Shared Bus Singleton (DSH) ───────────────────────────────
+_shared_bus = None
+
+
+def get_shared_bus() -> "EventBus":
+    """Process-wide EventBus singleton (DSH pattern).
+
+    Modules that aren't handed a bus explicitly (e.g., RBI web's RunManager)
+    use this so all DSH events flow through ONE bus instance.
+    """
+    global _shared_bus
+    if _shared_bus is None:
+        _shared_bus = EventBus()
+    return _shared_bus
+
+
 # ── CLI Demo ──────────────────────────────────────────────────
 
 async def main():

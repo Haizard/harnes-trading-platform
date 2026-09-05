@@ -167,12 +167,18 @@ class RunManager:
         except Exception:
             pass
 
-        # Emit to EventBus
-        if self.event_bus:
+        # Emit to EventBus — lazily attach the shared DSH bus if none was
+        # injected, so rbi/* events actually flow through the bus
+        if not self.event_bus:
             try:
-                _fire_and_forget(self.event_bus.emit(event_name, payload))
+                from src.event_bus import get_shared_bus
+                self.event_bus = get_shared_bus()
             except Exception:
-                pass
+                return
+        try:
+            _fire_and_forget(self.event_bus.emit(event_name, payload))
+        except Exception:
+            pass
 
     def create_run(self, idea_text: str, auto_mode: bool = False) -> str:
         """Create a new pipeline run. Returns run_id."""
