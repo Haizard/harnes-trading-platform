@@ -272,6 +272,38 @@ class PaperTrader:
         except Exception as e:
             print("[PAPER] Restore error: " + str(e))
 
+    def reset_capital(self, new_capital: float = None, reason: str = "manual") -> dict:
+        """Reset capital back to the initial amount (or a given amount).
+
+        Used by the auto-reset mechanism after a circuit-breaker trip.
+        Any open positions are force-closed with status 'capital_reset'
+        so the portfolio returns to a clean, fully-cash state.
+
+        Returns {"capital_before", "capital_after", "positions_cleared"}.
+        """
+        reset_to = new_capital if new_capital is not None else self.initial_capital
+        cleared = 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for addr, pos in list(self.open_positions.items()):
+            try:
+                pos.status = "capital_reset"
+                pos.exit_time = now_iso
+                self.closed_trades.append(pos)
+            except Exception:
+                pass
+            del self.open_positions[addr]
+            cleared += 1
+        capital_before = self.capital
+        self.capital = reset_to
+        self._save_portfolio()
+        print("[PAPER] Capital reset $" + str(round(capital_before, 2)) + " -> $" +
+              str(round(reset_to, 2)) + " (" + reason + "); cleared " + str(cleared) + " open position(s)")
+        return {
+            "capital_before": round(capital_before, 4),
+            "capital_after": round(reset_to, 4),
+            "positions_cleared": cleared,
+        }
+
     def get_stats(self):
         total = len(self.closed_trades)
         wins = sum(1 for t in self.closed_trades if t.pnl_usd > 0)

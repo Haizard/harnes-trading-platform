@@ -219,6 +219,33 @@ def _load_wallets_from_jsonl():
     return events[:50]
 
 
+# ── Capital Reset Stats Helper ─────────────────────────────
+
+def _load_capital_resets() -> dict:
+    """Load capital auto-reset stats persisted by PortfolioRiskManager."""
+    path = Path("src/data/risk/capital_resets.json")
+    if path.exists():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            history = state.get("history", [])
+            return {
+                "reset_count": state.get("reset_count", 0),
+                "last_reset": state.get("last_reset"),
+                "auto_reset_enabled": state.get("auto_reset_enabled", True),
+                "cooldown_hours": state.get("cooldown_hours", 24),
+                "recent": history[-5:],
+            }
+        except Exception:
+            pass
+    return {
+        "reset_count": 0,
+        "last_reset": None,
+        "auto_reset_enabled": True,
+        "cooldown_hours": 24,
+        "recent": [],
+    }
+
+
 # ── API Endpoints ──────────────────────────────────────────
 
 @app.get("/api/portfolio")
@@ -271,6 +298,7 @@ async def get_portfolio():
                 "open_count": len(open_trades),
             },
             "db_used": db_used,
+            "capital_resets": _load_capital_resets(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
@@ -432,6 +460,7 @@ async def get_rbi():
         return {
             "risk_events": risk_events[-30:],
             "circuit_breaker": circuit_breaker,
+            "capital_resets": _load_capital_resets(),
             "risk_rejections": [],
             "strategy_signals": strategy_signals[-30:],
             "db_used": db_used,
@@ -1189,6 +1218,7 @@ DASHBOARD_HTML = """
                 <div class="card"><h3>P&L</h3><div class="stat-value">${formatUSD(p.total_pnl)}</div><div class="stat-change ${(p.total_pnl||0)>=0?'positive':'negative'}">${(p.total_pnl||0)>=0?'+':''}${formatPct(((p.total_pnl||0)/(p.initial_capital||100))*100)}</div></div>
                 <div class="card"><h3>Win Rate</h3><div class="stat-value">${s.win_rate || 0}%</div><div class="stat-label">${s.wins || 0}W / ${s.losses || 0}L</div></div>
                 <div class="card"><h3>Open Positions</h3><div class="stat-value">${s.open_count || 0}</div><div class="stat-label">Active trades</div></div>
+                <div class="card"><h3>Capital Resets</h3><div class="stat-value">${(data.capital_resets||{}).reset_count || 0}</div><div class="stat-label">${(data.capital_resets||{}).last_reset ? 'Last: ' + ((data.capital_resets.last_reset||'').slice(0,16)).replace('T',' ') : 'Never reset'}</div></div>
             `;
             
             const positions = (data.open_positions || []).map(t => 
@@ -1245,10 +1275,20 @@ DASHBOARD_HTML = """
             const data = await fetchAPI('/api/rbi');
             if (data.error) return;
             
+            const resets = data.capital_resets || {};
+            const resetBadge = `<div style="margin-bottom:10px">` +
+                `<span class="badge badge-blue">Capital resets: ${resets.reset_count || 0}</span> ` +
+                (resets.last_reset ? `<span class="badge badge-blue">Last: ${(resets.last_reset||'').slice(0,19).replace('T',' ')}</span> ` : `<span class="badge badge-blue">Never reset</span> `) +
+                `<span class="badge ${resets.auto_reset_enabled === false ? 'badge-red' : 'badge-green'}">Auto-reset: ${resets.auto_reset_enabled === false ? 'OFF' : 'ON'}${resets.cooldown_hours ? ' (' + resets.cooldown_hours + 'h cooldown)' : ''}</span>` +
+                `</div>`;
+            const resetRows = (resets.recent || []).slice().reverse().map(r =>
+                `<tr><td>#${r.reset_number}</td><td>${formatUSD(r.capital_before)} → ${formatUSD(r.capital_after)}</td><td>${r.positions_cleared || 0}</td><td>${(r.timestamp||'').slice(0,19).replace('T',' ')}</td></tr>`
+            ).join('');
+            const resetsTable = resetRows ? `<h3>Recent Capital Resets</h3><table><tr><th>#</th><th>Capital</th><th>Positions Cleared</th><th>Time</th></tr>${resetRows}</table><br/>` : '';
             const events = (data.risk_events || []).slice(0, 20).map(e => 
                 `<tr><td>${e.event_type}</td><td>${e.created_at?.slice(0,19)}</td></tr>`
             ).join('');
-            document.getElementById('risk-events').innerHTML = `<table><tr><th>Event</th><th>Time</th></tr>${events || '<tr><td colspan="2">No risk events</td></tr>'}</table>`;
+            document.getElementById('risk-events').innerHTML = resetBadge + resetsTable + `<table><tr><th>Event</th><th>Time</th></tr>${events || '<tr><td colspan="2">No risk events</td></tr>'}</table>`;
             
             const signals = (data.strategy_signals || []).slice(0, 20).map(s => 
                 `<tr><td>${s.event_type}</td><td>${s.created_at?.slice(0,19)}</td></tr>`

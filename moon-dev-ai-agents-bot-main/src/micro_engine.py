@@ -984,6 +984,12 @@ class MicroEngine:
                                     self.portfolio_risk.activate_circuit_breaker(risk_event.message)
                             else:
                                 self.portfolio_risk.activate_circuit_breaker(risk_event.message)
+                            # Auto-reset mechanism: if the breaker just tripped on
+                            # max loss and auto-reset is enabled, restore capital
+                            # to the initial amount, count the reset, and resume.
+                            self.portfolio_risk.maybe_auto_reset(
+                                getattr(self.paper, "reset_capital", None)
+                            )
             except Exception as e:
                 print("[RISK] Exit risk check error: " + str(e))
 

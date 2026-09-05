@@ -13,6 +13,7 @@ Monitors portfolio-level risk:
 import os
 import json
 import time
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
@@ -82,6 +83,15 @@ class PortfolioRiskManager:
         # Track daily P&L
         self._daily_pnl = 0.0
         self._daily_reset_date = datetime.now(timezone.utc).date()
+
+        # Capital auto-reset mechanism
+        # When a max-loss circuit breaker trips, capital can be automatically
+        # restored to the initial amount so the engine keeps trading. Every
+        # reset is counted and persisted so the dashboard can display it.
+        self.auto_reset_enabled = os.environ.get("AUTO_RESET_CAPITAL", "true").lower() == "true"
+        self.auto_reset_cooldown_hours = float(os.environ.get("AUTO_RESET_COOLDOWN_HOURS", "24"))
+        self._reset_state_path = Path("src/data/risk/capital_resets.json")
+        self._reset_state = self._load_reset_state()
         
         cprint(
             f"[RISK] Portfolio Risk Manager initialized — "
@@ -118,6 +128,10 @@ class PortfolioRiskManager:
             "circuit_breaker_active": self.circuit_breaker_active,
             "circuit_breaker_reason": self.circuit_breaker_reason,
             "override_active": self.override_active,
+            "reset_count": self._reset_state.get("reset_count", 0),
+            "last_reset": self._reset_state.get("last_reset"),
+            "auto_reset_enabled": self.auto_reset_enabled,
+            "auto_reset_cooldown_hours": self.auto_reset_cooldown_hours,
             "max_loss_usd": self.max_loss_usd,
             "max_gain_usd": self.max_gain_usd,
             "min_balance_usd": self.min_balance_usd,
@@ -221,6 +235,137 @@ class PortfolioRiskManager:
         self.circuit_breaker_reason = ""
         self.circuit_breaker_since = None
         cprint("[RISK] Circuit breaker DEACTIVATED", "green")
+
+    # ── Capital Auto-Reset ─────────────────────────────────────
+
+    def _load_reset_state(self) -> dict:
+        """Load persisted reset counter/history (survives restarts)."""
+        try:
+            if self._reset_state_path.exists():
+                data = json.loads(self._reset_state_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    data.setdefault("reset_count", 0)
+                    data.setdefault("history", [])
+                    data.setdefault("last_reset", None)
+                    return data
+        except Exception as e:
+            cprint(f"[RISK] Failed to load reset state: {e}", "red")
+        return {"reset_count": 0, "history": [], "last_reset": None}
+
+    def _save_reset_state(self):
+        """Persist reset counter/history to disk (and best-effort to DB)."""
+        self._reset_state["auto_reset_enabled"] = self.auto_reset_enabled
+        self._reset_state["cooldown_hours"] = self.auto_reset_cooldown_hours
+        try:
+            self._reset_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._reset_state_path.write_text(
+                json.dumps(self._reset_state, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            cprint(f"[RISK] Failed to persist reset state: {e}", "red")
+        try:
+            from src.db_storage import log_event
+            log_event("risk/capital_reset_state", self.get_reset_stats())
+        except Exception:
+            pass
+
+    def get_reset_stats(self) -> dict:
+        """Reset stats for the dashboard / API consumers."""
+        history = self._reset_state.get("history", [])
+        return {
+            "reset_count": self._reset_state.get("reset_count", 0),
+            "last_reset": self._reset_state.get("last_reset"),
+            "auto_reset_enabled": self.auto_reset_enabled,
+            "cooldown_hours": self.auto_reset_cooldown_hours,
+            "recent": history[-5:],
+        }
+
+    def maybe_auto_reset(self, reset_capital_fn=None) -> bool:
+        """
+        Auto-reset capital after a max-loss circuit breaker trip.
+
+        Called by the engine right after the breaker latches. If auto-reset
+        is enabled and the cooldown has elapsed, capital is restored via
+        `reset_capital_fn` (PaperTrader.reset_capital), the reset counter is
+        incremented and persisted, the breaker is cleared, and a
+        'capital_reset' risk event is emitted.
+
+        Returns True if a reset was performed.
+        """
+        if not self.auto_reset_enabled:
+            return False
+
+        # Cooldown guard — prevents reset loops if losses recur immediately
+        last = self._reset_state.get("last_reset")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+                if hours_since < self.auto_reset_cooldown_hours:
+                    cprint(
+                        f"[RISK] Auto-reset cooldown active "
+                        f"({hours_since:.1f}h < {self.auto_reset_cooldown_hours}h) — capital NOT reset",
+                        "yellow",
+                    )
+                    return False
+            except Exception:
+                pass
+
+        capital_before = self.current_capital
+        result = None
+        if reset_capital_fn is not None:
+            try:
+                result = reset_capital_fn(reason="auto_reset_max_loss")
+            except Exception as e:
+                cprint(f"[RISK] Auto-reset failed: {e}", "red")
+                return False
+        else:
+            cprint("[RISK] Auto-reset: no reset_capital_fn provided — skipping reset", "yellow")
+            return False
+
+        capital_after = result.get("capital_after", self.initial_capital)
+
+        # Increment and persist the reset counter
+        self._reset_state["reset_count"] = self._reset_state.get("reset_count", 0) + 1
+        self._reset_state["last_reset"] = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "timestamp": self._reset_state["last_reset"],
+            "reset_number": self._reset_state["reset_count"],
+            "reason": self.circuit_breaker_reason or "max_loss",
+            "capital_before": round(capital_before, 2),
+            "capital_after": round(capital_after, 2),
+            "positions_cleared": result.get("positions_cleared", 0),
+        }
+        history = self._reset_state.setdefault("history", [])
+        history.append(entry)
+        if len(history) > 100:
+            self._reset_state["history"] = history[-100:]
+        self._save_reset_state()
+
+        # Sync local capital + daily P&L and clear the breaker so trading resumes
+        self.current_capital = capital_after
+        self._daily_pnl = 0.0
+        self.deactivate_circuit_breaker()
+
+        self._emit_event(RiskEvent(
+            event_type="capital_reset",
+            severity="warning",
+            message=(
+                f"Capital auto-reset #{entry['reset_number']}: "
+                f"${entry['capital_before']:.2f} -> ${entry['capital_after']:.2f} "
+                f"(cleared {entry['positions_cleared']} position(s))"
+            ),
+            portfolio_value=capital_after,
+            threshold=self.max_loss_usd,
+            current_pnl=0.0,
+        ))
+        cprint(
+            f"[RISK] Capital AUTO-RESET #{entry['reset_number']} complete — "
+            f"trading resumed with ${capital_after:.2f}",
+            "white", "on_green",
+        )
+        return True
+
 
     def is_trading_allowed(self) -> bool:
         """Check if new trades are allowed."""
