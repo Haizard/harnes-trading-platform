@@ -619,6 +619,15 @@ class MicroEngine:
             except Exception:
                 pass
 
+        # Track OHLCV for candle-history building. This is intentionally
+        # decoupled from the risk gate below so data keeps accumulating for
+        # research/backtesting even while the circuit breaker is active.
+        if self.ohlcv_collector:
+            try:
+                self.ohlcv_collector.track_token(candidate.address, candidate.pair_address)
+            except Exception as e:
+                print("[OHLCV] Register error for " + candidate.symbol + ": " + str(e))
+
         if candidate.score < MIN_SCORE:
             return
 
@@ -670,13 +679,6 @@ class MicroEngine:
             return
 
         print("[RUG] PASSED " + candidate.symbol + " - Risk: " + str(int(report.risk_score)) + "/100")
-
-        # Step 1.3: Register token with OHLCV collector for continuous data building
-        if self.ohlcv_collector:
-            try:
-                self.ohlcv_collector.track_token(candidate.address, candidate.pair_address)
-            except Exception as e:
-                print("[OHLCV] Register error for " + candidate.symbol + ": " + str(e))
 
         # Step 1.5: Sentiment check (full ML or lightweight)
         sentiment_data = None
