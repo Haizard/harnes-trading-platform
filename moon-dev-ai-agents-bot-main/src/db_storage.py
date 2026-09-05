@@ -253,6 +253,62 @@ def _init_tables():
                 last_seen TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # ── RBI pipeline tables (DB-first persistence for Research-Backtest-Implement) ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rbi_runs (
+                id TEXT PRIMARY KEY,
+                idea TEXT NOT NULL,
+                auto_mode BOOLEAN DEFAULT FALSE,
+                status TEXT DEFAULT 'queued',
+                strategy_name TEXT,
+                result TEXT,
+                error TEXT,
+                phases JSONB DEFAULT '{}',
+                created_at TIMESTAMPTZ,
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rbi_strategies (
+                id SERIAL PRIMARY KEY,
+                strategy_name TEXT NOT NULL UNIQUE,
+                idea TEXT,
+                signal_id TEXT,
+                decision TEXT,
+                reasoning TEXT,
+                walk_forward JSONB,
+                decay_status TEXT,
+                backtest_stats JSONB DEFAULT '{}',
+                code_path TEXT,
+                deployed BOOLEAN DEFAULT FALSE,
+                elapsed_seconds REAL DEFAULT 0,
+                session_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rbi_session_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                data JSONB DEFAULT '{}',
+                timestamp TIMESTAMPTZ NOT NULL,
+                session_id TEXT,
+                signal_id TEXT
+            )
+        """)
+        # Trades ↔ strategy linkage (live PnL attribution back to RBI pipeline)
+        conn.execute("""
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy_name TEXT
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_status ON rbi_runs(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_created ON rbi_runs(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_strategies_name ON rbi_strategies(strategy_name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_type ON rbi_session_events(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_session ON rbi_session_events(session_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_time ON rbi_session_events(timestamp)")
         # Wallet poll state (persists last poll times)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS wallet_poll_state (
@@ -358,8 +414,8 @@ def save_trade(trade_dict: dict, mode: str = "paper") -> Optional[int]:
                 INSERT INTO trades (token_address, symbol, side, amount_usd,
                     entry_price, exit_price, token_amount, slippage_pct,
                     price_impact_pct, entry_time, exit_time, pnl_usd, pnl_pct,
-                    status, score, mode, signals, ai_confidence)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    status, score, mode, signals, ai_confidence, strategy_name)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 trade_dict.get("token_address", ""),
@@ -380,6 +436,7 @@ def save_trade(trade_dict: dict, mode: str = "paper") -> Optional[int]:
                 mode,
                 json.dumps(trade_dict.get("signals", []), default=str),
                 trade_dict.get("ai_confidence", 0),
+                trade_dict.get("strategy_name"),
             )).fetchone()
             conn.commit()
             return row["id"] if row else None
@@ -593,6 +650,211 @@ def get_events(event_type: str = None, limit: int = 100) -> List[dict]:
             return [dict(r) for r in rows]
     except Exception as e:
         print(f"[DB] get_events error: {e}")
+        return []
+
+
+# ── RBI Pipeline Operations ──────────────────────────────────
+# DB-first persistence for the RBI (Research-Backtest-Implement) pipeline.
+# All functions are best-effort: they never raise — callers keep their
+# JSONL/CSV fallbacks for when the DB is unavailable.
+
+def save_rbi_run(run: dict) -> bool:
+    """Upsert an RBI pipeline run (from rbi_web RunManager) into rbi_runs."""
+    pool = get_pool()
+    if not pool:
+        return False
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO rbi_runs (id, idea, auto_mode, status, strategy_name,
+                    result, error, phases, created_at, started_at, finished_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    strategy_name = EXCLUDED.strategy_name,
+                    result = EXCLUDED.result,
+                    error = EXCLUDED.error,
+                    phases = EXCLUDED.phases,
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    updated_at = NOW()
+            """, (
+                run.get("id"),
+                run.get("idea", ""),
+                bool(run.get("auto_mode", False)),
+                run.get("status", "queued"),
+                run.get("strategy_name"),
+                run.get("result"),
+                run.get("error"),
+                json.dumps(run.get("phases", {}), default=str),
+                run.get("created_at"),
+                run.get("started_at"),
+                run.get("finished_at"),
+            ))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] save_rbi_run error: {e}")
+        return False
+
+
+def get_rbi_runs(limit: int = 50) -> List[dict]:
+    """Query recent RBI runs, newest first."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM rbi_runs ORDER BY created_at DESC NULLS LAST LIMIT %s",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_rbi_runs error: {e}")
+        return []
+
+
+def save_rbi_strategy(record: dict) -> bool:
+    """Upsert a strategy lifecycle record (from StrategyMemory) into rbi_strategies.
+
+    Latest pipeline result per strategy_name wins (ON CONFLICT DO UPDATE),
+    so re-runs keep the table current with the strategy's newest state.
+    """
+    pool = get_pool()
+    if not pool:
+        return False
+    name = record.get("strategy_name")
+    if not name:
+        return False
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO rbi_strategies (strategy_name, idea, signal_id, decision,
+                    reasoning, walk_forward, decay_status, backtest_stats, code_path,
+                    deployed, elapsed_seconds, session_id, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (strategy_name) DO UPDATE SET
+                    idea = EXCLUDED.idea,
+                    signal_id = EXCLUDED.signal_id,
+                    decision = EXCLUDED.decision,
+                    reasoning = EXCLUDED.reasoning,
+                    walk_forward = EXCLUDED.walk_forward,
+                    decay_status = EXCLUDED.decay_status,
+                    backtest_stats = EXCLUDED.backtest_stats,
+                    code_path = EXCLUDED.code_path,
+                    deployed = EXCLUDED.deployed,
+                    elapsed_seconds = EXCLUDED.elapsed_seconds,
+                    session_id = EXCLUDED.session_id,
+                    updated_at = NOW()
+            """, (
+                name,
+                record.get("idea"),
+                record.get("signal_id"),
+                record.get("decision") or record.get("result"),
+                record.get("reasoning"),
+                json.dumps(record.get("walk_forward"), default=str)
+                    if record.get("walk_forward") else None,
+                record.get("decay_status"),
+                json.dumps(record.get("backtest_stats", record.get("stats", {})), default=str),
+                record.get("code_path"),
+                bool(record.get("deployed", False)),
+                record.get("elapsed_seconds"),
+                record.get("session_id"),
+            ))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] save_rbi_strategy error: {e}")
+        return False
+
+
+def get_rbi_strategies(limit: int = 100) -> List[dict]:
+    """Query RBI strategy lifecycle records, newest first."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM rbi_strategies ORDER BY updated_at DESC LIMIT %s",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_rbi_strategies error: {e}")
+        return []
+
+
+def get_rbi_strategy(name: str) -> Optional[dict]:
+    """Get a single RBI strategy record by name."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM rbi_strategies WHERE strategy_name = %s",
+                (name,)
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        print(f"[DB] get_rbi_strategy error: {e}")
+        return None
+
+
+def log_rbi_event(event_type: str, data: dict, session_id: str = None,
+                  signal_id: str = None, event_id: str = None) -> bool:
+    """Insert an RBI pipeline session event into rbi_session_events."""
+    pool = get_pool()
+    if not pool:
+        return False
+    eid = event_id or f"{session_id or 'anon'}_{int(time.time() * 1000)}"
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                INSERT INTO rbi_session_events (id, event_type, data, timestamp, session_id, signal_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (
+                eid,
+                event_type,
+                json.dumps(data, default=str),
+                datetime.now(timezone.utc).isoformat(),
+                session_id,
+                signal_id or "",
+            ))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] log_rbi_event error: {e}")
+        return False
+
+
+def get_rbi_events(limit: int = 100, event_type: str = None, session_id: str = None) -> List[dict]:
+    """Query RBI pipeline session events, newest first."""
+    pool = get_pool()
+    if not pool:
+        return []
+    try:
+        with pool.connection() as conn:
+            conditions = ["1=1"]
+            params: list = []
+            if event_type:
+                conditions.append("event_type = %s")
+                params.append(event_type)
+            if session_id:
+                conditions.append("session_id = %s")
+                params.append(session_id)
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT * FROM rbi_session_events WHERE {' AND '.join(conditions)} "
+                f"ORDER BY timestamp DESC LIMIT %s",
+                params
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_rbi_events error: {e}")
         return []
 
 

@@ -285,6 +285,13 @@ class RBISessionLogger:
         }
         self._events.append(event)
         self._flush()
+        # Best-effort DB persistence (rbi_session_events) — never crashes pipeline
+        try:
+            from src.db_storage import log_rbi_event
+            log_rbi_event(event_type, data, session_id=self.session_id,
+                          signal_id=signal_id, event_id=event["id"])
+        except Exception:
+            pass
 
     def _flush(self):
         """Write buffered events to CSV."""
@@ -328,6 +335,12 @@ class StrategyMemory:
         try:
             with open(self.history_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, default=str) + "\n")
+        except Exception:
+            pass
+        # Best-effort DB persistence (rbi_strategies) — never crashes pipeline
+        try:
+            from src.db_storage import save_rbi_strategy
+            save_rbi_strategy(record)
         except Exception:
             pass
 
@@ -1366,7 +1379,8 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
     start_time = time.time()
     signal_id = datetime.utcnow().strftime("%H%M%S")
     session_log = RBISessionLogger()
-    memory_record = {"idea": idea[:500], "signal_id": signal_id}
+    memory_record = {"idea": idea[:500], "signal_id": signal_id,
+                     "session_id": session_log.session_id}
 
     try:
         content = get_idea_content(idea)
@@ -1487,6 +1501,8 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
 
         # Update strategy memory
         memory_record["result"] = decision
+        memory_record["decision"] = decision
+        memory_record["backtest_stats"] = parsed_stats
         memory_record["reasoning"] = reasoning[:500] if reasoning else None
         memory_record["walk_forward"] = {
             "in_sample": wf_result.in_sample_return,
@@ -1508,6 +1524,7 @@ def process_trading_idea(idea: str, auto_mode: bool = False):
                     cprint(f"\n[RBI] SUCCESS: {name} is LIVE! ({elapsed:.0f}s)", "green")
                     memory_record["deployed"] = True
                     memory_record["deploy_time"] = elapsed
+                    memory_record["code_path"] = str(LIVE_STRATEGIES_DIR / f"{name.lower()}.py")
 
                     # Post-deploy: register for monitoring
                     cprint(f"[RBI] Registered '{name}' with alpha decay detector for monitoring", "cyan")

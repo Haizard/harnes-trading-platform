@@ -45,27 +45,70 @@ STRATEGY_MEMORY_DIR = DATA_DIR / "strategy_memory"
 RUNS_DIR = DATA_DIR / "runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Memory bounds — everything stays persisted on disk/DB, RAM only keeps recent
+MAX_MEMORY_RUNS = 200          # max runs kept in RAM (older ones pruned from memory)
+MAX_FINISHED_LOG_LINES = 1000  # trim in-RAM logs of finished runs (full log on disk)
+MAX_WS_LIFETIME_SECONDS = 3600 # WebSocket stream hard cap (defensive)
+
 
 # ── Run Manager ────────────────────────────────────────────
 
-class OutputCapture(io.StringIO):
-    """Captures stdout and forwards lines to the RunManager."""
+class OutputCapture:
+    """Per-run log sink. Writes are routed here by StdoutRouter for the
+    pipeline's thread only — no global stdout swap, so concurrent runs
+    (or unrelated threads) can never interleave into each other's logs."""
 
     def __init__(self, run_id: str, run_manager: 'RunManager'):
-        super().__init__()
         self.run_id = run_id
         self.run_manager = run_manager
-        self._original_stdout = sys.stdout
 
     def write(self, text: str):
         if text and text.strip():
-            self._original_stdout.write(text)
             self.run_manager.append_log(self.run_id, text)
-        elif text:
-            self._original_stdout.write(text)
 
     def flush(self):
-        self._original_stdout.flush()
+        pass
+
+
+class StdoutRouter(io.TextIOBase):
+    """Process-wide stdout router (installed once, at import).
+
+    Routes writes from a registered pipeline thread to that run's
+    OutputCapture (mirroring to the real console); all other threads
+    write straight through to the real stdout. Fixes the bug where
+    swapping sys.stdout globally made concurrent runs interleave logs.
+    """
+
+    def __init__(self):
+        self._real = sys.stdout
+        self._local = threading.local()
+
+    def register(self, capture: OutputCapture):
+        self._local.capture = capture
+
+    def unregister(self):
+        self._local.capture = None
+
+    def write(self, text: str):
+        capture = getattr(self._local, "capture", None)
+        try:
+            if capture is not None:
+                capture.write(text)
+            self._real.write(text)
+        except Exception:
+            pass
+        return len(text)
+
+    def flush(self):
+        try:
+            self._real.flush()
+        except Exception:
+            pass
+
+
+STDOUT_ROUTER = StdoutRouter()
+if not isinstance(sys.stdout, StdoutRouter):
+    sys.stdout = STDOUT_ROUTER
 
 
 class RunManager:
@@ -148,6 +191,7 @@ class RunManager:
             self.runs[run_id] = run
             self.logs[run_id] = []
         self._persist_run(run)
+        self._prune_memory()
 
         # DSH: emit event
         self._emit_event("rbi/run_created", {
@@ -194,10 +238,9 @@ class RunManager:
         idea_text = run["idea"]
         self._append_idea(idea_text)
 
-        # Capture stdout
+        # Route this thread's stdout to the run's log capture (thread-safe)
         capture = OutputCapture(run_id, self)
-        old_stdout = sys.stdout
-        sys.stdout = capture
+        STDOUT_ROUTER.register(capture)
 
         try:
             # Import and run the pipeline
@@ -241,10 +284,15 @@ class RunManager:
                 "timestamp": self.runs[run_id]["finished_at"],
             })
         finally:
-            sys.stdout = old_stdout
+            STDOUT_ROUTER.unregister()
             self._persist_run(self.runs[run_id])
             self._broadcast_status(run_id)
             self._broadcast_log(run_id, "__DONE__")
+            # Bound in-RAM logs for finished runs (full log stays on disk)
+            with self._lock:
+                logs = self.logs.get(run_id)
+                if logs and len(logs) > MAX_FINISHED_LOG_LINES:
+                    self.logs[run_id] = logs[-MAX_FINISHED_LOG_LINES:]
 
     def _extract_result(self, run_id: str):
         """Extract strategy result from the pipeline logs."""
@@ -345,6 +393,13 @@ class RunManager:
         except Exception:
             pass
 
+        # DB persistence (best-effort — upserts into rbi_runs)
+        try:
+            from src.db_storage import save_rbi_run
+            save_rbi_run(run)
+        except Exception:
+            pass
+
         # Also save logs
         log_file = RUNS_DIR / f"{run['id']}.log"
         try:
@@ -352,6 +407,21 @@ class RunManager:
             log_file.write_text(log_text, encoding="utf-8")
         except Exception:
             pass
+
+    def _prune_memory(self):
+        """Keep RAM bounded: drop oldest finished runs beyond MAX_MEMORY_RUNS
+        (they remain persisted on disk/DB) — running/queued runs are never dropped."""
+        with self._lock:
+            if len(self.runs) <= MAX_MEMORY_RUNS:
+                return
+            finished = sorted(
+                [r for r in self.runs.values()
+                 if r.get("status") in ("completed", "error")],
+                key=lambda r: r.get("created_at", ""))
+            excess = len(self.runs) - MAX_MEMORY_RUNS
+            for r in finished[:excess]:
+                self.runs.pop(r["id"], None)
+                self.logs.pop(r["id"], None)
 
     def _append_idea(self, text: str):
         """Append idea to ideas.txt for persistence."""
@@ -436,8 +506,51 @@ async def start_run(run_id: str):
 
 @router.get("/api/rbi/runs")
 async def list_runs(limit: int = 50):
-    """List all runs."""
-    return {"runs": run_manager.get_all_runs(limit)}
+    """List runs — DB (rbi_runs) merged with fresher in-memory state."""
+    # DB is the durable source; in-memory overrides with latest statuses
+    runs: Dict[str, dict] = {}
+    try:
+        from src.db_storage import get_rbi_runs
+        for r in get_rbi_runs(limit):
+            runs[r.get("id")] = r
+    except Exception:
+        pass
+    for r in run_manager.get_all_runs(limit):
+        runs[r["id"]] = r
+    merged = sorted(runs.values(),
+                    key=lambda r: r.get("created_at") or "", reverse=True)
+    return {"runs": merged[:limit]}
+
+
+@router.get("/api/rbi/events")
+async def list_rbi_events(limit: int = 100, event_type: str = None, session_id: str = None):
+    """RBI pipeline session events — DB (rbi_session_events) first, CSV fallback."""
+    events = []
+    try:
+        from src.db_storage import get_rbi_events
+        events = get_rbi_events(limit=limit, event_type=event_type, session_id=session_id)
+    except Exception:
+        pass
+
+    if not events:
+        # CSV fallback: tail of rbi_session_log.csv
+        csv_path = DATA_DIR / "rbi_session_log.csv"
+        if csv_path.exists():
+            try:
+                import csv as _csv
+                from collections import deque
+                with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                    tail = deque(_csv.DictReader(f), maxlen=max(limit, 500))
+                events = list(tail)[::-1]
+                if event_type:
+                    events = [e for e in events if e.get("event_type") == event_type]
+                if session_id:
+                    events = [e for e in events if e.get("session_id") == session_id]
+                events = events[:limit]
+            except Exception:
+                pass
+
+    return {"events": events, "count": len(events), "db_used": bool(events)}
 
 
 @router.get("/api/rbi/run/{run_id}")
@@ -463,33 +576,47 @@ async def get_run_logs(run_id: str, offset: int = 0):
 
 @router.get("/api/rbi/results")
 async def list_results():
-    """List strategy results from strategy_memory."""
-    history_path = STRATEGY_MEMORY_DIR / "strategy_history.jsonl"
+    """List strategy results — DB (rbi_strategies) first, JSONL fallback."""
     results = []
-    if history_path.exists():
-        try:
-            for line in history_path.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    entry = json.loads(line)
-                    results.append(entry)
-        except Exception:
-            pass
-    # Most recent first
-    results.reverse()
-    return {"results": results[:100], "count": len(results)}
+    try:
+        from src.db_storage import get_rbi_strategies
+        results = get_rbi_strategies(100)
+    except Exception:
+        pass
+
+    if not results:
+        history_path = STRATEGY_MEMORY_DIR / "strategy_history.jsonl"
+        if history_path.exists():
+            try:
+                for line in history_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        entry = json.loads(line)
+                        results.append(entry)
+            except Exception:
+                pass
+        # Most recent first
+        results.reverse()
+    return {"results": results[:100], "count": len(results), "db_used": bool(results)}
 
 
 @router.get("/api/rbi/result/{strategy_name}")
 async def get_result(strategy_name: str):
-    """Get detailed result for a specific strategy."""
+    """Get detailed result for a specific strategy — DB first, JSONL fallback."""
+    try:
+        from src.db_storage import get_rbi_strategy
+        record = get_rbi_strategy(strategy_name)
+        if record:
+            return {"result": record, "db_used": True}
+    except Exception:
+        pass
+
     history_path = STRATEGY_MEMORY_DIR / "strategy_history.jsonl"
-    if not history_path.exists():
-        raise HTTPException(404, "No history found")
-    for line in history_path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            entry = json.loads(line)
-            if entry.get("strategy_name") == strategy_name:
-                return {"result": entry}
+    if history_path.exists():
+        for line in history_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entry = json.loads(line)
+                if entry.get("strategy_name") == strategy_name:
+                    return {"result": entry, "db_used": False}
     raise HTTPException(404, f"Strategy {strategy_name} not found")
 
 
@@ -546,9 +673,14 @@ async def websocket_run_logs(websocket: WebSocket, run_id: str):
     await websocket.accept()
     offset = 0
     connected = True
+    ws_started = time.time()
 
     try:
         while connected:
+            # Hard lifetime cap — defensive against zombie streams
+            if time.time() - ws_started > MAX_WS_LIFETIME_SECONDS:
+                break
+
             run = run_manager.get_run(run_id)
             if not run:
                 await websocket.send_text("__ERROR__: Run not found")

@@ -457,12 +457,40 @@ async def get_rbi():
             if risk_events:
                 circuit_breaker = risk_events[0]
 
+        # RBI pipeline data — DB (rbi_runs / rbi_strategies) first, file fallback
+        rbi_runs = []
+        rbi_strategies = []
+        try:
+            from src.db_storage import get_rbi_runs, get_rbi_strategies
+            rbi_runs = get_rbi_runs(20)
+            rbi_strategies = get_rbi_strategies(20)
+        except Exception:
+            pass
+        if not rbi_runs:
+            runs_file = Path(__file__).parent / "data" / "rbi" / "runs" / "runs.jsonl"
+            if runs_file.exists():
+                try:
+                    lines = [json.loads(l) for l in runs_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+                    rbi_runs = sorted(lines, key=lambda r: r.get("created_at", ""), reverse=True)[:20]
+                except Exception:
+                    pass
+        if not rbi_strategies:
+            hist_file = Path(__file__).parent / "data" / "rbi" / "strategy_memory" / "strategy_history.jsonl"
+            if hist_file.exists():
+                try:
+                    lines = [json.loads(l) for l in hist_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+                    rbi_strategies = list(reversed(lines))[:20]
+                except Exception:
+                    pass
+
         return {
             "risk_events": risk_events[-30:],
             "circuit_breaker": circuit_breaker,
             "capital_resets": _load_capital_resets(),
             "risk_rejections": [],
             "strategy_signals": strategy_signals[-30:],
+            "rbi_runs": rbi_runs,
+            "rbi_strategies": rbi_strategies,
             "db_used": db_used,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
