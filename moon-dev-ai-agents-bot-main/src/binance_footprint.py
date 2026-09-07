@@ -62,3 +62,26 @@ def aggregate_trades(
             "trade_count": level["trade_count"],
         })
     return result
+
+
+def aggregate_ohlc(
+    trades: Iterable[dict],
+    interval_seconds: int = 60,
+) -> list[dict]:
+    """Build true OHLC bars from trade arrival order."""
+    bars = {}
+    for trade in trades:
+        event_time = trade["event_time"]
+        if not isinstance(event_time, datetime):
+            raise TypeError("event_time must be a datetime")
+        bucket = _bucket_time(event_time, interval_seconds)
+        price = Decimal(str(trade["price"]))
+        bar = bars.get(bucket)
+        if bar is None:
+            bars[bucket] = {"bucket_time": bucket, "open": price, "high": price, "low": price, "close": price}
+        else:
+            bar["high"] = max(bar["high"], price)
+            bar["low"] = min(bar["low"], price)
+            bar["close"] = price
+
+    return sorted(bars.values(), key=lambda bar: bar["bucket_time"])

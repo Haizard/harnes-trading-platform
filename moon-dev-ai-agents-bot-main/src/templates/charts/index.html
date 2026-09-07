@@ -58,15 +58,17 @@
         render();
     }
 
-    function groupBars(levels) {
+    function groupBars(levels, candles) {
         const groups = new Map();
         levels.forEach(level => {
             if (!groups.has(level.bucket_time)) groups.set(level.bucket_time, []);
             groups.get(level.bucket_time).push(level);
         });
+        const candleMap = new Map((candles || []).map(candle => [candle.bucket_time, candle]));
         return [...groups.entries()].map(([time, rows]) => {
+            const candle = candleMap.get(time);
             const prices = rows.map(row => Number(row.price));
-            return { time, rows, open: prices[0], close: prices[prices.length - 1], high: Math.max(...prices), low: Math.min(...prices) };
+            return { time, rows, open: candle?.open ?? prices[0], close: candle?.close ?? prices[prices.length - 1], high: candle?.high ?? Math.max(...prices), low: candle?.low ?? Math.min(...prices) };
         }).sort((left, right) => left.time.localeCompare(right.time));
     }
 
@@ -124,10 +126,17 @@
             const rows = groupedRows(bar);
             context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
             context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + plotHeight); context.stroke(); context.setLineDash([]);
-            context.strokeStyle = '#394452';
+            const candleColor = bar.close >= bar.open ? '#63d391' : '#ee7777';
+            context.strokeStyle = candleColor;
             context.setLineDash([3, 3]);
             context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
             context.setLineDash([]);
+            context.globalAlpha = 0.9;
+            context.fillStyle = candleColor;
+            const bodyTop = Math.min(priceY(bar.open), priceY(bar.close));
+            const bodyHeight = Math.max(4, Math.abs(priceY(bar.open) - priceY(bar.close)));
+            context.fillRect(x + xStep / 2 - 4, bodyTop, 8, bodyHeight);
+            context.globalAlpha = 1;
             displayRows.forEach(price => {
                 const row = rows.get(price) || {buy_volume: 0, sell_volume: 0, total_volume: 0};
                 const rowY = priceY(price);
@@ -192,7 +201,7 @@
             state.tickSize = Number(tickSizeFor(symbol));
             const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
             const data = await response.json();
-            state.bars = groupBars(data.levels || []);
+            state.bars = groupBars(data.levels || [], data.candles || []);
             state.offset = 0;
             document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
             updateStats();

@@ -800,7 +800,7 @@ async def api_binance_footprint(
     if interval_seconds < 1 or interval_seconds > 86400:
         raise HTTPException(status_code=400, detail="interval_seconds must be between 1 and 86400")
     try:
-        from src.binance_footprint import aggregate_trades
+        from src.binance_footprint import aggregate_ohlc, aggregate_trades
         from src.db_storage import get_binance_market_trades
 
         trades = await asyncio.to_thread(get_binance_market_trades, symbol, hours)
@@ -809,6 +809,7 @@ async def api_binance_footprint(
             interval_seconds=interval_seconds,
             tick_size=tick_size,
         )
+        candles = aggregate_ohlc(trades, interval_seconds=interval_seconds)
 
         def serialize_level(level):
             return {
@@ -829,6 +830,16 @@ async def api_binance_footprint(
             "interval_seconds": interval_seconds,
             "tick_size": tick_size,
             "trade_count": len(trades),
+            "candles": [
+                {
+                    "bucket_time": candle["bucket_time"].isoformat(),
+                    "open": float(candle["open"]),
+                    "high": float(candle["high"]),
+                    "low": float(candle["low"]),
+                    "close": float(candle["close"]),
+                }
+                for candle in candles
+            ],
             "levels": [serialize_level(level) for level in levels],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
