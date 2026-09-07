@@ -85,3 +85,65 @@ def aggregate_ohlc(
             bar["close"] = price
 
     return sorted(bars.values(), key=lambda bar: bar["bucket_time"])
+
+
+def detect_order_flow_signals(levels: Iterable[dict], candles: Iterable[dict], min_ratio: float = 3.0) -> list[dict]:
+    """Detect conservative stacked-imbalance and absorption signals."""
+    by_bucket = defaultdict(list)
+    for level in levels:
+        by_bucket[level["bucket_time"]].append(level)
+
+    candle_list = list(candles)
+    volumes = defaultdict(Decimal)
+    for level in levels:
+        volumes[level["bucket_time"]] += Decimal(str(level["total_volume"]))
+    average_volume = sum(volumes.values(), Decimal("0")) / max(len(volumes), 1)
+    signals = []
+
+    for candle in candle_list:
+        bucket = candle["bucket_time"]
+        rows = sorted(by_bucket.get(bucket, []), key=lambda row: Decimal(str(row["price"])))
+        if not rows:
+            continue
+
+        stacked = []
+        current_side = None
+        current_rows = []
+        for row in rows:
+            buy = Decimal(str(row["buy_volume"]))
+            sell = Decimal(str(row["sell_volume"]))
+            side = "BUY" if buy >= sell * Decimal(str(min_ratio)) and buy > 0 else None
+            side = "SELL" if sell >= buy * Decimal(str(min_ratio)) and sell > 0 else side
+            if side and side == current_side:
+                current_rows.append(row)
+            else:
+                if current_side and len(current_rows) >= 3:
+                    stacked.append((current_side, current_rows))
+                current_side = side
+                current_rows = [row] if side else []
+        if current_side and len(current_rows) >= 3:
+            stacked.append((current_side, current_rows))
+
+        for side, stack in stacked:
+            signals.append({
+                "type": "STACKED_IMBALANCE",
+                "side": side,
+                "bucket_time": bucket,
+                "prices": [float(row["price"]) for row in stack],
+                "strength": len(stack),
+            })
+
+        volume = volumes[bucket]
+        candle_range = Decimal(str(candle["high"])) - Decimal(str(candle["low"]))
+        reference_price = max(Decimal(str(candle["close"])), Decimal("0.00000001"))
+        delta = sum((Decimal(str(row["delta"])) for row in rows), Decimal("0"))
+        if volume >= average_volume * Decimal("1.5") and candle_range / reference_price <= Decimal("0.001") and abs(delta) >= volume * Decimal("0.5"):
+            signals.append({
+                "type": "ABSORPTION",
+                "side": "BUY" if delta > 0 else "SELL",
+                "bucket_time": bucket,
+                "price": float(candle["close"]),
+                "strength": float(volume / max(average_volume, Decimal("0.00000001"))),
+            })
+
+    return signals

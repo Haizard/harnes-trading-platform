@@ -65,7 +65,7 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], tickSize: 0.1, offset: 0, visible: 18, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], tickSize: 0.1, offset: 0, visible: 18, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -150,6 +150,7 @@
             const x = chartLeft + index * xStep;
             const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
             const cellWidth = Math.max(56, xStep * .32);
+            const barSignals = state.signals.filter(signal => signal.bucket_time === bar.time);
             const rows = groupedRows(bar);
             context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
             context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + plotHeight); context.stroke(); context.setLineDash([]);
@@ -191,6 +192,13 @@
                 context.fillText('BUY', x + 6, top - 24);
                 context.fillText('SELL', x + xStep - cellWidth + 4, top - 24);
                 context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 28, top + plotHeight + 26);
+            barSignals.forEach((signal, signalIndex) => {
+                const signalY = top - 58 - signalIndex * 14;
+                context.fillStyle = signal.type === 'ABSORPTION' ? '#f7c65f' : (signal.side === 'BUY' ? '#63d391' : '#ee7777');
+                context.font = '9px Consolas, monospace';
+                const label = signal.type === 'ABSORPTION' ? `ABSORB ${signal.side}` : `STACK ${signal.side} ×${signal.strength}`;
+                context.fillText(label, x + xStep / 2 - 28, signalY);
+            });
         });
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
@@ -321,6 +329,7 @@
             const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
             const data = await response.json();
             state.bars = groupBars(data.levels || [], data.candles || []);
+            state.signals = data.signals || [];
             state.offset = 0;
             document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
             updateStats();
