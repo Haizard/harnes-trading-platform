@@ -1517,6 +1517,35 @@ def save_binance_market_trade(symbol: str, trade: dict) -> Optional[int]:
         return None
 
 
+def save_binance_market_trades_bulk(symbol: str, trades: list) -> int:
+    """Persist a batch of normalized Binance trades in one transaction."""
+    pool = get_pool()
+    if not pool or not trades:
+        return 0
+    saved = 0
+    try:
+        with pool.connection() as conn:
+            for trade in trades:
+                row = conn.execute("""
+                    INSERT INTO binance_market_trades (
+                        symbol, event_time, price, quantity, aggressor_side,
+                        is_buyer_maker, agg_trade_id, raw_data)
+                    VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol, agg_trade_id) DO NOTHING
+                    RETURNING id
+                """, (
+                    symbol.upper(), trade["timestamp"], trade["price"], trade["quantity"],
+                    trade["side"], trade["is_buyer_maker"], trade["agg_trade_id"],
+                    json.dumps(trade.get("raw_data", {}), default=str),
+                )).fetchone()
+                saved += int(row is not None)
+            conn.commit()
+        return saved
+    except Exception as e:
+        print(f"[DB] save_binance_market_trades_bulk error: {e}")
+        return 0
+
+
 def save_binance_depth_update(symbol: str, depth: dict) -> Optional[int]:
     """Persist one Binance depth update for later book reconstruction."""
     pool = get_pool()

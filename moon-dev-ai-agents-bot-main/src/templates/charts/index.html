@@ -13,27 +13,41 @@
         select, button { border: 1px solid var(--grid); background: #151b24; color: var(--text); padding: 7px 10px; font: inherit; cursor: pointer; }
         button:hover, select:focus { border-color: var(--cyan); outline: none; }
         .status { margin-left: auto; color: var(--muted); }
-        .chart-shell { height: calc(100vh - 53px); min-height: 420px; position: relative; }
+        .chart-shell { height: calc(100vh - 53px); min-height: 520px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 96px; }
         #market-canvas { display: block; width: 100%; height: 100%; }
         .legend { position: absolute; top: 12px; left: 16px; color: var(--muted); pointer-events: none; }
         .legend strong { color: var(--cyan); font-weight: normal; }
+        .stats { display: grid; grid-template-columns: repeat(6, minmax(90px, 1fr)); border-top: 1px solid var(--grid); background: var(--panel); }
+        .stat { padding: 12px 14px; border-right: 1px solid var(--grid); }
+        .stat-label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 8px; }
+        .stat-value { color: var(--text); font-size: 13px; }
+        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, 1fr); } .stat { padding: 8px; } }
     </style>
 </head>
 <body>
     <header>
         <h1>NATIVE MARKET CHART</h1>
         <select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option></select>
+        <select id="interval"><option value="300">5m</option><option value="60">1m</option><option value="900">15m</option></select>
         <button id="refresh">Refresh</button>
         <span class="status" id="status">Loading PostgreSQL Binance research data...</span>
     </header>
     <main class="chart-shell">
         <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
-        <div class="legend"><strong>BINANCE FOOTPRINT</strong> &nbsp; green buy &nbsp; red sell &nbsp; delta at right</div>
+        <div class="legend"><strong>BINANCE FOOTPRINT</strong> &nbsp; aggressive buy × aggressive sell &nbsp; delta</div>
+        <div class="stats">
+            <div class="stat"><span class="stat-label">SESSION VOLUME</span><span class="stat-value" id="session-volume">-</span></div>
+            <div class="stat"><span class="stat-label">SESSION DELTA</span><span class="stat-value" id="session-delta">-</span></div>
+            <div class="stat"><span class="stat-label">POC</span><span class="stat-value" id="poc">-</span></div>
+            <div class="stat"><span class="stat-label">HIGH</span><span class="stat-value" id="session-high">-</span></div>
+            <div class="stat"><span class="stat-label">LOW</span><span class="stat-value" id="session-low">-</span></div>
+            <div class="stat"><span class="stat-label">CANDLES</span><span class="stat-value" id="candle-count">-</span></div>
+        </div>
     </main>
     <script>
     const canvas = document.getElementById('market-canvas');
     const context = canvas.getContext('2d');
-    const state = { bars: [], offset: 0, visible: 36, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], tickSize: 0.1, offset: 0, visible: 18, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -62,7 +76,7 @@
         context.clearRect(0, 0, width, height);
         context.fillStyle = '#090b10';
         context.fillRect(0, 0, width, height);
-        const left = 16, top = 36, right = 78, bottom = 28;
+        const left = 16, top = 72, right = 78, bottom = 42;
         const plotWidth = Math.max(1, width - left - right);
         const plotHeight = Math.max(1, height - top - bottom);
         const end = state.bars.length - state.offset || undefined;
@@ -78,7 +92,24 @@
         const chartWidth = Math.min(plotWidth, Math.max(320, visibleBars.length * 140));
         const chartLeft = left + (plotWidth - chartWidth) / 2;
         const xStep = chartWidth / visibleBars.length;
-        const priceY = price => top + (maxPrice - price) / range * plotHeight;
+        const rowCount = Math.max(10, Math.min(24, Math.floor(plotHeight / 25)));
+        const displayStep = state.tickSize * Math.max(1, Math.ceil(range / (state.tickSize * rowCount)));
+        const displayHigh = Math.ceil(maxPrice / displayStep) * displayStep;
+        const displayLow = Math.floor(minPrice / displayStep) * displayStep;
+        const displayRange = Math.max(displayHigh - displayLow, displayStep);
+        const priceY = price => top + (displayHigh - price) / displayRange * plotHeight;
+        const displayRows = Array.from({length: Math.round(displayRange / displayStep) + 1}, (_, index) => displayHigh - index * displayStep);
+        const groupedRows = bar => {
+            const grouped = new Map();
+            bar.rows.forEach(row => {
+                const price = Math.floor(Number(row.price) / displayStep) * displayStep;
+                const current = grouped.get(price) || {buy_volume: 0, sell_volume: 0, delta: 0, total_volume: 0};
+                current.buy_volume += Number(row.buy_volume); current.sell_volume += Number(row.sell_volume);
+                current.delta += Number(row.delta); current.total_volume += Number(row.total_volume);
+                grouped.set(price, current);
+            });
+            return grouped;
+        };
         context.strokeStyle = '#202733'; context.lineWidth = 1;
         for (let line = 0; line <= 5; line++) {
             const lineY = top + line * plotHeight / 5;
@@ -89,29 +120,35 @@
         visibleBars.forEach((bar, index) => {
             const x = chartLeft + index * xStep;
             const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
+            const cellWidth = Math.max(56, xStep * .32);
+            const rows = groupedRows(bar);
+            context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
+            context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + plotHeight); context.stroke(); context.setLineDash([]);
             context.strokeStyle = '#394452';
             context.setLineDash([3, 3]);
             context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
             context.setLineDash([]);
-            bar.rows.forEach(row => {
-                const rowY = priceY(Number(row.price));
+            displayRows.forEach(price => {
+                const row = rows.get(price) || {buy_volume: 0, sell_volume: 0, total_volume: 0};
+                const rowY = priceY(price);
                 const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
-                const cellWidth = Math.max(56, xStep * .32);
-                const cellHeight = Math.max(14, Math.min(24, plotHeight / Math.max(visibleBars.length * 8, bar.rows.length)));
+                const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
                 context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
                 context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                 context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
                 context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                 context.font = '10px Consolas, monospace';
                 context.fillStyle = '#d7dee8';
-                context.fillText(buy.toFixed(3), x + 6, rowY + 3);
-                context.fillText(sell.toFixed(3), x + xStep - cellWidth + 4, rowY + 3);
+                if (buy > 0) context.fillText(formatVolume(buy), x + 6, rowY + 3);
+                if (sell > 0) context.fillText(formatVolume(sell), x + xStep - cellWidth + 4, rowY + 3);
             });
             context.font = '11px Consolas, monospace';
             context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
-            context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${barDelta.toFixed(3)}`, x + xStep / 2 - 30, top - 10);
+                context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 30, top - 42);
             context.fillStyle = '#778292';
-            context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 28, top + plotHeight + 20);
+                context.fillText('BUY', x + 6, top - 24);
+                context.fillText('SELL', x + xStep - cellWidth + 4, top - 24);
+                context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 28, top + plotHeight + 26);
         });
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
@@ -120,15 +157,45 @@
         }
     }
 
+    function formatVolume(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number === 0) return '0';
+        const absolute = Math.abs(number);
+        const decimals = absolute >= 1000 ? 0 : absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute >= 0.001 ? 5 : 8;
+        return number.toFixed(decimals);
+    }
+
+    function tickSizeFor(symbol) {
+        return {BTCUSDT: '0.10', ETHUSDT: '0.01', SOLUSDT: '0.001', BNBUSDT: '0.01'}[symbol] || '0.01';
+    }
+
+    function updateStats() {
+        const rows = state.bars.flatMap(bar => bar.rows);
+        const volume = rows.reduce((sum, row) => sum + Number(row.total_volume), 0);
+        const delta = rows.reduce((sum, row) => sum + Number(row.delta), 0);
+        const byPrice = new Map();
+        rows.forEach(row => byPrice.set(row.price, (byPrice.get(row.price) || 0) + Number(row.total_volume)));
+        const poc = [...byPrice.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+        document.getElementById('session-volume').textContent = formatVolume(volume);
+        document.getElementById('session-delta').textContent = `${delta >= 0 ? '+' : ''}${formatVolume(delta)}`;
+        document.getElementById('poc').textContent = poc == null ? '-' : Number(poc).toFixed(2);
+        document.getElementById('session-high').textContent = rows.length ? Math.max(...rows.map(row => Number(row.price))).toFixed(2) : '-';
+        document.getElementById('session-low').textContent = rows.length ? Math.min(...rows.map(row => Number(row.price))).toFixed(2) : '-';
+        document.getElementById('candle-count').textContent = state.bars.length;
+    }
+
     async function load() {
         const symbol = document.getElementById('symbol').value;
+        const interval = Number(document.getElementById('interval').value);
         document.getElementById('status').textContent = `Loading ${symbol} from PostgreSQL...`;
         try {
-            const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=60`);
+            state.tickSize = Number(tickSizeFor(symbol));
+            const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
             const data = await response.json();
             state.bars = groupBars(data.levels || []);
             state.offset = 0;
             document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
+            updateStats();
         } catch (error) {
             state.bars = [];
             document.getElementById('status').textContent = `Data unavailable: ${error.message}`;
@@ -146,6 +213,7 @@
     window.addEventListener('mouseup', () => { state.dragging = false; });
     canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(8, Math.min(120, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
     document.getElementById('symbol').addEventListener('change', load);
+    document.getElementById('interval').addEventListener('change', load);
     document.getElementById('refresh').addEventListener('click', load);
     window.addEventListener('resize', resize);
     resize();

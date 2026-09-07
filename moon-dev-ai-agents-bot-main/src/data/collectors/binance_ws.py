@@ -7,12 +7,13 @@ Built with love by Moon Dev 🚀
 import json
 import asyncio
 import os
+import requests
 from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
 from termcolor import colored, cprint
 from datetime import datetime
 
 from src.data.processing.cleaner import DataCleaner
-from src.db_storage import save_binance_depth_update, save_binance_market_trade
+from src.db_storage import save_binance_depth_update, save_binance_market_trade, save_binance_market_trades_bulk
 
 class BinanceWS:
     def __init__(self, symbol="btcusdt"):
@@ -25,6 +26,29 @@ class BinanceWS:
         self.cleaner = DataCleaner()
         
         cprint(f"[WS] Moon Dev's WebSocket Collector initialized for {self.symbol.upper()}", "white", "on_blue")
+
+    async def backfill_trades(self):
+        """Seed recent public aggregate trades before starting live streams."""
+        try:
+            limit = max(100, min(int(os.environ.get("BINANCE_RESEARCH_BACKFILL_LIMIT", "1000")), 1000))
+            response = await asyncio.to_thread(requests.get, "https://api.binance.com/api/v3/aggTrades", params={"symbol": self.symbol.upper(), "limit": limit}, timeout=15)
+            response.raise_for_status()
+            trades = []
+            for item in response.json():
+                cleaned = self.cleaner.clean_agg_trade({
+                    "p": item["p"], "q": item["q"], "E": item["T"],
+                    "m": item["m"], "a": item["a"],
+                })
+                if cleaned:
+                    trades.append({
+                        **cleaned,
+                        "side": "SELL" if cleaned["is_buyer_maker"] else "BUY",
+                        "raw_data": item,
+                    })
+            saved = await asyncio.to_thread(save_binance_market_trades_bulk, self.symbol, trades)
+            cprint(f"[WS] Backfilled {saved}/{len(trades)} {self.symbol.upper()} trades into PostgreSQL", "green")
+        except Exception as e:
+            cprint(f"[WS] Binance backfill skipped: {e}", "yellow")
 
     def handle_message(self, _, message):
         """Thread-safe callback to push messages into the async queue"""
@@ -100,6 +124,7 @@ class BinanceWS:
         self.loop = asyncio.get_running_loop()
         
         try:
+            await self.backfill_trades()
             # Initialize client with thread-safe handler
             self.client = SpotWebsocketStreamClient(on_message=self.handle_message)
             

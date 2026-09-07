@@ -9,9 +9,9 @@ from typing import Iterable
 def _bucket_time(event_time: datetime, interval_seconds: int) -> datetime:
     if interval_seconds <= 0:
         raise ValueError("interval_seconds must be positive")
-    elapsed = event_time.minute * 60 + event_time.second
-    bucket_offset = elapsed % interval_seconds
-    return event_time.replace(second=event_time.second - bucket_offset, microsecond=0)
+    timestamp = event_time.timestamp()
+    bucket_timestamp = timestamp - (timestamp % interval_seconds)
+    return datetime.fromtimestamp(bucket_timestamp, tz=event_time.tzinfo)
 
 
 def _price_level(price: Decimal, tick_size: Decimal | None) -> Decimal:
