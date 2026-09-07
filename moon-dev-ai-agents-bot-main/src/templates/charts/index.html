@@ -29,6 +29,9 @@
         <h1>NATIVE MARKET CHART</h1>
         <select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option></select>
         <select id="interval"><option value="300">5m</option><option value="60">1m</option><option value="900">15m</option></select>
+        <button id="zoom-out" title="Show more candles">−</button>
+        <button id="zoom-reset" title="Reset candle zoom">Reset</button>
+        <button id="zoom-in" title="Show fewer candles">+</button>
         <button id="refresh">Refresh</button>
         <span class="status" id="status">Loading PostgreSQL Binance research data...</span>
     </header>
@@ -223,6 +226,9 @@
     canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(8, Math.min(120, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
     document.getElementById('symbol').addEventListener('change', load);
     document.getElementById('interval').addEventListener('change', load);
+    document.getElementById('zoom-out').addEventListener('click', () => { state.visible = Math.min(120, state.visible + 4); render(); });
+    document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(8, state.visible - 4); render(); });
+    document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 18; state.offset = 0; render(); });
     document.getElementById('refresh').addEventListener('click', load);
     window.addEventListener('resize', resize);
     resize();
