@@ -77,8 +77,9 @@ def get_pool():
     try:
         _pool = ConnectionPool(
             conninfo=db_url,
-            min_size=2,
-            max_size=10,
+            min_size=1,
+            max_size=3,
+            timeout=5,
             kwargs={"row_factory": dict_row, "connect_timeout": 10},
         )
         print("[DB] Connected to PostgreSQL")
