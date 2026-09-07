@@ -145,14 +145,20 @@
                 const rowY = priceY(price);
                 const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
                 const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
-                context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
-                context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
-                context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                 context.font = '10px Consolas, monospace';
                 context.fillStyle = '#d7dee8';
-                if (buy > 0) context.fillText(formatVolume(buy), x + 6, rowY + 3);
-                if (sell > 0) context.fillText(formatVolume(sell), x + xStep - cellWidth + 4, rowY + 3);
+                if (buy > 0) {
+                    context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
+                    context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    context.fillStyle = '#d7dee8';
+                    context.fillText(formatVolume(buy), x + 6, rowY + 3);
+                }
+                if (sell > 0) {
+                    context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
+                    context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    context.fillStyle = '#d7dee8';
+                    context.fillText(formatVolume(sell), x + xStep - cellWidth + 4, rowY + 3);
+                }
             });
             context.font = '11px Consolas, monospace';
             context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
