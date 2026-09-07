@@ -405,6 +405,17 @@ def _init_tables():
                 raw_data JSONB NOT NULL DEFAULT '{}'
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS binance_orderbook_snapshots (
+                id BIGSERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                snapshot_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_update_id BIGINT NOT NULL,
+                bids JSONB NOT NULL DEFAULT '[]',
+                asks JSONB NOT NULL DEFAULT '[]',
+                raw_data JSONB NOT NULL DEFAULT '{}'
+            )
+        """)
         conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS event_time TIMESTAMPTZ")
         conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS first_update_id BIGINT")
         conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS final_update_id BIGINT")
@@ -445,6 +456,7 @@ def _init_tables():
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_trades_symbol_time ON binance_market_trades(symbol, event_time)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_depth_symbol_time ON binance_depth_updates(symbol, received_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time ON binance_orderbook_snapshots(symbol, snapshot_time)")
             conn.commit()
             print("[DB] Tables initialized")
     except Exception as e:
@@ -1551,6 +1563,30 @@ def save_binance_depth_update(symbol: str, depth: dict) -> Optional[int]:
     pool = get_pool()
     if not pool:
         return None
+
+
+def save_binance_orderbook_snapshot(symbol: str, snapshot: dict) -> Optional[int]:
+    """Persist the REST snapshot used to seed diff-depth reconstruction."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO binance_orderbook_snapshots (symbol, last_update_id, bids, asks, raw_data)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                symbol.upper(), snapshot["last_update_id"],
+                json.dumps(snapshot.get("bids", []), default=str),
+                json.dumps(snapshot.get("asks", []), default=str),
+                json.dumps(snapshot.get("raw_data", {}), default=str),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_binance_orderbook_snapshot error: {e}")
+        return None
     try:
         with pool.connection() as conn:
             row = conn.execute("""
@@ -1594,6 +1630,46 @@ def get_binance_market_trades(symbol: str, hours: int = 24, limit: int = 100000)
     except Exception as e:
         print(f"[DB] get_binance_market_trades error: {e}")
         return []
+
+
+def get_binance_orderbook_state(symbol: str, update_limit: int = 10000) -> dict | None:
+    """Reconstruct the latest Binance order book from snapshot plus diff updates."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        from src.binance_orderbook import BinanceOrderBook, OrderBookGapError
+        with pool.connection() as conn:
+            snapshot = conn.execute("""
+                SELECT snapshot_time, last_update_id, bids, asks
+                FROM binance_orderbook_snapshots
+                WHERE symbol = %s
+                ORDER BY snapshot_time DESC LIMIT 1
+            """, (symbol.upper(),)).fetchone()
+            if not snapshot:
+                return None
+            updates = conn.execute("""
+                SELECT first_update_id, final_update_id, bids, asks
+                FROM binance_depth_updates
+                WHERE symbol = %s AND received_at >= %s
+                  AND first_update_id IS NOT NULL AND final_update_id IS NOT NULL
+                ORDER BY received_at ASC, id ASC
+                LIMIT %s
+            """, (symbol.upper(), snapshot["snapshot_time"], update_limit)).fetchall()
+
+        book = BinanceOrderBook(snapshot["last_update_id"], snapshot["bids"], snapshot["asks"])
+        for update in updates:
+            book.apply_update(
+                update["first_update_id"], update["final_update_id"],
+                update["bids"], update["asks"],
+            )
+        return book.top_levels(20)
+    except OrderBookGapError as e:
+        print(f"[DB] get_binance_orderbook_state gap: {e}")
+        return None
+    except Exception as e:
+        print(f"[DB] get_binance_orderbook_state error: {e}")
+        return None
 
 
 def get_ohlcv_candles(token_address: str, hours: int = 24, limit: int = 200) -> list:

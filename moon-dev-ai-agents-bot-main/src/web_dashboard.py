@@ -848,6 +848,29 @@ async def api_binance_footprint(
     except Exception as exc:
         return {"error": str(exc), "source": "binance", "storage": "postgresql"}
 
+
+@app.get("/api/binance/dom")
+async def api_binance_dom(symbol: str = "BTCUSDT"):
+    """Return reconstructed Binance top-of-book levels from PostgreSQL."""
+    try:
+        from src.db_storage import get_binance_orderbook_state
+        state = await asyncio.to_thread(get_binance_orderbook_state, symbol)
+        if not state:
+            return {"source": "binance", "storage": "postgresql", "symbol": symbol.upper(), "bids": [], "asks": [], "available": False}
+
+        def serialize(level):
+            return {"price": float(level[0]), "quantity": float(level[1])}
+
+        return {
+            "source": "binance", "storage": "postgresql", "symbol": symbol.upper(),
+            "last_update_id": state["last_update_id"],
+            "bids": [serialize(level) for level in state["bids"]],
+            "asks": [serialize(level) for level in state["asks"]],
+            "available": True,
+        }
+    except Exception as exc:
+        return {"error": str(exc), "source": "binance", "storage": "postgresql"}
+
 @app.get("/api/smc")
 async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
     """SMC pattern detection + OHLCV + indicators for chart rendering."""

@@ -13,7 +13,7 @@ from termcolor import colored, cprint
 from datetime import datetime
 
 from src.data.processing.cleaner import DataCleaner
-from src.db_storage import save_binance_depth_update, save_binance_market_trade, save_binance_market_trades_bulk
+from src.db_storage import save_binance_depth_update, save_binance_market_trade, save_binance_market_trades_bulk, save_binance_orderbook_snapshot
 
 class BinanceWS:
     def __init__(self, symbol="btcusdt"):
@@ -62,6 +62,21 @@ class BinanceWS:
             cprint(f"[WS] Backfilled {saved}/{len(trades)} {self.symbol.upper()} trades across historical pages into PostgreSQL", "green")
         except Exception as e:
             cprint(f"[WS] Binance backfill skipped: {e}", "yellow")
+
+    async def seed_orderbook(self):
+        """Fetch the public REST snapshot required for diff-depth replay."""
+        try:
+            response = await asyncio.to_thread(requests.get, "https://api.binance.com/api/v3/depth", params={"symbol": self.symbol.upper(), "limit": 1000}, timeout=15)
+            response.raise_for_status()
+            snapshot = response.json()
+            saved = await asyncio.to_thread(save_binance_orderbook_snapshot, self.symbol, {
+                "last_update_id": snapshot["lastUpdateId"],
+                "bids": snapshot.get("bids", []), "asks": snapshot.get("asks", []),
+                "raw_data": snapshot,
+            })
+            cprint(f"[WS] Order-book snapshot seeded for {self.symbol.upper()} (id={saved})", "green")
+        except Exception as e:
+            cprint(f"[WS] Order-book snapshot skipped: {e}", "yellow")
 
     def handle_message(self, _, message):
         """Thread-safe callback to push messages into the async queue"""
@@ -138,6 +153,7 @@ class BinanceWS:
         
         try:
             await self.backfill_trades()
+            await self.seed_orderbook()
             # Initialize client with thread-safe handler
             self.client = SpotWebsocketStreamClient(on_message=self.handle_message)
             

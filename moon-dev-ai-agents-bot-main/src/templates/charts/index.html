@@ -13,8 +13,12 @@
         select, button { border: 1px solid var(--grid); background: #151b24; color: var(--text); padding: 7px 10px; font: inherit; cursor: pointer; }
         button:hover, select:focus { border-color: var(--cyan); outline: none; }
         .status { margin-left: auto; color: var(--muted); }
-        .chart-shell { height: calc(100vh - 53px); min-height: 520px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 96px; }
+        .chart-shell { height: calc(100vh - 53px); min-height: 680px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 150px 96px; }
         #market-canvas { display: block; width: 100%; height: 100%; }
+        .analysis-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--grid); }
+        .analysis-panel { min-width: 0; position: relative; border-right: 1px solid var(--grid); background: #0c1016; }
+        .analysis-panel canvas { display: block; width: 100%; height: 100%; }
+        .analysis-label { position: absolute; top: 8px; left: 14px; color: var(--muted); font-size: 10px; pointer-events: none; }
         .legend { position: absolute; top: 12px; left: 16px; color: var(--muted); pointer-events: none; }
         .legend strong { color: var(--cyan); font-weight: normal; }
         .stats { display: grid; grid-template-columns: repeat(6, minmax(90px, 1fr)); border-top: 1px solid var(--grid); background: var(--panel); }
@@ -38,6 +42,11 @@
     <main class="chart-shell">
         <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
         <div class="legend"><strong>BINANCE FOOTPRINT</strong> &nbsp; aggressive buy × aggressive sell &nbsp; delta</div>
+        <div class="analysis-grid">
+            <div class="analysis-panel"><span class="analysis-label">CUMULATIVE DELTA</span><canvas id="delta-canvas" aria-label="Cumulative delta chart"></canvas></div>
+            <div class="analysis-panel"><span class="analysis-label">VOLUME PROFILE</span><canvas id="profile-canvas" aria-label="Volume profile chart"></canvas></div>
+            <div class="analysis-panel"><span class="analysis-label">DOM · BINANCE RESEARCH</span><canvas id="dom-canvas" aria-label="Binance depth of market"></canvas></div>
+        </div>
         <div class="stats">
             <div class="stat"><span class="stat-label">SESSION VOLUME</span><span class="stat-value" id="session-volume">-</span></div>
             <div class="stat"><span class="stat-label">SESSION DELTA</span><span class="stat-value" id="session-delta">-</span></div>
@@ -50,6 +59,12 @@
     <script>
     const canvas = document.getElementById('market-canvas');
     const context = canvas.getContext('2d');
+    const deltaCanvas = document.getElementById('delta-canvas');
+    const deltaContext = deltaCanvas.getContext('2d');
+    const profileCanvas = document.getElementById('profile-canvas');
+    const profileContext = profileCanvas.getContext('2d');
+    const domCanvas = document.getElementById('dom-canvas');
+    const domContext = domCanvas.getContext('2d');
     const state = { bars: [], tickSize: 0.1, offset: 0, visible: 18, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
@@ -58,7 +73,16 @@
         canvas.width = Math.floor(box.width * ratio);
         canvas.height = Math.floor(box.height * ratio);
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        [deltaCanvas, profileCanvas, domCanvas].forEach(panel => {
+            const panelBox = panel.getBoundingClientRect();
+            panel.width = Math.floor(panelBox.width * ratio);
+            panel.height = Math.floor(panelBox.height * ratio);
+        });
+        deltaContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        profileContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        domContext.setTransform(ratio, 0, 0, ratio, 0, 0);
         render();
+        renderAnalysis();
     }
 
     function groupBars(levels, candles) {
@@ -183,6 +207,92 @@
         return number.toFixed(decimals);
     }
 
+    function renderAnalysis() {
+        drawCumulativeDelta();
+        drawVolumeProfile();
+        drawDom();
+    }
+
+    function drawCumulativeDelta() {
+        const width = deltaCanvas.clientWidth, height = deltaCanvas.clientHeight;
+        deltaContext.clearRect(0, 0, width, height);
+        deltaContext.fillStyle = '#0c1016'; deltaContext.fillRect(0, 0, width, height);
+        if (!state.bars.length) return;
+        const values = []; let running = 0;
+        state.bars.forEach(bar => { running += bar.rows.reduce((sum, row) => sum + Number(row.delta), 0); values.push(running); });
+        const min = Math.min(0, ...values), max = Math.max(0, ...values), range = Math.max(max - min, 0.000001);
+        const left = 14, top = 24, plotWidth = width - 28, plotHeight = height - 38;
+        const x = index => left + index * plotWidth / Math.max(values.length - 1, 1);
+        const y = value => top + (max - value) / range * plotHeight;
+        deltaContext.strokeStyle = '#28313d'; deltaContext.beginPath(); deltaContext.moveTo(left, y(0)); deltaContext.lineTo(left + plotWidth, y(0)); deltaContext.stroke();
+        deltaContext.strokeStyle = '#55d6e8'; deltaContext.lineWidth = 2; deltaContext.beginPath();
+        values.forEach((value, index) => index ? deltaContext.lineTo(x(index), y(value)) : deltaContext.moveTo(x(index), y(value)));
+        deltaContext.stroke(); deltaContext.lineWidth = 1;
+        deltaContext.fillStyle = values[values.length - 1] >= 0 ? '#63d391' : '#ee7777';
+        deltaContext.font = '11px Consolas, monospace'; deltaContext.fillText(formatVolume(values[values.length - 1]), width - 62, 18);
+    }
+
+    function drawVolumeProfile() {
+        const width = profileCanvas.clientWidth, height = profileCanvas.clientHeight;
+        profileContext.clearRect(0, 0, width, height);
+        profileContext.fillStyle = '#0c1016'; profileContext.fillRect(0, 0, width, height);
+        const levels = new Map();
+        state.bars.flatMap(bar => bar.rows).forEach(row => levels.set(row.price, (levels.get(row.price) || 0) + Number(row.total_volume)));
+        const entries = [...levels.entries()].sort((a, b) => Number(b[0]) - Number(a[0]));
+        if (!entries.length) return;
+        const maxVolume = Math.max(...entries.map(entry => entry[1]), 1);
+        const rowHeight = Math.max(5, Math.min(16, (height - 28) / entries.length));
+        entries.slice(0, Math.floor((height - 28) / rowHeight)).forEach(([price, volume], index) => {
+            const y = 24 + index * rowHeight;
+            const barWidth = (width - 96) * volume / maxVolume;
+            profileContext.fillStyle = Number(volume) === maxVolume ? '#55d6e8' : 'rgba(85, 214, 232, .38)';
+            profileContext.fillRect(72, y, barWidth, Math.max(3, rowHeight - 2));
+            profileContext.fillStyle = '#778292'; profileContext.font = '9px Consolas, monospace';
+            profileContext.fillText(Number(price).toFixed(2), 8, y + rowHeight - 3);
+        });
+    }
+
+    let domState = {bids: [], asks: [], available: false};
+    function drawDom() {
+        const width = domCanvas.clientWidth, height = domCanvas.clientHeight;
+        domContext.clearRect(0, 0, width, height);
+        domContext.fillStyle = '#0c1016'; domContext.fillRect(0, 0, width, height);
+        if (!domState.available) {
+            domContext.fillStyle = '#778292'; domContext.font = '10px Consolas, monospace';
+            domContext.fillText('Waiting for a valid order-book snapshot', 12, 42);
+            return;
+        }
+        const levels = [...domState.asks.slice(0, 8).reverse().map(level => ({...level, side: 'ask'})), ...domState.bids.slice(0, 8).map(level => ({...level, side: 'bid'}))];
+        const maxQuantity = Math.max(...levels.map(level => level.quantity), 1);
+        const rowHeight = Math.max(8, Math.min(18, (height - 30) / levels.length));
+        levels.forEach((level, index) => {
+            const y = 24 + index * rowHeight;
+            const barWidth = (width - 112) * level.quantity / maxQuantity;
+            const barX = level.side === 'bid' ? 8 : width - 8 - barWidth;
+            domContext.fillStyle = level.side === 'bid' ? 'rgba(99,211,145,.55)' : 'rgba(238,119,119,.55)';
+            domContext.fillRect(barX, y, barWidth, Math.max(5, rowHeight - 2));
+            domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
+            domContext.fillText(level.price.toFixed(2), width / 2 - 32, y + rowHeight - 4);
+            domContext.fillStyle = '#778292';
+            domContext.fillText(formatVolume(level.quantity), level.side === 'bid' ? 8 : width - 54, y + rowHeight - 4);
+        });
+        const bestBid = domState.bids[0]?.price, bestAsk = domState.asks[0]?.price;
+        if (bestBid && bestAsk) {
+            domContext.fillStyle = '#55d6e8'; domContext.font = '10px Consolas, monospace';
+            domContext.fillText(`spread ${(bestAsk - bestBid).toFixed(2)}`, 12, height - 8);
+        }
+    }
+
+    async function loadDom() {
+        try {
+            const response = await fetch(`/api/binance/dom?symbol=${document.getElementById('symbol').value}`);
+            domState = await response.json();
+        } catch (error) {
+            domState = {bids: [], asks: [], available: false};
+        }
+        drawDom();
+    }
+
     function tickSizeFor(symbol) {
         return {BTCUSDT: '0.10', ETHUSDT: '0.01', SOLUSDT: '0.001', BNBUSDT: '0.01'}[symbol] || '0.01';
     }
@@ -214,11 +324,13 @@
             state.offset = 0;
             document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
             updateStats();
+            loadDom();
         } catch (error) {
             state.bars = [];
             document.getElementById('status').textContent = `Data unavailable: ${error.message}`;
         }
         render();
+        renderAnalysis();
     }
 
     canvas.addEventListener('mousemove', event => {
@@ -239,6 +351,7 @@
     window.addEventListener('resize', resize);
     resize();
     load();
+    loadDom();
     setInterval(load, 30000);
     </script>
 </body>
