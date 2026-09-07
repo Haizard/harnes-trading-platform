@@ -30,23 +30,36 @@ class BinanceWS:
     async def backfill_trades(self):
         """Seed recent public aggregate trades before starting live streams."""
         try:
-            limit = max(100, min(int(os.environ.get("BINANCE_RESEARCH_BACKFILL_LIMIT", "1000")), 1000))
-            response = await asyncio.to_thread(requests.get, "https://api.binance.com/api/v3/aggTrades", params={"symbol": self.symbol.upper(), "limit": limit}, timeout=15)
-            response.raise_for_status()
+            target = max(1000, min(int(os.environ.get("BINANCE_RESEARCH_BACKFILL_LIMIT", "20000")), 50000))
             trades = []
-            for item in response.json():
-                cleaned = self.cleaner.clean_agg_trade({
-                    "p": item["p"], "q": item["q"], "E": item["T"],
-                    "m": item["m"], "a": item["a"],
-                })
-                if cleaned:
-                    trades.append({
-                        **cleaned,
-                        "side": "SELL" if cleaned["is_buyer_maker"] else "BUY",
-                        "raw_data": item,
+            end_id = None
+            while len(trades) < target:
+                params = {"symbol": self.symbol.upper(), "limit": min(1000, target - len(trades))}
+                if end_id is not None:
+                    params["fromId"] = max(0, end_id - params["limit"])
+                response = await asyncio.to_thread(requests.get, "https://api.binance.com/api/v3/aggTrades", params=params, timeout=15)
+                response.raise_for_status()
+                page = response.json()
+                if not page:
+                    break
+                page_ids = [int(item["a"]) for item in page]
+                end_id = min(page_ids) - 1
+                for item in page:
+                    cleaned = self.cleaner.clean_agg_trade({
+                        "p": item["p"], "q": item["q"], "E": item["T"],
+                        "m": item["m"], "a": item["a"],
                     })
+                    if cleaned:
+                        trades.append({
+                            **cleaned,
+                            "side": "SELL" if cleaned["is_buyer_maker"] else "BUY",
+                            "raw_data": item,
+                        })
+                if len(page) < params["limit"]:
+                    break
+            trades.sort(key=lambda trade: trade["timestamp"])
             saved = await asyncio.to_thread(save_binance_market_trades_bulk, self.symbol, trades)
-            cprint(f"[WS] Backfilled {saved}/{len(trades)} {self.symbol.upper()} trades into PostgreSQL", "green")
+            cprint(f"[WS] Backfilled {saved}/{len(trades)} {self.symbol.upper()} trades across historical pages into PostgreSQL", "green")
         except Exception as e:
             cprint(f"[WS] Binance backfill skipped: {e}", "yellow")
 
