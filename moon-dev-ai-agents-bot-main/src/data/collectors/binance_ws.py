@@ -6,6 +6,7 @@ Built with love by Moon Dev 🚀
 
 import json
 import asyncio
+import os
 from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
 from termcolor import colored, cprint
 from datetime import datetime
@@ -19,6 +20,7 @@ class BinanceWS:
         self.queue = asyncio.Queue()
         self.loop = None
         self.client = None
+        self.log_trades = os.environ.get("BINANCE_RESEARCH_LOG_TRADES", "false").lower() == "true"
         
         self.cleaner = DataCleaner()
         
@@ -65,7 +67,8 @@ class BinanceWS:
             side = "SELL" if cleaned_data["is_buyer_maker"] else "BUY"
             timestamp_str = datetime.fromtimestamp(cleaned_data["timestamp"] / 1000).strftime('%H:%M:%S')
             
-            cprint(f"[*] {timestamp_str} | {side} {self.symbol.upper()} | {price} | Qty: {quantity}", "green" if side == "BUY" else "red")
+            if self.log_trades:
+                cprint(f"[*] {timestamp_str} | {side} {self.symbol.upper()} | {price} | Qty: {quantity}", "green" if side == "BUY" else "red")
             
             await asyncio.to_thread(save_binance_market_trade, self.symbol, {
                 **cleaned_data,

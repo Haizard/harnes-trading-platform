@@ -155,6 +155,26 @@ def start_engine():
         else:
             print("[DB] No LUCERIS_DATABASE_URL — using JSON fallback", flush=True)
 
+        # === Binance research collector (PostgreSQL-only) ===
+        research_enabled = os.environ.get("ENABLE_BINANCE_RESEARCH", "true").lower() in ("1", "true", "yes", "on")
+        if research_enabled:
+            research_symbol = os.environ.get("BINANCE_RESEARCH_SYMBOL", "BTCUSDT")
+
+            def start_binance_research():
+                try:
+                    from src.data.collectors.binance_ws import BinanceWS
+                    import asyncio as _asyncio
+                    print(f"[BINANCE] Starting PostgreSQL research collector for {research_symbol}", flush=True)
+                    _asyncio.run(BinanceWS(symbol=research_symbol).start())
+                except Exception as e:
+                    print(f"[BINANCE] Research collector stopped: {e}", flush=True)
+
+            binance_thread = threading.Thread(target=start_binance_research, daemon=True)
+            binance_thread.start()
+            print("[BINANCE] Research collector background thread launched", flush=True)
+        else:
+            print("[BINANCE] Research collector disabled", flush=True)
+
         print("[ENGINE] Loading micro engine...", flush=True)
         # Debug: show which key env vars are set (not their values)
         for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEDROCK_REGION", 
