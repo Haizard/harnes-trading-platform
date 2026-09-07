@@ -789,6 +789,54 @@ async def get_health():
 
 # ── SMC Chart API ─────────────────────────────────────────
 
+@app.get("/api/binance/footprint")
+async def api_binance_footprint(
+    symbol: str = "BTCUSDT",
+    hours: int = 24,
+    interval_seconds: int = 60,
+    tick_size: Optional[str] = None,
+):
+    """Return PostgreSQL-backed Binance footprint levels for research charts."""
+    if interval_seconds < 1 or interval_seconds > 86400:
+        raise HTTPException(status_code=400, detail="interval_seconds must be between 1 and 86400")
+    try:
+        from src.binance_footprint import aggregate_trades
+        from src.db_storage import get_binance_market_trades
+
+        trades = await asyncio.to_thread(get_binance_market_trades, symbol, hours)
+        levels = aggregate_trades(
+            trades,
+            interval_seconds=interval_seconds,
+            tick_size=tick_size,
+        )
+
+        def serialize_level(level):
+            return {
+                "bucket_time": level["bucket_time"].isoformat(),
+                "price": float(level["price"]),
+                "buy_volume": float(level["buy_volume"]),
+                "sell_volume": float(level["sell_volume"]),
+                "delta": float(level["delta"]),
+                "total_volume": float(level["total_volume"]),
+                "trade_count": level["trade_count"],
+            }
+
+        return {
+            "source": "binance",
+            "storage": "postgresql",
+            "symbol": symbol.upper(),
+            "hours": hours,
+            "interval_seconds": interval_seconds,
+            "tick_size": tick_size,
+            "trade_count": len(trades),
+            "levels": [serialize_level(level) for level in levels],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        return {"error": str(exc), "source": "binance", "storage": "postgresql"}
+
 @app.get("/api/smc")
 async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
     """SMC pattern detection + OHLCV + indicators for chart rendering."""

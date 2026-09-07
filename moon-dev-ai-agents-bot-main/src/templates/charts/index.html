@@ -3,167 +3,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Moon Dev Charts</title>
-    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <title>Moon Dev Native Market Chart</title>
     <style>
-        :root { --bg: #0a0a0f; --surface: #12121a; --border: #1e1e2e; --text: #e0e0e0; --dim: #666; --accent: #22d3ee; --green: #4ade80; --red: #f87171; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); }
-        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
-        .header h1 { font-size: 16px; color: var(--accent); }
-        .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        select, button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; font-family: inherit; cursor: pointer; }
-        select:focus, button:focus { outline: none; border-color: var(--accent); }
-        button.active { background: var(--accent); color: #000; border-color: var(--accent); }
-        button:hover { border-color: var(--accent); }
-        .info-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 20px; display: flex; gap: 24px; font-size: 12px; }
-        .info-item { display: flex; gap: 6px; }
-        .info-label { color: var(--dim); }
-        .info-value { font-weight: 600; }
-        .info-value.up { color: var(--green); }
-        .info-value.down { color: var(--red); }
-        #chart-container { width: 100%; height: calc(100vh - 140px); transition: opacity 0.3s; }
-        .loading { text-align: center; padding: 40px; color: var(--dim); }
-        .back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
+        :root { --bg: #090b10; --panel: #10141b; --grid: #202733; --text: #d7dee8; --muted: #778292; --green: #63d391; --red: #ee7777; --cyan: #55d6e8; }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 12px Consolas, 'SF Mono', monospace; }
+        header { min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--grid); background: var(--panel); flex-wrap: wrap; }
+        h1 { margin: 0; color: var(--cyan); font-size: 14px; letter-spacing: .04em; }
+        select, button { border: 1px solid var(--grid); background: #151b24; color: var(--text); padding: 7px 10px; font: inherit; cursor: pointer; }
+        button:hover, select:focus { border-color: var(--cyan); outline: none; }
+        .status { margin-left: auto; color: var(--muted); }
+        .chart-shell { height: calc(100vh - 53px); min-height: 420px; position: relative; }
+        #market-canvas { display: block; width: 100%; height: 100%; }
+        .legend { position: absolute; top: 12px; left: 16px; color: var(--muted); pointer-events: none; }
+        .legend strong { color: var(--cyan); font-weight: normal; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>📈 Moon Dev Charts</h1>
-        <div class="controls">
-            <select id="symbol-select">
-                <option value="SOLUSDT">SOL/USDT</option>
-                <option value="BTCUSDT">BTC/USDT</option>
-                <option value="ETHUSDT">ETH/USDT</option>
-                <option value="BONKUSDT">BONK/USDT</option>
-                <option value="WIFUSDT">WIF/USDT</option>
-                <option value="PEPEUSDT">PEPE/USDT</option>
-            </select>
-            <button data-interval="1m">1m</button>
-            <button data-interval="5m">5m</button>
-            <button data-interval="15m">15m</button>
-            <button data-interval="1h" class="active">1h</button>
-            <button data-interval="4h">4h</button>
-            <button data-interval="1d">1D</button>
-            <button id="refresh-btn" onclick="loadChart()">🔄 Refresh</button>
-        </div>
-        <a href="/" class="back-link">← Dashboard</a>
-    </div>
-    <div class="info-bar" id="info-bar">
-        <div class="info-item"><span class="info-label">Loading...</span></div>
-    </div>
-    <div id="chart-container"></div>
-
+    <header>
+        <h1>NATIVE MARKET CHART</h1>
+        <select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option></select>
+        <button id="refresh">Refresh</button>
+        <span class="status" id="status">Loading PostgreSQL Binance research data...</span>
+    </header>
+    <main class="chart-shell">
+        <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
+        <div class="legend"><strong>BINANCE FOOTPRINT</strong> &nbsp; green buy &nbsp; red sell &nbsp; delta at right</div>
+    </main>
     <script>
-    const API = '/mcp';
-    let chart, candleSeries, volumeSeries;
-    let currentSymbol = 'SOLUSDT';
-    let currentInterval = '1h';
+    const canvas = document.getElementById('market-canvas');
+    const context = canvas.getContext('2d');
+    const state = { bars: [], offset: 0, visible: 36, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
-    // ── Chart Setup ──
-    function initChart() {
-        const container = document.getElementById('chart-container');
-        chart = LightweightCharts.createChart(container, {
-            layout: { background: { type: 'solid', color: '#0a0a0f' }, textColor: '#666' },
-            grid: { vertLines: { color: '#1e1e2e' }, horzLines: { color: '#1e1e2e' } },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: { borderColor: '#1e1e2e' },
-            timeScale: { borderColor: '#1e1e2e', timeVisible: true, secondsVisible: false },
-        });
-
-        candleSeries = chart.addCandlestickSeries({
-            upColor: '#4ade80', downColor: '#f87171', borderVisible: false,
-            wickUpColor: '#4ade80', wickDownColor: '#f87171',
-        });
-
-        volumeSeries = chart.addHistogramSeries({
-            color: '#26a69a', priceFormat: { type: 'volume' },
-            priceScaleId: '', scaleMargins: { top: 0.8, bottom: 0 },
-        });
-
-        // Resize handler
-        new ResizeObserver(() => {
-            chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
-        }).observe(container);
+    function resize() {
+        const box = canvas.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(box.width * ratio);
+        canvas.height = Math.floor(box.height * ratio);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        render();
     }
 
-    // ── Load Data ──
-    async function loadChart() {
-        currentSymbol = document.getElementById('symbol-select').value;
-        document.getElementById('chart-container').style.opacity = '0.3';
+    function groupBars(levels) {
+        const groups = new Map();
+        levels.forEach(level => {
+            if (!groups.has(level.bucket_time)) groups.set(level.bucket_time, []);
+            groups.get(level.bucket_time).push(level);
+        });
+        return [...groups.entries()].map(([time, rows]) => {
+            const prices = rows.map(row => Number(row.price));
+            return { time, rows, open: prices[0], close: prices[prices.length - 1], high: Math.max(...prices), low: Math.min(...prices) };
+        }).sort((left, right) => left.time.localeCompare(right.time));
+    }
 
-        try {
-            // Fetch candles from our MCP endpoint
-            const r = await fetch(`${API}/call`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({tool: 'tv_get_ohlcv', params: {symbol: currentSymbol, interval: currentInterval, limit: 200}})
+    function render() {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = '#090b10';
+        context.fillRect(0, 0, width, height);
+        const left = 16, top = 36, right = 78, bottom = 28;
+        const plotWidth = Math.max(1, width - left - right);
+        const plotHeight = Math.max(1, height - top - bottom);
+        const end = state.bars.length - state.offset || undefined;
+        const visibleBars = state.bars.slice(Math.max(0, (end || state.bars.length) - state.visible), end);
+        if (!visibleBars.length) {
+            context.fillStyle = '#778292'; context.font = '12px Consolas, monospace';
+            context.fillText('No Binance trades in PostgreSQL yet. Start the research collector.', left, top + 28);
+            return;
+        }
+        const prices = visibleBars.flatMap(bar => bar.rows.map(row => Number(row.price)));
+        const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
+        const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
+        const xStep = plotWidth / visibleBars.length;
+        const priceY = price => top + (maxPrice - price) / range * plotHeight;
+        context.strokeStyle = '#202733'; context.lineWidth = 1;
+        for (let line = 0; line <= 5; line++) {
+            const lineY = top + line * plotHeight / 5;
+            context.beginPath(); context.moveTo(left, lineY); context.lineTo(left + plotWidth, lineY); context.stroke();
+            context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
+            context.fillText((maxPrice - line * range / 5).toPrecision(8), left + plotWidth + 8, lineY + 3);
+        }
+        visibleBars.forEach((bar, index) => {
+            const x = left + index * xStep;
+            const candleWidth = Math.max(3, xStep * .55);
+            const closeY = priceY(bar.close), openY = priceY(bar.open);
+            context.strokeStyle = bar.close >= bar.open ? '#63d391' : '#ee7777';
+            context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
+            context.fillStyle = context.strokeStyle;
+            context.fillRect(x + (xStep - candleWidth) / 2, Math.min(closeY, openY), candleWidth, Math.max(2, Math.abs(closeY - openY)));
+            bar.rows.forEach(row => {
+                const rowY = priceY(Number(row.price));
+                const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
+                context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .15 + buy / total * .65)})`;
+                context.fillRect(x + 2, rowY - 5, Math.max(2, xStep * .34), 10);
+                context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .15 + sell / total * .65)})`;
+                context.fillRect(x + xStep * .5, rowY - 5, Math.max(2, xStep * .34), 10);
             });
-            const d = await r.json();
-            if (!d.success || !d.data || !d.data.candles) {
-                document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${d.error || d.data?.error || 'No data'}</span></div>`;
-                document.getElementById('chart-container').style.opacity = '1';
-                return;
-            }
-
-            const candles = d.data.candles;
-
-            // Set candle data
-            candleSeries.setData(candles.map(c => ({
-                time: c.time, open: c.open, high: c.high, low: c.low, close: c.close
-            })));
-
-            // Set volume data
-            volumeSeries.setData(candles.map(c => ({
-                time: c.time, value: c.volume,
-                color: c.close >= c.open ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'
-            })));
-
-            chart.timeScale().fitContent();
-            document.getElementById('chart-container').style.opacity = '1';
-
-            // Update info bar
-            const last = candles[candles.length - 1];
-            const prev = candles[candles.length - 2];
-            const change = prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : '0.00';
-            const changeClass = parseFloat(change) >= 0 ? 'up' : 'down';
-            const high24h = Math.max(...candles.slice(-24).map(c => c.high));
-            const low24h = Math.min(...candles.slice(-24).map(c => c.low));
-            const vol24h = candles.slice(-24).reduce((s, c) => s + c.volume, 0).toFixed(0);
-
-            document.getElementById('info-bar').innerHTML = `
-                <div class="info-item"><span class="info-label">Price:</span><span class="info-value">${last.close.toFixed(2)}</span></div>
-                <div class="info-item"><span class="info-label">Change:</span><span class="info-value ${changeClass}">${change}%</span></div>
-                <div class="info-item"><span class="info-label">24h High:</span><span class="info-value up">${high24h.toFixed(2)}</span></div>
-                <div class="info-item"><span class="info-label">24h Low:</span><span class="info-value down">${low24h.toFixed(2)}</span></div>
-                <div class="info-item"><span class="info-label">24h Volume:</span><span class="info-value">${Number(vol24h).toLocaleString()}</span></div>
-                <div class="info-item"><span class="info-label">Candles:</span><span class="info-value">${candles.length}</span></div>
-            `;
-        } catch (e) {
-            document.getElementById('info-bar').innerHTML = `<div class="info-item"><span class="info-label">Error: ${e.message}</span></div>`;
-            document.getElementById('chart-container').style.opacity = '1';
+        });
+        if (state.crosshair) {
+            context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
+            context.beginPath(); context.moveTo(state.crosshair.x, top); context.lineTo(state.crosshair.x, top + plotHeight); context.stroke();
+            context.setLineDash([]);
         }
     }
 
-    // ── Interval buttons ──
-    document.querySelectorAll('[data-interval]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('[data-interval]').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            currentInterval = btn.dataset.interval;
-            loadChart();
-        });
+    async function load() {
+        const symbol = document.getElementById('symbol').value;
+        document.getElementById('status').textContent = `Loading ${symbol} from PostgreSQL...`;
+        try {
+            const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=60`);
+            const data = await response.json();
+            state.bars = groupBars(data.levels || []);
+            state.offset = 0;
+            document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
+        } catch (error) {
+            state.bars = [];
+            document.getElementById('status').textContent = `Data unavailable: ${error.message}`;
+        }
+        render();
+    }
+
+    canvas.addEventListener('mousemove', event => {
+        state.crosshair = { x: event.offsetX, y: event.offsetY };
+        if (state.dragging) state.offset = Math.max(0, Math.min(state.bars.length - state.visible, state.dragOffset + Math.round((state.dragX - event.clientX) / 12)));
+        render();
     });
-
-    
-document.getElementById('symbol-select').addEventListener('change', loadChart);
-
-    // Init
-    initChart();
-    loadChart();
-
-    // Auto-refresh every 30s
-    setInterval(loadChart, 30000);
+    canvas.addEventListener('mouseleave', () => { state.crosshair = null; render(); });
+    canvas.addEventListener('mousedown', event => { state.dragging = true; state.dragX = event.clientX; state.dragOffset = state.offset; });
+    window.addEventListener('mouseup', () => { state.dragging = false; });
+    canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(8, Math.min(120, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
+    document.getElementById('symbol').addEventListener('change', load);
+    document.getElementById('refresh').addEventListener('click', load);
+    window.addEventListener('resize', resize);
+    resize();
+    load();
+    setInterval(load, 30000);
     </script>
 </body>
 </html>

@@ -4,16 +4,14 @@ Real-time trade and depth data collection
 Built with love by Moon Dev 🚀
 """
 
-import os
 import json
 import asyncio
 from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
 from termcolor import colored, cprint
 from datetime import datetime
 
-# Import Moon Dev components
-from src.data.storage.mongo_db import MongoStorage
 from src.data.processing.cleaner import DataCleaner
+from src.db_storage import save_binance_depth_update, save_binance_market_trade
 
 class BinanceWS:
     def __init__(self, symbol="btcusdt"):
@@ -22,8 +20,6 @@ class BinanceWS:
         self.loop = None
         self.client = None
         
-        # Initialize storage and cleaning agents
-        self.storage = MongoStorage()
         self.cleaner = DataCleaner()
         
         cprint(f"[WS] Moon Dev's WebSocket Collector initialized for {self.symbol.upper()}", "white", "on_blue")
@@ -71,16 +67,26 @@ class BinanceWS:
             
             cprint(f"[*] {timestamp_str} | {side} {self.symbol.upper()} | {price} | Qty: {quantity}", "green" if side == "BUY" else "red")
             
-            # 3. Save to MongoDB
-            await self.storage.save_to_collection("trades", self.symbol, cleaned_data)
+            await asyncio.to_thread(save_binance_market_trade, self.symbol, {
+                **cleaned_data,
+                "side": side,
+                "raw_data": data,
+            })
         except Exception as e:
             cprint(f"[ERROR] Error in process_trade: {str(e)}", "white", "on_red")
 
     async def process_depth(self, data):
         """Process and store partial depth updates"""
         try:
-            # Save raw depth data for order book reconstruction
-            await self.storage.save_to_collection("orderbook_snapshots", self.symbol, data)
+            await asyncio.to_thread(save_binance_depth_update, self.symbol, {
+                "event_time": data.get("E"),
+                "first_update_id": data.get("U"),
+                "final_update_id": data.get("u"),
+                "last_update_id": data.get("lastUpdateId"),
+                "bids": data.get("b", data.get("bids", [])),
+                "asks": data.get("a", data.get("asks", [])),
+                "raw_data": data,
+            })
         except Exception as e:
             cprint(f"[ERROR] Error in process_depth: {str(e)}", "white", "on_red")
 
@@ -91,17 +97,14 @@ class BinanceWS:
         self.loop = asyncio.get_running_loop()
         
         try:
-            # Connect to MongoDB first
-            await self.storage.connect()
-            
             # Initialize client with thread-safe handler
             self.client = SpotWebsocketStreamClient(on_message=self.handle_message)
             
             # Subscribe to aggregate trades
             self.client.agg_trade(symbol=self.symbol)
             
-            # Subscribe to partial book depth (5 levels, 100ms update)
-            self.client.partial_book_depth(symbol=self.symbol, level=5, speed=100)
+            # Subscribe to diff-depth updates with sequence IDs for reconstruction.
+            self.client.diff_book_depth(symbol=self.symbol, speed=100)
             
             # Start background processor task
             processor_task = asyncio.create_task(self.message_processor())
@@ -119,7 +122,6 @@ class BinanceWS:
         cprint(f"[WS] Moon Dev's WebSocket Collector shutting down gracefully...", "white", "on_blue")
         if self.client:
             self.client.stop()
-        await self.storage.close()
 
 if __name__ == "__main__":
     collector = BinanceWS()

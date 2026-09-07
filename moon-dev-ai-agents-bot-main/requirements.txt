@@ -25,6 +25,7 @@ boto3>=1.34.0
 botocore>=1.34.0
 solders
 binance-connector
+# Legacy Binance/MongoDB research path; not used by the active Solana runtime.
 motor
 yfinance
 alpha_vantage

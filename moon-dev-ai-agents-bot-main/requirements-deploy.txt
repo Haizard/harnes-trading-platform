@@ -17,6 +17,9 @@ numpy>=1.24.0
 psycopg[binary]>=3.1.0
 psycopg_pool>=3.2.0
 
+# === Binance research market-data collector (PostgreSQL-backed) ===
+binance-connector>=3.12.0
+
 # === Sentiment (Twitter scraping) ===
 twikit==2.3.3
 httpx>=0.27.0

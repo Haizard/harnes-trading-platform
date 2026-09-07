@@ -1,5 +1,7 @@
 # 🚀 Moon Dev AI Trading Bot — System Documentation
 
+> **Architecture status:** The active trading runtime is Solana-based and uses PostgreSQL. Binance is now a separate research source whose raw trades and depth updates are also stored in PostgreSQL. The older MongoDB pipeline described below is legacy only. See [ACTIVE_ARCHITECTURE.md](ACTIVE_ARCHITECTURE.md) for the current boundary.
+
 ## 🔁 RBI Integration (IMPLEMENTED)
 
 This system now includes a fully functional **RBI (Research → Backtest → Implement) pipeline** supported by persistent MongoDB storage.

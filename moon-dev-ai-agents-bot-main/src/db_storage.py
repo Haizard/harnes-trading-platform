@@ -27,6 +27,12 @@ from pathlib import Path
 from contextlib import contextmanager
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
     import psycopg
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
@@ -40,6 +46,18 @@ _pool = None
 
 _pool_failed = False  # Track if pool creation failed to avoid retrying
 
+
+def _get_database_url() -> str:
+    """Resolve the active PostgreSQL URL without exposing its value."""
+    db_url = os.environ.get("LUCERIS_DATABASE_URL", "").strip()
+    if db_url:
+        return db_url
+    for legacy_name in ("postgress_db_connection_string", "DATABASE_URL"):
+        db_url = os.environ.get(legacy_name, "").strip()
+        if db_url:
+            return db_url
+    return ""
+
 def get_pool():
     """Get or create the connection pool."""
     global _pool, _pool_failed
@@ -52,7 +70,7 @@ def get_pool():
 
     if not PSYCOPG_AVAILABLE:
         return None
-    db_url = os.environ.get("LUCERIS_DATABASE_URL", "")
+    db_url = _get_database_url()
     if not db_url:
         return None
 
@@ -356,6 +374,39 @@ def _init_tables():
                 UNIQUE(token_address, candle_time)
             )
         """)
+        # Binance market data is research input, not executed trade history.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS binance_market_trades (
+                id BIGSERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                event_time TIMESTAMPTZ NOT NULL,
+                price NUMERIC NOT NULL,
+                quantity NUMERIC NOT NULL,
+                aggressor_side TEXT NOT NULL CHECK (aggressor_side IN ('BUY', 'SELL')),
+                is_buyer_maker BOOLEAN NOT NULL,
+                agg_trade_id BIGINT NOT NULL,
+                raw_data JSONB NOT NULL DEFAULT '{}',
+                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(symbol, agg_trade_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS binance_depth_updates (
+                id BIGSERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                event_time TIMESTAMPTZ,
+                first_update_id BIGINT,
+                final_update_id BIGINT,
+                last_update_id BIGINT,
+                bids JSONB NOT NULL DEFAULT '[]',
+                asks JSONB NOT NULL DEFAULT '[]',
+                raw_data JSONB NOT NULL DEFAULT '{}'
+            )
+        """)
+        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS event_time TIMESTAMPTZ")
+        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS first_update_id BIGINT")
+        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS final_update_id BIGINT")
     # Migration: Add timeframe column in a separate transaction
     try:
         with pool.connection() as conn2:
@@ -391,6 +442,8 @@ def _init_tables():
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_trades_symbol_time ON binance_market_trades(symbol, event_time)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_depth_symbol_time ON binance_depth_updates(symbol, received_at)")
             conn.commit()
             print("[DB] Tables initialized")
     except Exception as e:
@@ -1435,6 +1488,82 @@ def save_ohlcv_candles_bulk(token_address: str, candles: list, timeframe: str = 
             conn.commit()
     except Exception as e:
         print(f"[DB] save_ohlcv_candles_bulk error: {e}")
+
+
+def save_binance_market_trade(symbol: str, trade: dict) -> Optional[int]:
+    """Persist one normalized Binance aggregate trade for research."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO binance_market_trades (
+                    symbol, event_time, price, quantity, aggressor_side,
+                    is_buyer_maker, agg_trade_id, raw_data)
+                VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, agg_trade_id) DO NOTHING
+                RETURNING id
+            """, (
+                symbol.upper(), trade["timestamp"], trade["price"], trade["quantity"],
+                trade["side"], trade["is_buyer_maker"], trade["agg_trade_id"],
+                json.dumps(trade.get("raw_data", {}), default=str),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_binance_market_trade error: {e}")
+        return None
+
+
+def save_binance_depth_update(symbol: str, depth: dict) -> Optional[int]:
+    """Persist one Binance depth update for later book reconstruction."""
+    pool = get_pool()
+    if not pool:
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO binance_depth_updates (
+                    symbol, event_time, first_update_id, final_update_id,
+                    last_update_id, bids, asks, raw_data)
+                VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                symbol.upper(), depth.get("event_time"), depth.get("first_update_id"),
+                depth.get("final_update_id"), depth.get("last_update_id"),
+                json.dumps(depth.get("bids", []), default=str),
+                json.dumps(depth.get("asks", []), default=str),
+                json.dumps(depth.get("raw_data", {}), default=str),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_binance_depth_update error: {e}")
+        return None
+
+
+def get_binance_market_trades(symbol: str, hours: int = 24, limit: int = 100000) -> list:
+    """Load normalized Binance trades for footprint aggregation."""
+    pool = get_pool()
+    if not pool:
+        return []
+    hours = max(1, min(int(hours), 168))
+    limit = max(1, min(int(limit), 500000))
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute("""
+                SELECT event_time, price, quantity, aggressor_side
+                FROM binance_market_trades
+                WHERE symbol = %s
+                  AND event_time >= NOW() - (%s * INTERVAL '1 hour')
+                ORDER BY event_time ASC
+                LIMIT %s
+            """, (symbol.upper(), hours, limit)).fetchall()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        print(f"[DB] get_binance_market_trades error: {e}")
+        return []
 
 
 def get_ohlcv_candles(token_address: str, hours: int = 24, limit: int = 200) -> list:
