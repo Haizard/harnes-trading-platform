@@ -75,7 +75,7 @@
         const prices = visibleBars.flatMap(bar => bar.rows.map(row => Number(row.price)));
         const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
         const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
-        const chartWidth = Math.min(plotWidth, Math.max(180, visibleBars.length * 52));
+        const chartWidth = Math.min(plotWidth, Math.max(320, visibleBars.length * 140));
         const chartLeft = left + (plotWidth - chartWidth) / 2;
         const xStep = chartWidth / visibleBars.length;
         const priceY = price => top + (maxPrice - price) / range * plotHeight;
@@ -88,28 +88,30 @@
         }
         visibleBars.forEach((bar, index) => {
             const x = chartLeft + index * xStep;
-            const candleWidth = Math.max(3, xStep * .55);
-            const closeY = priceY(bar.close), openY = priceY(bar.open);
-            context.strokeStyle = bar.close >= bar.open ? '#63d391' : '#ee7777';
+            const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
+            context.strokeStyle = '#394452';
+            context.setLineDash([3, 3]);
             context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
-            context.fillStyle = context.strokeStyle;
-            context.fillRect(x + (xStep - candleWidth) / 2, Math.min(closeY, openY), candleWidth, Math.max(2, Math.abs(closeY - openY)));
+            context.setLineDash([]);
             bar.rows.forEach(row => {
                 const rowY = priceY(Number(row.price));
                 const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
-                const cellWidth = Math.max(34, xStep * .44);
+                const cellWidth = Math.max(56, xStep * .32);
                 const cellHeight = Math.max(14, Math.min(24, plotHeight / Math.max(visibleBars.length * 8, bar.rows.length)));
                 context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
                 context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                 context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
                 context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                if (cellWidth >= 54) {
-                    context.font = '10px Consolas, monospace';
-                    context.fillStyle = '#d7dee8';
-                    context.fillText(buy.toFixed(3), x + 6, rowY + 3);
-                    context.fillText(sell.toFixed(3), x + xStep - cellWidth + 4, rowY + 3);
-                }
+                context.font = '10px Consolas, monospace';
+                context.fillStyle = '#d7dee8';
+                context.fillText(buy.toFixed(3), x + 6, rowY + 3);
+                context.fillText(sell.toFixed(3), x + xStep - cellWidth + 4, rowY + 3);
             });
+            context.font = '11px Consolas, monospace';
+            context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
+            context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${barDelta.toFixed(3)}`, x + xStep / 2 - 30, top - 10);
+            context.fillStyle = '#778292';
+            context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 28, top + plotHeight + 20);
         });
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
