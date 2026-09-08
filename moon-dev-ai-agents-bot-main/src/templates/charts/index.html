@@ -181,20 +181,20 @@
                 const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
                 if (buy > 0) {
                     context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
-                    context.fillRect(x + xStep / 2 - cellWidth - 3, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    const buyCellX = x + xStep / 2 - cellWidth - 3;
+                    context.fillRect(buyCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                     if (showValues) {
                         context.fillStyle = '#d7dee8';
-                        context.font = '10px Consolas, monospace';
-                        context.fillText(formatVolume(buy), x + xStep / 2 - cellWidth + 1, rowY + 3);
+                        drawCellValue(buy, buyCellX, rowY, cellWidth, cellHeight - 2);
                     }
                 }
                 if (sell > 0) {
                     context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
-                    context.fillRect(x + xStep / 2 + 3, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    const sellCellX = x + xStep / 2 + 3;
+                    context.fillRect(sellCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                     if (showValues) {
                         context.fillStyle = '#d7dee8';
-                        context.font = '10px Consolas, monospace';
-                        context.fillText(formatVolume(sell), x + xStep / 2 + 7, rowY + 3);
+                        drawCellValue(sell, sellCellX, rowY, cellWidth, cellHeight - 2);
                     }
                 }
             });
@@ -228,6 +228,34 @@
         const absolute = Math.abs(number);
         const decimals = absolute >= 1000 ? 0 : absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute >= 0.001 ? 5 : 8;
         return number.toFixed(decimals);
+    }
+
+    function drawCellValue(value, cellX, centerY, cellWidth, cellHeight) {
+        const padding = 3;
+        const availableWidth = Math.max(1, cellWidth - padding * 2);
+        const availableHeight = Math.max(1, cellHeight - 1);
+        const labels = [formatVolume(value), formatCompact(value), Number(value).toExponential(1)];
+        let label = labels[0];
+        let fontSize = Math.min(10, availableHeight * .72);
+        for (const candidate of labels) {
+            context.font = `${fontSize}px Consolas, monospace`;
+            if (context.measureText(candidate).width <= availableWidth) {
+                label = candidate;
+                break;
+            }
+            label = candidate;
+        }
+        context.font = `${fontSize}px Consolas, monospace`;
+        const measuredWidth = context.measureText(label).width;
+        fontSize = Math.max(.5, Math.min(fontSize, fontSize * availableWidth / Math.max(measuredWidth, 1)));
+        context.font = `${fontSize}px Consolas, monospace`;
+        context.save();
+        context.beginPath();
+        context.rect(cellX, centerY - cellHeight / 2, cellWidth, cellHeight);
+        context.clip();
+        context.textBaseline = 'middle';
+        context.fillText(label, cellX + padding, centerY);
+        context.restore();
     }
 
     function formatCompact(value) {

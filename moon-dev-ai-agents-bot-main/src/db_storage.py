@@ -46,6 +46,7 @@ _pool = None
 
 _pool_failed = False  # Track if pool creation failed to avoid retrying
 _binance_orderbook_schema_ready = False
+_schema_initialized = False
 
 
 def _get_database_url() -> str:
@@ -100,373 +101,368 @@ def get_pool():
 
 def _init_tables():
     """Create tables if they don't exist."""
+    global _schema_initialized
+
+    if _schema_initialized:
+        return
+
     pool = get_pool()
     if not pool:
         return
-    with pool.connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id SERIAL PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL DEFAULT 'buy',
-                amount_usd REAL NOT NULL,
-                entry_price REAL DEFAULT 0,
-                exit_price REAL DEFAULT 0,
-                token_amount REAL DEFAULT 0,
-                slippage_pct REAL DEFAULT 0,
-                price_impact_pct REAL DEFAULT 0,
-                entry_time TIMESTAMPTZ,
-                exit_time TIMESTAMPTZ,
-                pnl_usd REAL DEFAULT 0,
-                pnl_pct REAL DEFAULT 0,
-                status TEXT DEFAULT 'open',
-                score REAL DEFAULT 0,
-                mode TEXT DEFAULT 'paper',
-                signals JSONB DEFAULT '[]',
-                ai_confidence REAL DEFAULT 0,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS portfolio (
-                id SERIAL PRIMARY KEY,
-                initial_capital REAL NOT NULL,
-                current_capital REAL NOT NULL,
-                total_pnl REAL DEFAULT 0,
-                total_trades INTEGER DEFAULT 0,
-                wins INTEGER DEFAULT 0,
-                losses INTEGER DEFAULT 0,
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sentiment (
-                id SERIAL PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                score REAL DEFAULT 0,
-                label TEXT DEFAULT 'neutral',
-                tweet_count INTEGER DEFAULT 0,
-                positive_pct REAL DEFAULT 0,
-                negative_pct REAL DEFAULT 0,
-                cached_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(symbol)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS engine_events (
-                id SERIAL PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                data JSONB,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # DSH SessionLog table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS session_events (
-                id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                description TEXT,
-                data JSONB,
-                timestamp TIMESTAMPTZ NOT NULL,
-                session_id TEXT,
-                signal_id TEXT
-            )
-        """)
-        # Feedback Loop tables
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS feedback_signals (
-                id SERIAL PRIMARY KEY,
-                signal_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                signal TEXT NOT NULL,
-                confidence REAL DEFAULT 0,
-                factors JSONB DEFAULT '{}',
-                regime TEXT DEFAULT 'unknown',
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS feedback_outcomes (
-                id SERIAL PRIMARY KEY,
-                signal_id TEXT,
-                symbol TEXT NOT NULL,
-                pnl_usd REAL DEFAULT 0,
-                pnl_pct REAL DEFAULT 0,
-                holding_minutes REAL DEFAULT 0,
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Execution quality tracking
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS executions (
-                id SERIAL PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                amount_usd REAL DEFAULT 0,
-                expected_price REAL DEFAULT 0,
-                fill_price REAL DEFAULT 0,
-                slippage_bps REAL DEFAULT 0,
-                latency_ms REAL DEFAULT 0,
-                filled BOOLEAN DEFAULT FALSE,
-                reason TEXT DEFAULT '',
-                source TEXT DEFAULT '',
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Wallet events
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS wallet_events (
-                id SERIAL PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                wallet TEXT NOT NULL,
-                token_address TEXT DEFAULT '',
-                direction TEXT DEFAULT '',
-                amount_sol REAL DEFAULT 0,
-                data JSONB DEFAULT '{}',
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Scanner results
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scanner_results (
-                id SERIAL PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                score REAL DEFAULT 0,
-                liquidity_usd REAL DEFAULT 0,
-                volume_24h REAL DEFAULT 0,
-                price_usd REAL DEFAULT 0,
-                data JSONB DEFAULT '{}',
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Smart money consensus signals
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS smart_money_signals (
-                id SERIAL PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                token_symbol TEXT DEFAULT '',
-                wallets_buying INTEGER DEFAULT 0,
-                wallets_selling INTEGER DEFAULT 0,
-                aggregate_buy_sol REAL DEFAULT 0,
-                aggregate_sell_sol REAL DEFAULT 0,
-                avg_wallet_score REAL DEFAULT 0,
-                weighted_quality REAL DEFAULT 0,
-                confidence REAL DEFAULT 0,
-                time_window_seconds INTEGER DEFAULT 0,
-                data JSONB DEFAULT '{}',
-                timestamp TIMESTAMPTZ NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Scanner seen tokens (persists across deploys)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scanner_seen_tokens (
-                token_address TEXT PRIMARY KEY,
-                first_seen TIMESTAMPTZ DEFAULT NOW(),
-                last_seen TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # ── RBI pipeline tables (DB-first persistence for Research-Backtest-Implement) ──
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rbi_runs (
-                id TEXT PRIMARY KEY,
-                idea TEXT NOT NULL,
-                auto_mode BOOLEAN DEFAULT FALSE,
-                status TEXT DEFAULT 'queued',
-                strategy_name TEXT,
-                result TEXT,
-                error TEXT,
-                phases JSONB DEFAULT '{}',
-                created_at TIMESTAMPTZ,
-                started_at TIMESTAMPTZ,
-                finished_at TIMESTAMPTZ,
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rbi_strategies (
-                id SERIAL PRIMARY KEY,
-                strategy_name TEXT NOT NULL UNIQUE,
-                idea TEXT,
-                signal_id TEXT,
-                decision TEXT,
-                reasoning TEXT,
-                walk_forward JSONB,
-                decay_status TEXT,
-                backtest_stats JSONB DEFAULT '{}',
-                code_path TEXT,
-                deployed BOOLEAN DEFAULT FALSE,
-                elapsed_seconds REAL DEFAULT 0,
-                session_id TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rbi_session_events (
-                id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                data JSONB DEFAULT '{}',
-                timestamp TIMESTAMPTZ NOT NULL,
-                session_id TEXT,
-                signal_id TEXT
-            )
-        """)
-        # ── Alpha decay trade history (persistent — fixes in-memory-only decay) ──
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS alpha_decay_trades (
-                id SERIAL PRIMARY KEY,
-                strategy_name TEXT NOT NULL,
-                pnl_pct REAL NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
-        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS live_active BOOLEAN DEFAULT FALSE")
-        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS code_hash TEXT")
-        conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS status TEXT")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_alpha_decay_trades_name ON alpha_decay_trades(strategy_name)")
-        # Trades ↔ strategy linkage (live PnL attribution back to RBI pipeline)
-        conn.execute("""
-            ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy_name TEXT
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_status ON rbi_runs(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_created ON rbi_runs(created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_strategies_name ON rbi_strategies(strategy_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_type ON rbi_session_events(event_type)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_session ON rbi_session_events(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_time ON rbi_session_events(timestamp)")
-        # Wallet poll state (persists last poll times)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS wallet_poll_state (
-                wallet_address TEXT PRIMARY KEY,
-                last_poll_time REAL DEFAULT 0,
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # Engine state (counters, capital, etc.)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS engine_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        # OHLCV candle storage for strategy analysis
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS ohlcv_candles (
-                id SERIAL PRIMARY KEY,
-                token_address TEXT NOT NULL,
-                candle_time TIMESTAMPTZ NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                volume REAL DEFAULT 0,
-                buys INTEGER DEFAULT 0,
-                sells INTEGER DEFAULT 0,
-                source TEXT DEFAULT 'dexscreener',
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(token_address, candle_time)
-            )
-        """)
-        # Binance market data is research input, not executed trade history.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS binance_market_trades (
-                id BIGSERIAL PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                event_time TIMESTAMPTZ NOT NULL,
-                price NUMERIC NOT NULL,
-                quantity NUMERIC NOT NULL,
-                aggressor_side TEXT NOT NULL CHECK (aggressor_side IN ('BUY', 'SELL')),
-                is_buyer_maker BOOLEAN NOT NULL,
-                agg_trade_id BIGINT NOT NULL,
-                raw_data JSONB NOT NULL DEFAULT '{}',
-                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(symbol, agg_trade_id)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS binance_depth_updates (
-                id BIGSERIAL PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                event_time TIMESTAMPTZ,
-                first_update_id BIGINT,
-                final_update_id BIGINT,
-                last_update_id BIGINT,
-                bids JSONB NOT NULL DEFAULT '[]',
-                asks JSONB NOT NULL DEFAULT '[]',
-                raw_data JSONB NOT NULL DEFAULT '{}'
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS binance_orderbook_snapshots (
-                id BIGSERIAL PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                snapshot_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_update_id BIGINT NOT NULL,
-                bids JSONB NOT NULL DEFAULT '[]',
-                asks JSONB NOT NULL DEFAULT '[]',
-                raw_data JSONB NOT NULL DEFAULT '{}'
-            )
-        """)
-        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS event_time TIMESTAMPTZ")
-        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS first_update_id BIGINT")
-        conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS final_update_id BIGINT")
-    # Migration: Add timeframe column in a separate transaction
-    try:
-        with pool.connection() as conn2:
-            conn2.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
-            conn2.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
-            conn2.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
-            print("[DB] Timeframe migration complete")
-    except Exception as e:
-        print(f"[DB] Timeframe migration: {e}")
 
-    # Indexes (separate transaction so index errors don't kill the pool)
     try:
         with pool.connection() as conn:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON engine_events(event_type)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_symbol ON feedback_signals(symbol)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_time ON feedback_signals(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_signal ON feedback_outcomes(signal_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_time ON feedback_outcomes(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_symbol ON executions(symbol)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet ON wallet_events(wallet)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_trades_symbol_time ON binance_market_trades(symbol, event_time)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_depth_symbol_time ON binance_depth_updates(symbol, received_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time ON binance_orderbook_snapshots(symbol, snapshot_time)")
-            conn.commit()
-            print("[DB] Tables initialized")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id SERIAL PRIMARY KEY,
+                    token_address TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL DEFAULT 'buy',
+                    amount_usd REAL NOT NULL,
+                    entry_price REAL DEFAULT 0,
+                    exit_price REAL DEFAULT 0,
+                    token_amount REAL DEFAULT 0,
+                    slippage_pct REAL DEFAULT 0,
+                    price_impact_pct REAL DEFAULT 0,
+                    entry_time TIMESTAMPTZ,
+                    exit_time TIMESTAMPTZ,
+                    pnl_usd REAL DEFAULT 0,
+                    pnl_pct REAL DEFAULT 0,
+                    status TEXT DEFAULT 'open',
+                    score REAL DEFAULT 0,
+                    mode TEXT DEFAULT 'paper',
+                    signals JSONB DEFAULT '[]',
+                    ai_confidence REAL DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio (
+                    id SERIAL PRIMARY KEY,
+                    initial_capital REAL NOT NULL,
+                    current_capital REAL NOT NULL,
+                    total_pnl REAL DEFAULT 0,
+                    total_trades INTEGER DEFAULT 0,
+                    wins INTEGER DEFAULT 0,
+                    losses INTEGER DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sentiment (
+                    id SERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    score REAL DEFAULT 0,
+                    label TEXT DEFAULT 'neutral',
+                    tweet_count INTEGER DEFAULT 0,
+                    positive_pct REAL DEFAULT 0,
+                    negative_pct REAL DEFAULT 0,
+                    cached_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(symbol)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS engine_events (
+                    id SERIAL PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    data JSONB,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS session_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    description TEXT,
+                    data JSONB,
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    session_id TEXT,
+                    signal_id TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_signals (
+                    id SERIAL PRIMARY KEY,
+                    signal_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    signal TEXT NOT NULL,
+                    confidence REAL DEFAULT 0,
+                    factors JSONB DEFAULT '{}',
+                    regime TEXT DEFAULT 'unknown',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_outcomes (
+                    id SERIAL PRIMARY KEY,
+                    signal_id TEXT,
+                    symbol TEXT NOT NULL,
+                    pnl_usd REAL DEFAULT 0,
+                    pnl_pct REAL DEFAULT 0,
+                    holding_minutes REAL DEFAULT 0,
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS executions (
+                    id SERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    amount_usd REAL DEFAULT 0,
+                    expected_price REAL DEFAULT 0,
+                    fill_price REAL DEFAULT 0,
+                    slippage_bps REAL DEFAULT 0,
+                    latency_ms REAL DEFAULT 0,
+                    filled BOOLEAN DEFAULT FALSE,
+                    reason TEXT DEFAULT '',
+                    source TEXT DEFAULT '',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_events (
+                    id SERIAL PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    wallet TEXT NOT NULL,
+                    token_address TEXT DEFAULT '',
+                    direction TEXT DEFAULT '',
+                    amount_sol REAL DEFAULT 0,
+                    data JSONB DEFAULT '{}',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scanner_results (
+                    id SERIAL PRIMARY KEY,
+                    token_address TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    score REAL DEFAULT 0,
+                    liquidity_usd REAL DEFAULT 0,
+                    volume_24h REAL DEFAULT 0,
+                    price_usd REAL DEFAULT 0,
+                    data JSONB DEFAULT '{}',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS smart_money_signals (
+                    id SERIAL PRIMARY KEY,
+                    token_address TEXT NOT NULL,
+                    token_symbol TEXT DEFAULT '',
+                    wallets_buying INTEGER DEFAULT 0,
+                    wallets_selling INTEGER DEFAULT 0,
+                    aggregate_buy_sol REAL DEFAULT 0,
+                    aggregate_sell_sol REAL DEFAULT 0,
+                    avg_wallet_score REAL DEFAULT 0,
+                    weighted_quality REAL DEFAULT 0,
+                    confidence REAL DEFAULT 0,
+                    time_window_seconds INTEGER DEFAULT 0,
+                    data JSONB DEFAULT '{}',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scanner_seen_tokens (
+                    token_address TEXT PRIMARY KEY,
+                    first_seen TIMESTAMPTZ DEFAULT NOW(),
+                    last_seen TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rbi_runs (
+                    id TEXT PRIMARY KEY,
+                    idea TEXT NOT NULL,
+                    auto_mode BOOLEAN DEFAULT FALSE,
+                    status TEXT DEFAULT 'queued',
+                    strategy_name TEXT,
+                    result TEXT,
+                    error TEXT,
+                    phases JSONB DEFAULT '{}',
+                    created_at TIMESTAMPTZ,
+                    started_at TIMESTAMPTZ,
+                    finished_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rbi_strategies (
+                    id SERIAL PRIMARY KEY,
+                    strategy_name TEXT NOT NULL UNIQUE,
+                    idea TEXT,
+                    signal_id TEXT,
+                    decision TEXT,
+                    reasoning TEXT,
+                    walk_forward JSONB,
+                    decay_status TEXT,
+                    backtest_stats JSONB DEFAULT '{}',
+                    code_path TEXT,
+                    deployed BOOLEAN DEFAULT FALSE,
+                    elapsed_seconds REAL DEFAULT 0,
+                    session_id TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rbi_session_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    data JSONB DEFAULT '{}',
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    session_id TEXT,
+                    signal_id TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS alpha_decay_trades (
+                    id SERIAL PRIMARY KEY,
+                    strategy_name TEXT NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS live_active BOOLEAN DEFAULT FALSE")
+            conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS code_hash TEXT")
+            conn.execute("ALTER TABLE rbi_strategies ADD COLUMN IF NOT EXISTS status TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_alpha_decay_trades_name ON alpha_decay_trades(strategy_name)")
+            conn.execute("ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy_name TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_status ON rbi_runs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_runs_created ON rbi_runs(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_strategies_name ON rbi_strategies(strategy_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_type ON rbi_session_events(event_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_session ON rbi_session_events(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rbi_session_events_time ON rbi_session_events(timestamp)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_poll_state (
+                    wallet_address TEXT PRIMARY KEY,
+                    last_poll_time REAL DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS engine_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ohlcv_candles (
+                    id SERIAL PRIMARY KEY,
+                    token_address TEXT NOT NULL,
+                    candle_time TIMESTAMPTZ NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume REAL DEFAULT 0,
+                    buys INTEGER DEFAULT 0,
+                    sells INTEGER DEFAULT 0,
+                    source TEXT DEFAULT 'dexscreener',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(token_address, candle_time)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS binance_market_trades (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    event_time TIMESTAMPTZ NOT NULL,
+                    price NUMERIC NOT NULL,
+                    quantity NUMERIC NOT NULL,
+                    aggressor_side TEXT NOT NULL CHECK (aggressor_side IN ('BUY', 'SELL')),
+                    is_buyer_maker BOOLEAN NOT NULL,
+                    agg_trade_id BIGINT NOT NULL,
+                    raw_data JSONB NOT NULL DEFAULT '{}',
+                    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(symbol, agg_trade_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS binance_depth_updates (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    event_time TIMESTAMPTZ,
+                    first_update_id BIGINT,
+                    final_update_id BIGINT,
+                    last_update_id BIGINT,
+                    bids JSONB NOT NULL DEFAULT '[]',
+                    asks JSONB NOT NULL DEFAULT '[]',
+                    raw_data JSONB NOT NULL DEFAULT '{}'
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS binance_orderbook_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    snapshot_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_update_id BIGINT NOT NULL,
+                    bids JSONB NOT NULL DEFAULT '[]',
+                    asks JSONB NOT NULL DEFAULT '[]',
+                    raw_data JSONB NOT NULL DEFAULT '{}'
+                )
+            """)
+            conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS event_time TIMESTAMPTZ")
+            conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS first_update_id BIGINT")
+            conn.execute("ALTER TABLE binance_depth_updates ADD COLUMN IF NOT EXISTS final_update_id BIGINT")
+
+        try:
+            with pool.connection() as conn2:
+                conn2.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
+                conn2.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
+                conn2.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
+                print("[DB] Timeframe migration complete")
+        except Exception as e:
+            print(f"[DB] Timeframe migration: {e}")
+
+        try:
+            with pool.connection() as conn:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON engine_events(event_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_signal ON session_events(signal_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_session_events_time ON session_events(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_symbol ON feedback_signals(symbol)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_signals_time ON feedback_signals(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_signal ON feedback_outcomes(signal_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_outcomes_time ON feedback_outcomes(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_symbol ON executions(symbol)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet ON wallet_events(wallet)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_events_time ON wallet_events(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_token ON scanner_results(token_address)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_scanner_results_time ON scanner_results(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token ON ohlcv_candles(token_address)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_time ON ohlcv_candles(candle_time)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_token_time ON ohlcv_candles(token_address, candle_time)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_timeframe ON ohlcv_candles(timeframe)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_trades_symbol_time ON binance_market_trades(symbol, event_time)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_depth_symbol_time ON binance_depth_updates(symbol, received_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time ON binance_orderbook_snapshots(symbol, snapshot_time)")
+                conn.commit()
+                print("[DB] Tables initialized")
+        except Exception as e:
+            print(f"[DB] Index init error: {e}")
     except Exception as e:
-        print(f"[DB] Index init error: {e}")
+        print(f"[DB] Table init error: {e}")
+    finally:
+        _schema_initialized = True
 
 
 def _ensure_binance_orderbook_schema() -> bool:
-    """Repair the order-book table after a transient initialization failure."""
+    """Ensure the order-book snapshot table exists before a snapshot write."""
     global _binance_orderbook_schema_ready
+
     if _binance_orderbook_schema_ready:
         return True
 
@@ -487,31 +483,16 @@ def _ensure_binance_orderbook_schema() -> bool:
                     raw_data JSONB NOT NULL DEFAULT '{}'
                 )
             """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time
-                ON binance_orderbook_snapshots(symbol, snapshot_time)
-            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time "
+                "ON binance_orderbook_snapshots(symbol, snapshot_time)"
+            )
+            conn.commit()
         _binance_orderbook_schema_ready = True
         return True
     except Exception as e:
-        print(f"[DB] Binance order-book schema unavailable: {e}")
+        print(f"[DB] Order-book schema init error: {e}")
         return False
-
-
-# ── Trade Operations ─────────────────────────────────────────
-
-def _save_trade_jsonl(trade_dict: dict, action: str = "entry"):
-    """Save trade to JSONL as fallback when DB is unavailable."""
-    try:
-        jsonl_path = Path("src/data/paper_trading/paper_trades.jsonl")
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        entry = dict(trade_dict)
-        entry["action"] = action
-        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
-        with open(jsonl_path, "a") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
-    except Exception:
-        pass
 
 
 def save_trade(trade_dict: dict, mode: str = "paper") -> Optional[int]:
