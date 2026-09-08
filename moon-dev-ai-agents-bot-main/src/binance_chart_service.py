@@ -5,6 +5,7 @@ from typing import Any
 
 from src.binance_footprint import aggregate_ohlc, aggregate_trades, detect_order_flow_signals
 from src.chart_contracts import ChartOverlay, ChartSnapshot, timeframe_label, utc_now
+from src.indicator_registry import compute_indicators
 
 
 class BinanceChartService:
@@ -59,6 +60,7 @@ class BinanceChartService:
                 "ask_depth": ask_depth,
                 "imbalance": self._ratio(bid_depth, ask_depth),
             },
+            indicators=compute_indicators(serialized_candles),
             overlays=overlays + self._agent_overlays(agent_signals),
             agent_signals=agent_signals,
             warnings=[] if trades else ["No Binance trades were available for this window."],

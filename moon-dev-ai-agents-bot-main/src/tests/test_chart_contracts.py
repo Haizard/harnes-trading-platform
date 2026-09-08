@@ -1,4 +1,4 @@
-from src.chart_contracts import ChartOverlay, ChartSnapshot, normalize_confidence
+from src.chart_contracts import ChartOverlay, ChartSnapshot, normalize_chart_contributions, normalize_confidence
 
 
 def test_normalize_confidence_accepts_common_formats():
@@ -20,3 +20,12 @@ def test_overlay_preserves_raw_confidence_and_serializes():
 def test_empty_snapshot_is_serializable():
     snapshot = ChartSnapshot(symbol="BTCUSDT", timeframe="5m", as_of="now", warnings=["empty"])
     assert snapshot.to_dict()["warnings"] == ["empty"]
+
+
+def test_chart_contributions_reject_unknown_types():
+    contributions = normalize_chart_contributions([
+        {"type": "price_zone", "price_low": 10, "price_high": 12, "confidence": "80%"},
+        {"type": "execute_javascript", "text": "bad"},
+    ])
+    assert len(contributions) == 1
+    assert contributions[0].confidence == 0.8

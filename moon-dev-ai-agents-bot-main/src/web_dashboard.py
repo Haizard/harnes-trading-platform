@@ -986,7 +986,14 @@ async def api_binance_ai_analyze(payload: dict):
             ChatMessage(role="user", content=f"Question: {question}\nChart context:\n{context}"),
         ], ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt))
         analysis = response.json_data or {"summary": response.text, "bias": "UNKNOWN", "confidence": 0, "action": "WAIT"}
-        return {"available": True, "analysis": analysis, "model_text": response.text}
+        from src.chart_contracts import normalize_chart_contributions
+        contributions = normalize_chart_contributions(analysis.get("chart_contributions", []), "bedrock")
+        return {
+            "available": True,
+            "analysis": analysis,
+            "model_text": response.text,
+            "contributions": [item.__dict__ for item in contributions],
+        }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
 

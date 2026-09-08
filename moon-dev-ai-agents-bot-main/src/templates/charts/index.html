@@ -605,7 +605,12 @@
         document.getElementById('ai-status').textContent = 'ANALYZING...';
         try {
             const response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question, snapshot: state.snapshot}) });
-            renderAiAnalysis(await response.json());
+            const result = await response.json();
+            if (Array.isArray(result.contributions) && state.snapshot) {
+                state.snapshot.overlays = [...(state.snapshot.overlays || []), ...result.contributions];
+                render();
+            }
+            renderAiAnalysis(result);
         } catch (error) {
             renderAiAnalysis({available: false, message: `Analysis unavailable: ${error.message}`});
         }

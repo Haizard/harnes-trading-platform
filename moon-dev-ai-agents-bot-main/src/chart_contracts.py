@@ -30,6 +30,39 @@ def normalize_confidence(value: object) -> float | None:
     return round(normalized, 4)
 
 
+_ALLOWED_CONTRIBUTION_TYPES = {"marker", "price_zone", "horizontal_level", "text_note", "panel_signal"}
+
+
+def normalize_chart_contributions(contributions: object, source: str = "bedrock") -> list["ChartOverlay"]:
+    """Validate model/agent chart contributions against the closed overlay contract."""
+    if not isinstance(contributions, list):
+        return []
+    normalized = []
+    for index, item in enumerate(contributions[:40]):
+        if not isinstance(item, dict) or item.get("type") not in _ALLOWED_CONTRIBUTION_TYPES:
+            continue
+        try:
+            normalized.append(ChartOverlay(
+                id=str(item.get("id") or f"{source}-{index}"),
+                source=source,
+                type=item["type"],
+                label=str(item.get("label") or item.get("text") or ""),
+                bucket_time=item.get("bucket_time"),
+                price=float(item["price"]) if item.get("price") is not None else None,
+                price_low=float(item["price_low"]) if item.get("price_low") is not None else None,
+                price_high=float(item["price_high"]) if item.get("price_high") is not None else None,
+                side=item.get("side"),
+                color=str(item.get("color") or "#ad9aff"),
+                confidence=item.get("confidence"),
+                severity=str(item.get("severity") or "info"),
+                panel=item.get("panel"),
+                details={"raw_contribution": item},
+            ))
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
 @dataclass
 class ChartOverlay:
     """A renderable contribution anchored to time, price, or a panel."""
