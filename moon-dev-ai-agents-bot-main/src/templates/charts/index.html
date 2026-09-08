@@ -119,7 +119,8 @@
         const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
         const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
         const targetColumnWidth = Math.max(80, Math.min(120, plotWidth / Math.max(state.visible, 1)));
-        const chartWidth = Math.min(plotWidth, Math.max(320, visibleBars.length * targetColumnWidth));
+        const zoomScale = 30 / Math.max(state.visible, 1);
+        const chartWidth = Math.min(plotWidth, Math.max(120, visibleBars.length * targetColumnWidth * zoomScale));
         const chartLeft = left + (plotWidth - chartWidth) / 2;
         const xStep = chartWidth / Math.max(visibleBars.length, 1);
         const rowCount = Math.max(10, Math.min(24, Math.floor(plotHeight / 25)));
