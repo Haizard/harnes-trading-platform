@@ -43,6 +43,17 @@
         .legend-item { display: flex; align-items: center; gap: 4px; font-size: 10px; }
         .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
         .back-link { color: var(--accent); text-decoration: none; font-size: 12px; }
+        .indicator-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; margin: 3px 0; border-radius: 4px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); }
+        .indicator-item.active { border-color: var(--accent); background: rgba(34,211,238,0.05); }
+        .indicator-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .indicator-label { flex: 1; font-size: 11px; }
+        .indicator-actions { display: flex; gap: 4px; }
+        .indicator-btn { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text); font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .indicator-btn:hover { border-color: var(--accent); background: rgba(34,211,238,0.1); }
+        .indicator-btn.toggle.active { color: var(--green); }
+        .indicator-btn.remove:hover { color: var(--red); border-color: var(--red); }
+        .indicator-add { margin-top: 8px; }
+        .indicator-add select { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; }
     </style>
 </head>
 <body>
@@ -77,7 +88,11 @@
             <div id="tv-embed-container" class="tv-embed" style="display:none;"></div>
         </div>
         <div class="smc-panel" id="smc-panel">
-            <h3>🎯 SMC Analysis</h3>
+            <h3>📈 Indicators</h3>
+            <div id="indicator-panel">
+                <p style="color:var(--dim);">Loading indicators...</p>
+            </div>
+            <h3 style="margin-top:16px;">🎯 SMC Analysis</h3>
             <div class="legend">
                 <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div> Demand</div>
                 <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> Supply</div>
@@ -91,9 +106,195 @@
         </div>
     </div>
 <script>
-let chart, candleSeries, volumeSeries, ema9Series, ema21Series, bbUpperSeries, bbLowerSeries;
+let chart, candleSeries, volumeSeries;
 let smcVisible = true, tvVisible = false;
 let smcData = null;
+
+// Indicator management
+const activeIndicators = {
+  ema9: { series: null, label: 'EMA 9', color: '#22d3ee', enabled: true, visible: true },
+  ema21: { series: null, label: 'EMA 21', color: '#a78bfa', enabled: true, visible: true },
+  bb_upper: { series: null, label: 'BB Upper', color: '#fbbf24', enabled: true, visible: true },
+  bb_lower: { series: null, label: 'BB Lower', color: '#fbbf24', enabled: true, visible: true },
+};
+
+function updateIndicatorPanel() {
+  const el = document.getElementById('indicator-panel');
+  if (!el) return;
+  let html = '<h4>📈 Active Indicators</h4>';
+  
+  for (const [key, ind] of Object.entries(activeIndicators)) {
+    if (!ind.series) continue;
+    const toggleIcon = ind.visible ? '👁' : '👁‍🗨';
+    const toggleClass = ind.visible ? 'active' : '';
+    html += `<div class="indicator-item ${toggleClass}">
+      <span class="indicator-dot" style="background:${ind.color}"></span>
+      <span class="indicator-label">${ind.label}</span>
+      <div class="indicator-actions">
+        <button class="indicator-btn toggle" data-key="${key}" title="Toggle visibility">${toggleIcon}</button>
+        <button class="indicator-btn remove" data-key="${key}" title="Remove indicator">✕</button>
+      </div>
+    </div>`;
+  }
+  
+  // Add indicator dropdown
+  html += `<div class="indicator-add">
+    <select id="add-indicator-select">
+      <option value="">+ Add Indicator</option>
+      <option value="ema_50">EMA 50</option>
+      <option value="ema_200">EMA 200</option>
+      <option value="rsi_14">RSI 14</option>
+      <option value="atr_14">ATR 14</option>
+    </select>
+  </div>`;
+  
+  el.innerHTML = html;
+  
+  // Bind toggle buttons
+  el.querySelectorAll('.indicator-btn.toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const ind = activeIndicators[key];
+      if (ind && ind.series) {
+        ind.visible = !ind.visible;
+        if (ind.visible) {
+          chart.addSeries(ind.series);
+        } else {
+          chart.removeSeries(ind.series);
+        }
+        updateIndicatorPanel();
+      }
+    });
+  });
+  
+  // Bind remove buttons
+  el.querySelectorAll('.indicator-btn.remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const ind = activeIndicators[key];
+      if (ind && ind.series) {
+        chart.removeSeries(ind.series);
+        ind.series = null;
+        ind.enabled = false;
+        updateIndicatorPanel();
+      }
+    });
+  });
+  
+  // Bind add indicator
+  const addSelect = el.querySelector('#add-indicator-select');
+  if (addSelect) {
+    addSelect.addEventListener('change', () => {
+      const val = addSelect.value;
+      if (val) addNewIndicator(val);
+      addSelect.value = '';
+    });
+  }
+}
+
+function addNewIndicator(type) {
+  if (!chart || !smcData || !smcData.candles) return;
+  const candles = smcData.candles;
+  const closes = candles.map(c => c.close);
+  const times = candles.map(c => c.time);
+  
+  let series = null;
+  let label = '';
+  let color = '#22d3ee';
+  
+  switch(type) {
+    case 'ema_50':
+      const ema50 = computeEMA(closes, 50);
+      series = chart.addLineSeries({ color: '#4ade80', lineWidth: 1 });
+      series.setData(times.map((t, i) => ema50[i] !== null ? { time: t, value: ema50[i] } : null).filter(Boolean));
+      label = 'EMA 50';
+      color = '#4ade80';
+      break;
+    case 'ema_200':
+      const ema200 = computeEMA(closes, 200);
+      series = chart.addLineSeries({ color: '#f87171', lineWidth: 1 });
+      series.setData(times.map((t, i) => ema200[i] !== null ? { time: t, value: ema200[i] } : null).filter(Boolean));
+      label = 'EMA 200';
+      color = '#f87171';
+      break;
+    case 'rsi_14':
+      // RSI as separate panel would be complex, show as price line
+      const rsi = computeRSI(closes, 14);
+      if (rsi.length) {
+        const avgRsi = rsi.reduce((a, b) => a + b.value, 0) / rsi.length;
+        const pl = candleSeries.createPriceLine({ price: avgRsi, color: '#a78bfa', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RSI Avg' });
+        activeIndicators.rsi_14 = { series: pl, label: 'RSI 14 (avg)', color: '#a78bfa', enabled: true, visible: true, isPriceLine: true };
+        updateIndicatorPanel();
+        return;
+      }
+      break;
+    case 'atr_14':
+      // ATR as price line
+      const atr = computeATR(candles, 14);
+      if (atr !== null) {
+        const pl = candleSeries.createPriceLine({ price: atr, color: '#ff6b35', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ATR' });
+        activeIndicators.atr_14 = { series: pl, label: 'ATR 14', color: '#ff6b35', enabled: true, visible: true, isPriceLine: true };
+        updateIndicatorPanel();
+        return;
+      }
+      break;
+  }
+  
+  if (series) {
+    const key = type + '_' + Date.now();
+    activeIndicators[key] = { series, label, color, enabled: true, visible: true };
+    updateIndicatorPanel();
+  }
+}
+
+function computeEMA(data, period) {
+  if (data.length < period) return [];
+  const result = new Array(period - 1).fill(null);
+  let sma = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result.push(sma);
+  const mult = 2 / (period + 1);
+  for (let i = period; i < data.length; i++) {
+    sma = (data[i] - sma) * mult + sma;
+    result.push(sma);
+  }
+  return result;
+}
+
+function computeRSI(closes, period) {
+  if (closes.length < period + 1) return [];
+  const gains = [], losses = [];
+  for (let i = 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i-1];
+    gains.push(Math.max(0, change));
+    losses.push(Math.max(0, -change));
+  }
+  if (gains.length < period) return [];
+  let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const values = [];
+  for (let i = period; i < gains.length; i++) {
+    avgGain = (avgGain * (period - 1) + gains[i]) / period;
+    avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+    const rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+    values.push({ time: i + 1, value: rsi });
+  }
+  return values;
+}
+
+function computeATR(candles, period) {
+  if (candles.length < period + 1) return null;
+  const trueRanges = [];
+  for (let i = 1; i < candles.length; i++) {
+    const high = candles[i].high, low = candles[i].low, prevClose = candles[i-1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+  if (trueRanges.length < period) return null;
+  let atr = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trueRanges.length; i++) {
+    atr = (atr * (period - 1) + trueRanges[i]) / period;
+  }
+  return atr;
+}
 
 function getExchangeForSymbol(sym) {
   const base = sym.replace("USDT","").replace("PERP","");
@@ -109,7 +310,8 @@ function toggleTVWidget() {
     const sym = document.getElementById("symbol-select").value;
     const tf = document.getElementById("interval-select").value;
     const ex = getExchangeForSymbol(sym);
-    c.innerHTML = "<iframe src="https://s.tradingview.com/widgetembed/?symbol=" + ex + "&interval=" + tf.toUpperCase() + "&style=1&locale=en&toolbar_bg=%230a0a0f&theme=dark&hide_side_toolbar=0&allow_symbol_change=1" width="100%" height="100%" frameborder="0"></iframe>";
+    const tvUrl = 'https://s.tradingview.com/widgetembed/?symbol=' + ex + '&interval=' + tf.toUpperCase() + '&style=1&locale=en&toolbar_bg=%230a0a0f&theme=dark&hide_side_toolbar=0&allow_symbol_change=1';
+    c.innerHTML = '<iframe src="' + tvUrl + '" width="100%" height="100%" frameborder="0"></iframe>';
     c.style.display = "block";
   } else {
     c.style.display = "none";
@@ -130,19 +332,25 @@ function toggleSMC() {
 async function loadChart() {
   const sym = document.getElementById("symbol-select").value;
   const tf = document.getElementById("interval-select").value;
-  document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Loading...</span></div>";
+  document.getElementById('info-bar').innerHTML = '<div class="info-item"><span class="info-label">Loading...</span></div>';
   try {
     const r = await fetch("/api/smc?symbol=" + sym + "&interval=" + tf);
     const data = await r.json();
-    if (data.error) { document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Error: " + data.error + "</span></div>"; return; }
+    if (data.error) { document.getElementById('info-bar').innerHTML = '<div class="info-item"><span class="info-label">Error: ' + data.error + '</span></div>'; return; }
     renderChart(data);
-  } catch(e) { document.getElementById("info-bar").innerHTML = "<div class="info-item"><span class="info-label">Fetch error: " + e.message + "</span></div>"; }
+  } catch(e) { document.getElementById('info-bar').innerHTML = '<div class="info-item"><span class="info-label">Fetch error: ' + e.message + '</span></div>'; }
 }
 
 function renderChart(data) {
   const container = document.getElementById("chart-container");
   container.innerHTML = "";
   if (chart) { chart.remove(); chart = null; }
+  
+  // Clear indicator references
+  for (const ind of Object.values(activeIndicators)) {
+    ind.series = null;
+  }
+  
   chart = LightweightCharts.createChart(container, {
     width: container.clientWidth, height: container.clientHeight || 500,
     layout: { background: { color: "#0a0a0f" }, textColor: "#e0e0e0" },
@@ -157,12 +365,27 @@ function renderChart(data) {
   const vols = candles.map(c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? "rgba(74,222,128,0.3)" : "rgba(248,113,113,0.3)" }));
   candleSeries.setData(candles);
   volumeSeries.setData(vols);
+  
+  // Add default indicators
   if (data.indicators) {
-    if (data.indicators.ema9) { ema9Series = chart.addLineSeries({ color: "#22d3ee", lineWidth: 1 }); ema9Series.setData(data.indicators.ema9); }
-    if (data.indicators.ema21) { ema21Series = chart.addLineSeries({ color: "#a78bfa", lineWidth: 1 }); ema21Series.setData(data.indicators.ema21); }
-    if (data.indicators.bb_upper) { bbUpperSeries = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 }); bbUpperSeries.setData(data.indicators.bb_upper); }
-    if (data.indicators.bb_lower) { bbLowerSeries = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 }); bbLowerSeries.setData(data.indicators.bb_lower); }
+    if (data.indicators.ema9) {
+      activeIndicators.ema9.series = chart.addLineSeries({ color: "#22d3ee", lineWidth: 1 });
+      activeIndicators.ema9.series.setData(data.indicators.ema9);
+    }
+    if (data.indicators.ema21) {
+      activeIndicators.ema21.series = chart.addLineSeries({ color: "#a78bfa", lineWidth: 1 });
+      activeIndicators.ema21.series.setData(data.indicators.ema21);
+    }
+    if (data.indicators.bb_upper) {
+      activeIndicators.bb_upper.series = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 });
+      activeIndicators.bb_upper.series.setData(data.indicators.bb_upper);
+    }
+    if (data.indicators.bb_lower) {
+      activeIndicators.bb_lower.series = chart.addLineSeries({ color: "#fbbf24", lineWidth: 1, lineStyle: 2 });
+      activeIndicators.bb_lower.series.setData(data.indicators.bb_lower);
+    }
   }
+  
   smcData = data;
   if (smcVisible) drawSMCOverlays();
   renderInfoBar(data);
@@ -170,6 +393,7 @@ function renderChart(data) {
   renderRBILegend(data);
   renderRBIStrategyPanel(data);
   subscribeRBIClickHandler(data);
+  updateIndicatorPanel();
   chart.timeScale().fitContent();
 }
 
@@ -304,6 +528,23 @@ function clearSMCOverlays() {
   obLines = []; fvgAreas = []; liqLines = [];
 }
 
+function clearAllIndicators() {
+  for (const [key, ind] of Object.entries(activeIndicators)) {
+    if (ind.series) {
+      try {
+        if (ind.isPriceLine) {
+          candleSeries.removePriceLine(ind.series);
+        } else {
+          chart.removeSeries(ind.series);
+        }
+      } catch(e) {}
+      ind.series = null;
+      ind.enabled = false;
+    }
+  }
+  updateIndicatorPanel();
+}
+
 function drawSMCOverlays() {
   if (!smcData || !candleSeries) return;
   clearSMCOverlays();
@@ -351,71 +592,71 @@ function renderInfoBar(data) {
   if (!c.length) return;
   const last = c[c.length - 1];
   const prev = c[c.length - 2] || last;
-  const chg = ((last.close - prev.close) / prev.max(prev.close, 1e-10) * 100).toFixed(2);
-  const cls = last.close >= prev.close ? "up" : "down";
+  const chg = ((last.close - prev.close) / Math.max(prev.close, 1e-10) * 100).toFixed(2);
+  const cls = last.close >= prev.close ? 'up' : 'down';
   const obCount = (data.order_blocks || []).length;
   const fvgCount = (data.fvgs || []).length;
   const liqCount = (data.liquidity || []).length;
   const bosCount = (data.bos || []).length;
   const structCount = (data.structure || []).length;
-  document.getElementById("info-bar").innerHTML = [
-    "<div class="info-item"><span class="info-label">Last:</span> <span class="info-value">" + last.close.toFixed(4) + "</span></div>",
-    "<div class="info-item"><span class="info-label">Change:</span> <span class="info-value " + cls + "">" + chg + "%</span></div>",
-    "<div class="info-item"><span class="info-label">OB:</span> <span class="info-value">" + obCount + "</span></div>",
-    "<div class="info-item"><span class="info-label">FVG:</span> <span class="info-value">" + fvgCount + "</span></div>",
-    "<div class="info-item"><span class="info-label">Liq:</span> <span class="info-value">" + liqCount + "</span></div>",
-    "<div class="info-item"><span class="info-label">BOS:</span> <span class="info-value">" + bosCount + "</span></div>",
-    "<div class="info-item"><span class="info-label">Structure:</span> <span class="info-value">" + structCount + "</span></div>"
-  ].join("");
+  document.getElementById('info-bar').innerHTML = [
+    `<div class="info-item"><span class="info-label">Last:</span> <span class="info-value">${last.close.toFixed(4)}</span></div>`,
+    `<div class="info-item"><span class="info-label">Change:</span> <span class="info-value ${cls}">${chg}%</span></div>`,
+    `<div class="info-item"><span class="info-label">OB:</span> <span class="info-value">${obCount}</span></div>`,
+    `<div class="info-item"><span class="info-label">FVG:</span> <span class="info-value">${fvgCount}</span></div>`,
+    `<div class="info-item"><span class="info-label">Liq:</span> <span class="info-value">${liqCount}</span></div>`,
+    `<div class="info-item"><span class="info-label">BOS:</span> <span class="info-value">${bosCount}</span></div>`,
+    `<div class="info-item"><span class="info-label">Structure:</span> <span class="info-value">${structCount}</span></div>`
+  ].join('');
 }
 
 function renderSMCPanel(data) {
-  const el = document.getElementById("smc-content");
-  let html = "";
+  const el = document.getElementById('smc-content');
+  let html = '';
   const obs = data.order_blocks || [];
   if (obs.length) {
-    html += "<div class="smc-section"><h4>Order Blocks</h4>";
+    html += '<div class="smc-section"><h4>Order Blocks</h4>';
     obs.slice(-8).forEach(ob => {
-      const cls = ob.type === "demand" ? "demand" : "supply";
-      html += "<div class="smc-item " + cls +">" + ob.type.toUpperCase() + " | " + ob.low.toFixed(4) + " - " + ob.high.toFixed(4) + (ob.mitigated ? " [mitigated]" : "") + "</div>";
+      const cls = ob.type === 'demand' ? 'demand' : 'supply';
+      html += `<div class="smc-item ${cls}">${ob.type.toUpperCase()} | ${ob.low.toFixed(4)} - ${ob.high.toFixed(4)}${ob.mitigated ? ' [mitigated]' : ''}</div>`;
     });
-    html += "</div>";
+    html += '</div>';
   }
   const fvgs = data.fvgs || [];
   if (fvgs.length) {
-    html += "<div class="smc-section"><h4>Fair Value Gaps</h4>";
+    html += '<div class="smc-section"><h4>Fair Value Gaps</h4>';
     fvgs.slice(-8).forEach(f => {
-      html += "<div class="smc-item fvg">" + f.type.toUpperCase() + " | " + f.low.toFixed(4) + " - " + f.high.toFixed(4) + (f.filled ? " [filled]" : "") + "</div>";
+      html += `<div class="smc-item fvg">${f.type.toUpperCase()} | ${f.low.toFixed(4)} - ${f.high.toFixed(4)}${f.filled ? ' [filled]' : ''}</div>`;
     });
-    html += "</div>";
+    html += '</div>';
   }
   const liq = data.liquidity || [];
   if (liq.length) {
-    html += "<div class="smc-section"><h4>Liquidity Levels</h4>";
+    html += '<div class="smc-section"><h4>Liquidity Levels</h4>';
     liq.slice(-6).forEach(l => {
-      html += "<div class="smc-item structure">" + l.type + " | " + l.price.toFixed(4) + " (" + l.touches + "x)</div>";
+      html += `<div class="smc-item structure">${l.type} | ${l.price.toFixed(4)} (${l.touches}x)</div>`;
     });
-    html += "</div>";
+    html += '</div>';
   }
   const struct = data.structure || [];
   if (struct.length) {
-    html += "<div class="smc-section"><h4>Market Structure</h4>";
+    html += '<div class="smc-section"><h4>Market Structure</h4>';
     struct.slice(-10).forEach(s => {
-      const cls = ["HH","HL"].includes(s.type) ? "bullish" : "bearish";
-      html += "<div class="smc-item " + cls +">" + s.type + " | " + s.price.toFixed(4) + "</div>";
+      const cls = ['HH','HL'].includes(s.type) ? 'bullish' : 'bearish';
+      html += `<div class="smc-item ${cls}">${s.type} | ${s.price.toFixed(4)}</div>`;
     });
-    html += "</div>";
+    html += '</div>';
   }
   const bos = data.bos || [];
   if (bos.length) {
-    html += "<div class="smc-section"><h4>Break of Structure</h4>";
+    html += '<div class="smc-section"><h4>Break of Structure</h4>';
     bos.slice(-6).forEach(b => {
-      const cls = b.direction === "bullish" ? "bullish" : "bearish";
-      html += "<div class="smc-item " + cls +">BOS " + b.direction.toUpperCase() + " @ " + b.price.toFixed(4) + "</div>";
+      const cls = b.direction === 'bullish' ? 'bullish' : 'bearish';
+      html += `<div class="smc-item ${cls}">BOS ${b.direction.toUpperCase()} @ ${b.price.toFixed(4)}</div>`;
     });
-    html += "</div>";
+    html += '</div>';
   }
-  if (!html) html = "<p style="color:var(--dim);">No SMC patterns detected</p>";
+  if (!html) html = '<p style="color:var(--dim);">No SMC patterns detected</p>';
   el.innerHTML = html;
 }
 
