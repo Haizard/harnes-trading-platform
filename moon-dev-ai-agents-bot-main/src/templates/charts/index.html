@@ -118,8 +118,9 @@
         const prices = visibleBars.flatMap(bar => bar.rows.map(row => Number(row.price)));
         const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
         const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
-        const chartWidth = plotWidth;
-        const chartLeft = left;
+        const targetColumnWidth = Math.max(80, Math.min(120, plotWidth / Math.max(state.visible, 1)));
+        const chartWidth = Math.min(plotWidth, Math.max(320, visibleBars.length * targetColumnWidth));
+        const chartLeft = left + (plotWidth - chartWidth) / 2;
         const xStep = chartWidth / Math.max(visibleBars.length, 1);
         const rowCount = Math.max(10, Math.min(24, Math.floor(plotHeight / 25)));
         const displayStep = state.tickSize * Math.max(1, Math.ceil(range / (state.tickSize * rowCount)));
@@ -149,10 +150,13 @@
                 context.fillText((displayHigh - line * displayRange / 5).toFixed(Math.min(4, Math.max(2, state.tickSize < 1 ? 3 : 2))), left + plotWidth + 8, lineY + 3);
             }
         }
+        context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
+        context.fillText('BUY', left + 6, top - 24);
+        context.fillText('SELL', left + plotWidth - 34, top - 24);
         visibleBars.forEach((bar, index) => {
             const x = chartLeft + index * xStep;
             const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
-            const cellWidth = Math.max(22, Math.min(52, xStep * .28));
+            const cellWidth = Math.max(8, Math.min(44, xStep * .34));
             const barSignals = state.signals.filter(signal => signal.bucket_time === bar.time);
             const rows = groupedRows(bar);
             context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
@@ -162,25 +166,35 @@
             context.setLineDash([3, 3]);
             context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
             context.setLineDash([]);
-            context.globalAlpha = 0.9;
+            context.globalAlpha = 0.65;
             context.fillStyle = candleColor;
             const bodyTop = Math.min(priceY(bar.open), priceY(bar.close));
             const bodyHeight = Math.max(4, Math.abs(priceY(bar.open) - priceY(bar.close)));
-            context.fillRect(x + xStep / 2 - Math.max(3, xStep * 0.18), bodyTop, Math.max(6, xStep * 0.36), bodyHeight);
+            context.fillRect(x + xStep / 2 - 2, bodyTop, 4, bodyHeight);
             context.globalAlpha = 1;
-            const relevantRows = labelRows.filter(price => rows.has(price));
-            relevantRows.forEach(price => {
+            const showValues = xStep >= 48 || index === visibleBars.length - 1;
+            displayRows.forEach(price => {
                 const row = rows.get(price) || {buy_volume: 0, sell_volume: 0, total_volume: 0};
                 const rowY = priceY(price);
                 const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
                 const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
                 if (buy > 0) {
                     context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
-                    context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    context.fillRect(x + xStep / 2 - cellWidth - 3, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    if (showValues) {
+                        context.fillStyle = '#d7dee8';
+                        context.font = '10px Consolas, monospace';
+                        context.fillText(formatVolume(buy), x + xStep / 2 - cellWidth + 1, rowY + 3);
+                    }
                 }
                 if (sell > 0) {
                     context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
-                    context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    context.fillRect(x + xStep / 2 + 3, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                    if (showValues) {
+                        context.fillStyle = '#d7dee8';
+                        context.font = '10px Consolas, monospace';
+                        context.fillText(formatVolume(sell), x + xStep / 2 + 7, rowY + 3);
+                    }
                 }
             });
             context.font = '11px Consolas, monospace';
