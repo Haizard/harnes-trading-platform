@@ -137,17 +137,15 @@ def _fire_and_forget(coro):
     before they complete. Used by all modules that call
     EventBus.emit() from synchronous code.
     """
-    import asyncio, warnings
+    import asyncio
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', RuntimeWarning)
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                task = asyncio.ensure_future(coro)
-                _pending_tasks.add(task)
-                task.add_done_callback(_pending_tasks.discard)
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(coro)
+        _pending_tasks.add(task)
+        task.add_done_callback(_pending_tasks.discard)
     except RuntimeError:
-        pass
+        # No active event loop means this coroutine cannot be scheduled.
+        coro.close()
 
 
 class EventBus:

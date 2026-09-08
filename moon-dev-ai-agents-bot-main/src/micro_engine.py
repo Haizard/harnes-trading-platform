@@ -637,7 +637,7 @@ class MicroEngine:
             try:
                 # Update capital from paper trader
                 stats = self.paper.get_stats()
-                self.portfolio_risk.update_capital(stats["current_capital"])
+                self.portfolio_risk.update_capital(stats["total_portfolio_value"])
                 
                 # Check risk limits
                 risk_event = self.portfolio_risk.check_risk()
@@ -968,7 +968,7 @@ class MicroEngine:
         if self.portfolio_risk:
             try:
                 stats = self.paper.get_stats()
-                self.portfolio_risk.update_capital(stats["current_capital"])
+                self.portfolio_risk.update_capital(stats["total_portfolio_value"])
                 risk_event = self.portfolio_risk.check_risk()
                 if risk_event:
                     self._log_event_to_db("risk/event", risk_event.to_dict())
