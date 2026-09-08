@@ -5,27 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Moon Dev Native Market Chart</title>
     <style>
-        :root { --bg: #090b10; --panel: #10141b; --grid: #202733; --text: #d7dee8; --muted: #778292; --green: #63d391; --red: #ee7777; --cyan: #55d6e8; }
+        :root { --bg: #070b12; --panel: #0d141e; --panel-raised: #121c28; --grid: #213040; --text: #e7eef7; --muted: #7f91a5; --green: #64e6a0; --red: #ff7887; --cyan: #58d9e8; --amber: #f5c96a; }
         * { box-sizing: border-box; }
-        body { margin: 0; background: var(--bg); color: var(--text); font: 12px Consolas, 'SF Mono', monospace; }
-        header { min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--grid); background: var(--panel); flex-wrap: wrap; }
-        h1 { margin: 0; color: var(--cyan); font-size: 14px; letter-spacing: .04em; }
-        select, button { border: 1px solid var(--grid); background: #151b24; color: var(--text); padding: 7px 10px; font: inherit; cursor: pointer; }
-        button:hover, select:focus { border-color: var(--cyan); outline: none; }
-        .status { margin-left: auto; color: var(--muted); }
-        .chart-shell { height: calc(100vh - 53px); min-height: 680px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 150px 96px; }
+        body { margin: 0; background: radial-gradient(circle at 42% -18%, #173042 0, transparent 42%), var(--bg); color: var(--text); font: 12px "SF Mono", "Fira Code", Consolas, monospace; letter-spacing: .01em; }
+        header { min-height: 60px; display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--grid); background: rgba(13,20,30,.95); box-shadow: 0 8px 30px rgba(0,0,0,.18); flex-wrap: wrap; }
+        h1 { margin: 0 8px 0 0; color: var(--cyan); font-size: 14px; letter-spacing: .08em; white-space: nowrap; }
+        h1::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 9px 2px 0; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px var(--green); }
+        select, button { border: 1px solid var(--grid); border-radius: 5px; background: rgba(18,28,40,.9); color: var(--text); padding: 7px 10px; font: inherit; cursor: pointer; transition: border-color .18s ease, background .18s ease, transform .18s ease; }
+        select { min-width: 88px; }
+        button:hover, select:focus { border-color: var(--cyan); background: var(--panel-raised); outline: none; }
+        button:active { transform: translateY(1px); }
+        .status { margin-left: auto; color: var(--muted); font-size: 11px; }
+        .chart-shell { height: calc(100vh - 60px); min-height: 680px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 150px 96px; }
+        .chart-main-row { min-height: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); }
+        .tool-rail { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 6px; border-right: 1px solid var(--grid); background: rgba(9,15,23,.8); }
+        .tool-button { width: 29px; height: 29px; padding: 0; border: 1px solid transparent; color: var(--muted); background: transparent; font-size: 15px; line-height: 1; }
+        .tool-button:hover, .tool-button.active { color: var(--cyan); border-color: rgba(88,217,232,.3); background: rgba(88,217,232,.08); }
+        .tool-divider { width: 22px; height: 1px; margin: 2px 0; background: var(--grid); }
+        .chart-stage { min-width: 0; min-height: 0; position: relative; }
+        .chart-stage::before { content: "LIVE  ·  BINANCE  ·  FOOTPRINT"; position: absolute; top: 14px; right: 18px; z-index: 1; color: rgba(127,145,165,.65); font-size: 10px; letter-spacing: .08em; pointer-events: none; }
         #market-canvas { display: block; width: 100%; height: 100%; }
-        .analysis-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--grid); }
-        .analysis-panel { min-width: 0; position: relative; border-right: 1px solid var(--grid); background: #0c1016; }
+        .analysis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--grid); background: rgba(9,15,23,.86); min-width: 0; }
+        .analysis-panel { min-width: 0; min-height: 0; position: relative; overflow: hidden; border-right: 1px solid var(--grid); background: linear-gradient(180deg, rgba(18,28,40,.72), rgba(13,20,30,.62)); }
         .analysis-panel canvas { display: block; width: 100%; height: 100%; }
-        .analysis-label { position: absolute; top: 8px; left: 14px; color: var(--muted); font-size: 10px; pointer-events: none; }
-        .legend { position: absolute; top: 12px; left: 16px; color: var(--muted); pointer-events: none; }
-        .legend strong { color: var(--cyan); font-weight: normal; }
-        .stats { display: grid; grid-template-columns: repeat(6, minmax(90px, 1fr)); border-top: 1px solid var(--grid); background: var(--panel); }
-        .stat { padding: 12px 14px; border-right: 1px solid var(--grid); }
-        .stat-label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 8px; }
-        .stat-value { color: var(--text); font-size: 13px; }
-        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, 1fr); } .stat { padding: 8px; } }
+        .analysis-label { position: absolute; z-index: 1; top: 9px; left: 14px; color: var(--text); font-size: 10px; font-weight: 600; letter-spacing: .08em; pointer-events: none; }
+        .analysis-label::after { display: block; margin-top: 3px; color: var(--muted); content: "LIVE FLOW"; font-size: 8px; font-weight: normal; letter-spacing: .06em; }
+        .analysis-panel:nth-child(2) .analysis-label::after { content: "PRICE DISTRIBUTION"; }
+        .analysis-panel:nth-child(3) .analysis-label::after { content: "ORDER BOOK"; }
+        .legend { position: absolute; top: 12px; left: 18px; display: flex; align-items: center; gap: 9px; color: var(--muted); pointer-events: none; font-size: 10px; }
+        .legend strong { color: var(--cyan); font-weight: normal; letter-spacing: .08em; }
+        .legend-chip { padding: 3px 6px; border: 1px solid var(--grid); border-radius: 3px; background: rgba(18,28,40,.82); letter-spacing: .04em; }
+        .legend-chip.buy { color: var(--green); }
+        .legend-chip.sell { color: var(--red); }
+        .legend-chip.delta { color: var(--amber); }
+        .legend.is-hidden { display: none; }
+        .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--grid); background: rgba(13,20,30,.96); min-width: 0; }
+        .stat { min-width: 0; padding: 13px 15px; border-right: 1px solid var(--grid); overflow: hidden; }
+        .stat-label { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; margin-bottom: 8px; }
+        .stat-value { display: block; max-width: 100%; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+        #session-delta { color: var(--amber); }
+        #poc { color: var(--cyan); }
+        #session-high { color: var(--green); }
+        #session-low { color: var(--red); }
+        .chart-shell::after { content: "MOON DEV  /  BINANCE FOOTPRINT"; position: absolute; left: 58px; bottom: 14px; color: rgba(127,145,165,.4); font-size: 10px; letter-spacing: .12em; pointer-events: none; }
+        @media (max-width: 820px) { header { padding: 10px 12px; } h1 { width: 100%; } .status { margin-left: 0; } }
+        @media (max-width: 820px) { .analysis-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; } .analysis-panel { min-width: 180px; } }
+        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .stat { padding: 9px 8px; } .stat-label { font-size: 9px; } .stat-value { font-size: 11px; } .chart-shell { min-height: 700px; grid-template-rows: minmax(380px, 1fr) 220px 108px; } .chart-main-row { grid-template-columns: 34px minmax(0, 1fr); } .tool-rail { padding-left: 3px; padding-right: 3px; } .tool-button { width: 27px; } }
+        @media (max-width: 460px) { .chart-shell { height: auto; min-height: 0; grid-template-rows: 380px auto auto; } .analysis-grid { grid-template-columns: 1fr; overflow: visible; } .analysis-panel { min-width: 0; min-height: 150px; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     </style>
 </head>
 <body>
@@ -40,8 +66,21 @@
         <span class="status" id="status">Loading PostgreSQL Binance research data...</span>
     </header>
     <main class="chart-shell">
-        <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
-        <div class="legend"><strong>BINANCE FOOTPRINT</strong> &nbsp; aggressive buy × aggressive sell &nbsp; delta</div>
+        <div class="chart-main-row">
+            <aside class="tool-rail" aria-label="Chart tools">
+                <button class="tool-button active" title="Crosshair">＋</button>
+                <button class="tool-button" title="Trend line">╱</button>
+                <button class="tool-button" title="Horizontal level">━</button>
+                <button class="tool-button" title="Measure">⌁</button>
+                <span class="tool-divider"></span>
+                <button class="tool-button" title="Zoom in">⌕</button>
+                <button class="tool-button" title="Settings">⚙</button>
+            </aside>
+            <section class="chart-stage">
+                <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
+                <div class="legend"><strong>BINANCE FOOTPRINT</strong><span class="legend-chip buy">BUY</span><span class="legend-chip sell">SELL</span><span class="legend-chip delta">DELTA</span></div>
+            </section>
+        </div>
         <div class="analysis-grid">
             <div class="analysis-panel"><span class="analysis-label">CUMULATIVE DELTA</span><canvas id="delta-canvas" aria-label="Cumulative delta chart"></canvas></div>
             <div class="analysis-panel"><span class="analysis-label">VOLUME PROFILE</span><canvas id="profile-canvas" aria-label="Volume profile chart"></canvas></div>
@@ -105,7 +144,7 @@
         context.clearRect(0, 0, width, height);
         context.fillStyle = '#090b10';
         context.fillRect(0, 0, width, height);
-        const left = 16, top = 72, right = 78, bottom = 42;
+        const left = 16, top = 96, right = 78, bottom = 42;
         const plotWidth = Math.max(1, width - left - right);
         const plotHeight = Math.max(1, height - top - bottom);
         const end = Math.max(0, state.bars.length - state.offset);
@@ -151,14 +190,22 @@
                 context.fillText((displayHigh - line * displayRange / 5).toFixed(Math.min(4, Math.max(2, state.tickSize < 1 ? 3 : 2))), left + plotWidth + 8, lineY + 3);
             }
         }
-        context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
-        context.fillText('BUY', left + 6, top - 24);
-        context.fillText('SELL', left + plotWidth - 34, top - 24);
+        context.fillStyle = '#0d141e';
+        context.fillRect(left, top - 54, plotWidth, 38);
+        context.strokeStyle = '#213040';
+        context.strokeRect(left, top - 54, plotWidth, 38);
+        context.fillStyle = '#64e6a0'; context.font = '600 10px Consolas, monospace';
+        context.fillText('BUY VOLUME', left + 10, top - 36);
+        context.fillStyle = '#ff7887';
+        context.fillText('SELL VOLUME', left + plotWidth - 78, top - 36);
+        context.fillStyle = '#7f91a5'; context.font = '9px Consolas, monospace';
+        context.fillText('PRICE LEVEL', left + 10, top - 23);
         visibleBars.forEach((bar, index) => {
             const x = chartLeft + index * xStep;
             const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
             const cellWidth = Math.max(8, Math.min(44, xStep * .34));
             const barSignals = state.signals.filter(signal => signal.bucket_time === bar.time);
+            const compactSignalMode = xStep < 100;
             const rows = groupedRows(bar);
             context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
             context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + plotHeight); context.stroke(); context.setLineDash([]);
@@ -198,22 +245,31 @@
                     }
                 }
             });
-            context.font = '11px Consolas, monospace';
+            context.font = '10px Consolas, monospace';
             if ((index % Math.max(2, Math.ceil(visibleBars.length / 6)) === 0 || index === visibleBars.length - 1) && !state.dragging) {
                 context.fillStyle = '#778292';
                 context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 18, top + plotHeight + 26);
             }
             if ((index % 4 === 0 || barSignals.length) && Math.abs(barDelta) > 0) {
-                context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
-                context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 20, top - 22);
+                const deltaColor = barDelta >= 0 ? '#64e6a0' : '#ff7887';
+                drawCanvasBadge(`DELTA ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 27, top - 28, deltaColor);
             }
-            barSignals.forEach((signal, signalIndex) => {
-                const signalY = top - 58 - signalIndex * 14;
-                context.fillStyle = signal.type === 'ABSORPTION' ? '#f7c65f' : (signal.side === 'BUY' ? '#63d391' : '#ee7777');
-                context.font = '9px Consolas, monospace';
-                const label = signal.type === 'ABSORPTION' ? `ABSORB ${signal.side}` : `STACK ${signal.side} ×${signal.strength}`;
-                context.fillText(label, x + xStep / 2 - 28, signalY);
-            });
+            if (barSignals.length && compactSignalMode) {
+                context.fillStyle = barSignals.some(signal => signal.side === 'SELL') ? '#ff7887' : '#64e6a0';
+                context.beginPath();
+                context.arc(x + xStep / 2, top - 8, 3, 0, Math.PI * 2);
+                context.fill();
+                if (index === visibleBars.length - 1) {
+                    drawCanvasBadge(summarizeSignals(barSignals), x + xStep / 2 - 42, top - 18, '#f5c96a');
+                }
+            } else {
+                barSignals.slice(0, 2).forEach((signal, signalIndex) => {
+                    const signalY = top - 8 - signalIndex * 17;
+                    const signalColor = signal.type === 'ABSORPTION' ? '#f5c96a' : (signal.side === 'BUY' ? '#64e6a0' : '#ff7887');
+                    const label = signal.type === 'ABSORPTION' ? `ABSORPTION · ${signal.side}` : `STACK ${signal.side} · ${signal.strength}`;
+                    drawCanvasBadge(label, x + xStep / 2 - 38, signalY, signalColor);
+                });
+            }
         });
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
@@ -228,6 +284,41 @@
         const absolute = Math.abs(number);
         const decimals = absolute >= 1000 ? 0 : absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute >= 0.001 ? 5 : 8;
         return number.toFixed(decimals);
+    }
+
+    function drawCanvasBadge(label, x, baseline, color) {
+        context.save();
+        context.font = '600 9px Consolas, monospace';
+        const padding = 5;
+        const width = context.measureText(label).width + padding * 2;
+        const height = 15;
+        const y = baseline - height + 3;
+        context.fillStyle = 'rgba(7, 11, 18, .92)';
+        context.strokeStyle = color;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.roundRect(x, y, width, height, 3);
+        context.fill();
+        context.stroke();
+        context.fillStyle = color;
+        context.textBaseline = 'middle';
+        context.fillText(label, x + padding, y + height / 2);
+        context.restore();
+    }
+
+    function summarizeSignals(signals) {
+        const groups = new Map();
+        signals.forEach(signal => {
+            const key = `${signal.type}-${signal.side}`;
+            const current = groups.get(key) || {type: signal.type, side: signal.side, count: 0, strength: 0};
+            current.count += 1;
+            current.strength = Math.max(current.strength, Number(signal.strength) || 0);
+            groups.set(key, current);
+        });
+        const summary = [...groups.values()][0];
+        if (!summary) return 'SIGNAL';
+        const label = summary.type === 'ABSORPTION' ? `ABSORPTION ${summary.side}` : `STACK ${summary.side} x${summary.strength || summary.count}`;
+        return groups.size > 1 ? `${label} +${groups.size - 1}` : label;
     }
 
     function drawCellValue(value, cellX, centerY, cellWidth, cellHeight) {
@@ -282,15 +373,22 @@
         const values = []; let running = 0;
         state.bars.forEach(bar => { running += bar.rows.reduce((sum, row) => sum + Number(row.delta), 0); values.push(running); });
         const min = Math.min(0, ...values), max = Math.max(0, ...values), range = Math.max(max - min, 0.000001);
-        const left = 14, top = 24, plotWidth = width - 28, plotHeight = height - 38;
+        const left = 14, top = 40, plotWidth = Math.max(1, width - 28), plotHeight = Math.max(1, height - 56);
         const x = index => left + index * plotWidth / Math.max(values.length - 1, 1);
         const y = value => top + (max - value) / range * plotHeight;
-        deltaContext.strokeStyle = '#28313d'; deltaContext.beginPath(); deltaContext.moveTo(left, y(0)); deltaContext.lineTo(left + plotWidth, y(0)); deltaContext.stroke();
-        deltaContext.strokeStyle = '#55d6e8'; deltaContext.lineWidth = 2; deltaContext.beginPath();
+        const zeroY = y(0);
+        deltaContext.strokeStyle = '#28313d'; deltaContext.setLineDash([3, 3]); deltaContext.beginPath(); deltaContext.moveTo(left, zeroY); deltaContext.lineTo(left + plotWidth, zeroY); deltaContext.stroke(); deltaContext.setLineDash([]);
+        deltaContext.beginPath();
+        values.forEach((value, index) => index ? deltaContext.lineTo(x(index), y(value)) : deltaContext.moveTo(x(index), y(value)));
+        deltaContext.lineTo(x(values.length - 1), zeroY); deltaContext.lineTo(x(0), zeroY); deltaContext.closePath();
+        deltaContext.fillStyle = values[values.length - 1] >= 0 ? 'rgba(100,230,160,.16)' : 'rgba(255,120,135,.16)';
+        deltaContext.fill();
+        deltaContext.strokeStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887'; deltaContext.lineWidth = 2; deltaContext.beginPath();
         values.forEach((value, index) => index ? deltaContext.lineTo(x(index), y(value)) : deltaContext.moveTo(x(index), y(value)));
         deltaContext.stroke(); deltaContext.lineWidth = 1;
-        deltaContext.fillStyle = values[values.length - 1] >= 0 ? '#63d391' : '#ee7777';
-        deltaContext.font = '11px Consolas, monospace'; deltaContext.fillText(formatVolume(values[values.length - 1]), width - 62, 18);
+        deltaContext.fillStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887';
+        deltaContext.font = '600 11px Consolas, monospace'; deltaContext.fillText(`${values[values.length - 1] >= 0 ? '+' : ''}${formatVolume(values[values.length - 1])}`, width - 66, 23);
+        deltaContext.fillStyle = '#7f91a5'; deltaContext.font = '9px Consolas, monospace'; deltaContext.fillText('0', left, zeroY - 5);
     }
 
     function drawVolumeProfile() {
@@ -301,41 +399,29 @@
         state.bars.flatMap(bar => bar.rows).forEach(row => levels.set(row.price, (levels.get(row.price) || 0) + Number(row.total_volume)));
         const entries = [...levels.entries()].sort((a, b) => Number(b[0]) - Number(a[0]));
         if (!entries.length) return;
-        const maxVolume = Math.max(...entries.map(entry => entry[1]), 1);
-        const maxPoints = 36;
+        const maxVolume = Math.max(...entries.map(entry => Number(entry[1])), 1);
+        const maxPoints = Math.max(5, Math.min(14, Math.floor((height - 42) / 10)));
         const step = Math.max(1, Math.ceil(entries.length / maxPoints));
-        const profilePoints = [];
+        const buckets = [];
         for (let i = 0; i < entries.length; i += step) {
             const slice = entries.slice(i, Math.min(entries.length, i + step));
-            const total = slice.reduce((sum, [, volume]) => sum + Number(volume), 0);
-            const price = slice[Math.floor(slice.length / 2)][0];
-            profilePoints.push({ price: Number(price), volume: total });
+            buckets.push({ price: Number(slice[Math.floor(slice.length / 2)][0]), volume: slice.reduce((sum, [, volume]) => sum + Number(volume), 0) });
         }
-        const left = 74, right = 14, top = 18, bottom = 18;
-        const plotWidth = width - left - right;
-        const plotHeight = height - top - bottom;
-        const pointStep = profilePoints.length > 1 ? plotWidth / (profilePoints.length - 1) : plotWidth;
-        profileContext.strokeStyle = '#55d6e8';
-        profileContext.lineWidth = 2;
-        profileContext.beginPath();
-        profilePoints.forEach(({ volume }, index) => {
-            const x = left + index * pointStep;
-            const y = top + plotHeight - (volume / maxVolume) * plotHeight;
-            if (index === 0) profileContext.moveTo(x, y); else profileContext.lineTo(x, y);
+        const left = 58, right = 14, top = 38, bottom = 12;
+        const plotWidth = Math.max(1, width - left - right), rowHeight = Math.max(8, (height - top - bottom) / buckets.length);
+        const poc = buckets.reduce((best, current) => current.volume > best.volume ? current : best, buckets[0]);
+        buckets.forEach((bucket, index) => {
+            const y = top + index * rowHeight;
+            const barWidth = plotWidth * bucket.volume / maxVolume;
+            profileContext.fillStyle = bucket === poc ? 'rgba(245,201,106,.78)' : 'rgba(88,217,232,.5)';
+            profileContext.fillRect(left, y + 1, barWidth, Math.max(4, rowHeight - 3));
+            if (index === 0 || index === Math.floor(buckets.length / 2) || index === buckets.length - 1 || bucket === poc) {
+                profileContext.fillStyle = bucket === poc ? '#f5c96a' : '#7f91a5'; profileContext.font = '9px Consolas, monospace';
+                profileContext.fillText(bucket.price.toFixed(2), 6, y + rowHeight - 3);
+            }
         });
-        profileContext.stroke();
-        profileContext.lineTo(left + plotWidth, top + plotHeight);
-        profileContext.lineTo(left, top + plotHeight);
-        profileContext.closePath();
-        profileContext.fillStyle = 'rgba(85, 214, 232, 0.18)';
-        profileContext.fill();
-        profileContext.fillStyle = '#778292'; profileContext.font = '9px Consolas, monospace';
-        const labels = [entries[0], entries[Math.floor(entries.length / 2)], entries[entries.length - 1]];
-        labels.forEach(([price]) => {
-            const priceIndex = entries.findIndex(entry => Number(entry[0]) === Number(price));
-            const x = left + (priceIndex / Math.max(entries.length - 1, 1)) * plotWidth;
-            profileContext.fillText(Number(price).toFixed(2), x - 12, height - 6);
-        });
+        profileContext.fillStyle = '#f5c96a'; profileContext.font = '600 9px Consolas, monospace';
+        profileContext.fillText(`POC ${poc.price.toFixed(2)}`, Math.max(left, width - 78), 23);
     }
 
     let domState = {bids: [], asks: [], available: false};
@@ -352,37 +438,40 @@
         const bids = (domState.bids || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'bid' })).reverse();
         const asks = (domState.asks || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'ask' })).reverse();
         const maxQuantity = Math.max(...bids.concat(asks).map(level => level.quantity), 1);
-        const rowHeight = 18;
+        const rowHeight = Math.max(16, Math.min(22, (height - 36) / Math.max(bids.length, asks.length, 6)));
         const centerX = width / 2;
         const rowCount = Math.max(bids.length, asks.length, 6);
+        const bidPriceX = Math.max(44, centerX - 45), askPriceX = centerX + 8;
         for (let i = 0; i < rowCount; i++) {
-            const y = 20 + i * rowHeight;
+            const y = 29 + i * rowHeight;
             const bid = bids[i]; const ask = asks[i];
-            const bidBar = bid ? (centerX - 22) * bid.quantity / maxQuantity : 0;
-            const askBar = ask ? (width - (centerX + 22)) * ask.quantity / maxQuantity : 0;
+            const bidBar = bid ? (centerX - 58) * bid.quantity / maxQuantity : 0;
+            const askBar = ask ? (width - (centerX + 58)) * ask.quantity / maxQuantity : 0;
+            domContext.strokeStyle = 'rgba(33,48,64,.55)'; domContext.beginPath(); domContext.moveTo(8, y + rowHeight - 2); domContext.lineTo(width - 8, y + rowHeight - 2); domContext.stroke();
             if (bid) {
-                domContext.fillStyle = 'rgba(99, 211, 145, 0.7)';
-                domContext.fillRect(centerX - 10 - bidBar, y, bidBar, rowHeight - 4);
-                domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
-                domContext.fillText(formatCompact(bid.quantity), centerX - 10 - bidBar - 38, y + rowHeight - 6);
-                domContext.fillText(Number(bid.price).toFixed(2), centerX - 10 - bidBar + 4, y + rowHeight - 6);
+                domContext.fillStyle = 'rgba(100, 230, 160, .22)';
+                domContext.fillRect(8, y + 2, bidBar, rowHeight - 6);
+                domContext.fillStyle = '#64e6a0'; domContext.font = '9px Consolas, monospace';
+                domContext.textAlign = 'right'; domContext.fillText(formatCompact(bid.quantity), centerX - 58, y + rowHeight - 7);
+                domContext.fillStyle = '#d7dee8'; domContext.textAlign = 'left'; domContext.fillText(Number(bid.price).toFixed(2), bidPriceX, y + rowHeight - 7);
             }
             if (ask) {
-                domContext.fillStyle = 'rgba(238, 119, 119, 0.7)';
-                domContext.fillRect(centerX + 10, y, askBar, rowHeight - 4);
-                domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
-                domContext.fillText(Number(ask.price).toFixed(2), centerX + 18, y + rowHeight - 6);
-                domContext.fillText(formatCompact(ask.quantity), centerX + 18 + 56, y + rowHeight - 6);
+                domContext.fillStyle = 'rgba(255, 120, 135, .22)';
+                domContext.fillRect(centerX + 58, y + 2, askBar, rowHeight - 6);
+                domContext.fillStyle = '#d7dee8'; domContext.textAlign = 'left'; domContext.fillText(Number(ask.price).toFixed(2), askPriceX, y + rowHeight - 7);
+                domContext.fillStyle = '#ff7887'; domContext.textAlign = 'left'; domContext.fillText(formatCompact(ask.quantity), width - 8, y + rowHeight - 7);
             }
         }
         const bestBid = bids[0]?.price, bestAsk = asks[0]?.price;
         if (bestBid && bestAsk) {
-            domContext.fillStyle = '#55d6e8'; domContext.font = '10px Consolas, monospace';
-            domContext.fillText(`spread ${(bestAsk - bestBid).toFixed(2)}`, 12, height - 8);
+            domContext.fillStyle = '#58d9e8'; domContext.font = '600 9px Consolas, monospace'; domContext.textAlign = 'left';
+            domContext.fillText(`SPREAD ${(bestAsk - bestBid).toFixed(2)}`, 10, height - 8);
         }
-        domContext.fillStyle = '#778292'; domContext.font = '9px Consolas, monospace';
-        domContext.fillText('BID', centerX - 62, 14);
-        domContext.fillText('ASK', centerX + 32, 14);
+        domContext.fillStyle = '#64e6a0'; domContext.font = '600 9px Consolas, monospace'; domContext.textAlign = 'right';
+        domContext.fillText('BID SIZE', centerX - 58, 17);
+        domContext.fillStyle = '#7f91a5'; domContext.textAlign = 'left'; domContext.fillText('PRICE', centerX - 45, 17);
+        domContext.fillStyle = '#ff7887'; domContext.fillText('ASK SIZE', centerX + 58, 17);
+        domContext.textAlign = 'left';
     }
 
     async function loadDom() {
@@ -452,6 +541,23 @@
     document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(12, state.visible - 4); render(); });
     document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 30; state.offset = 0; render(); });
     document.getElementById('refresh').addEventListener('click', load);
+    document.querySelectorAll('.tool-button').forEach(button => {
+        button.addEventListener('click', () => {
+            document.querySelectorAll('.tool-button').forEach(item => item.classList.remove('active'));
+            button.classList.add('active');
+            const tool = button.title;
+            if (tool === 'Zoom in') {
+                state.visible = Math.max(12, state.visible - 4);
+                render();
+            } else if (tool === 'Settings') {
+                document.querySelector('.legend').classList.toggle('is-hidden');
+            } else if (tool === 'Crosshair') {
+                canvas.style.cursor = 'crosshair';
+            } else {
+                canvas.style.cursor = 'default';
+            }
+        });
+    });
     window.addEventListener('resize', resize);
     resize();
     load();
