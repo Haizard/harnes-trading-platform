@@ -301,11 +301,54 @@
                 });
             }
         });
+        renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight);
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
             context.beginPath(); context.moveTo(state.crosshair.x, top); context.lineTo(state.crosshair.x, top + plotHeight); context.stroke();
             context.setLineDash([]);
         }
+    }
+
+    function renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight) {
+        const overlays = state.snapshot?.overlays || [];
+        if (!overlays.length) return;
+        const visibleTimes = new Map(visibleBars.map((bar, index) => [bar.time, index]));
+        const dense = xStep < 100;
+        overlays.forEach(overlay => {
+            const index = visibleTimes.get(overlay.bucket_time);
+            if (index == null) return;
+            const bar = visibleBars[index];
+            const centerX = chartLeft + index * xStep + xStep / 2;
+            const color = overlay.color || '#ad9aff';
+            const anchorPrice = Number(overlay.price) || (overlay.side === 'SELL' ? Number(bar.high) : Number(bar.low));
+            const anchorY = priceY(anchorPrice);
+            context.save();
+            context.strokeStyle = color;
+            context.fillStyle = color;
+            context.lineWidth = 1;
+            if (overlay.price_low != null && overlay.price_high != null) {
+                const zoneTop = priceY(Number(overlay.price_high));
+                const zoneBottom = priceY(Number(overlay.price_low));
+                context.globalAlpha = .12;
+                context.fillRect(centerX - Math.max(12, xStep / 2 - 3), zoneTop, Math.max(24, xStep - 6), zoneBottom - zoneTop);
+                context.globalAlpha = .65;
+                context.strokeRect(centerX - Math.max(12, xStep / 2 - 3), zoneTop, Math.max(24, xStep - 6), zoneBottom - zoneTop);
+            } else {
+                context.beginPath();
+                context.moveTo(centerX, anchorY);
+                context.lineTo(centerX, anchorY + (overlay.side === 'SELL' ? -10 : 10));
+                context.stroke();
+                context.beginPath();
+                context.arc(centerX, anchorY, dense ? 3 : 4, 0, Math.PI * 2);
+                context.fill();
+            }
+            const showLabel = !dense || index === visibleBars.length - 1;
+            if (showLabel && overlay.label) {
+                const sourceLabel = overlay.source === 'rbi_agent' ? 'RBI' : overlay.source === 'custom_chart_bot' ? 'BOT' : 'FLOW';
+                drawCanvasBadge(`${sourceLabel} · ${String(overlay.label).slice(0, 22)}`, centerX - 42, anchorY + (overlay.side === 'SELL' ? -14 : 20), color);
+            }
+            context.restore();
+        });
     }
 
     function formatVolume(value) {
