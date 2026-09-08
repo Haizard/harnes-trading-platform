@@ -39,6 +39,9 @@
         .ai-summary, .ai-list { color: var(--text); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
         .ai-list { margin: 0; padding-left: 17px; }
         .ai-risk { color: var(--red); }
+        .ai-agents { display: grid; gap: 5px; }
+        .ai-agent-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px; }
+        .ai-agent-row input { accent-color: var(--cyan); }
         .ai-question { display: flex; gap: 6px; margin-top: 15px; }
         .ai-question input { min-width: 0; flex: 1; border: 1px solid var(--grid); border-radius: 4px; background: #0a1018; color: var(--text); padding: 8px; font: inherit; font-size: 10px; }
         .ai-question button { padding: 7px 9px; color: #061017; background: var(--cyan); border-color: var(--cyan); font-size: 10px; }
@@ -106,6 +109,7 @@
                     <div class="ai-section"><div class="ai-section-title">Chart read</div><div class="ai-summary" id="ai-summary">Ask the Bedrock analyst to interpret the current footprint, delta, profile, and DOM.</div></div>
                     <div class="ai-section"><div class="ai-section-title">Evidence</div><ul class="ai-list" id="ai-evidence"><li>Footprint context will appear here.</li></ul></div>
                     <div class="ai-section"><div class="ai-section-title">Risk notes</div><ul class="ai-list ai-risk" id="ai-risk"><li>Analysis is informational until reviewed.</li></ul></div>
+                    <div class="ai-section"><div class="ai-section-title">Chart agents</div><div class="ai-agents" id="ai-agents"><span class="ai-note">Loading agent controls...</span></div></div>
                     <form class="ai-question" id="ai-question"><input id="ai-input" autocomplete="off" placeholder="Ask about this chart..." /><button type="submit">ASK</button></form>
                     <div class="ai-note">Bedrock can explain setups and prepare a review. It cannot place a trade directly from this panel.</div>
                 </div>
@@ -134,7 +138,8 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], snapshot: null, socket: null, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], snapshot: null, socket: null, sessionId: localStorage.getItem('moondev-chart-session') || crypto.randomUUID(), tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    localStorage.setItem('moondev-chart-session', state.sessionId);
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -604,7 +609,7 @@
         if (!state.snapshot) return;
         document.getElementById('ai-status').textContent = 'ANALYZING...';
         try {
-            const response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question, snapshot: state.snapshot}) });
+            const response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question, session_id: state.sessionId, snapshot: state.snapshot}) });
             const result = await response.json();
             if (Array.isArray(result.contributions) && state.snapshot) {
                 state.snapshot.overlays = [...(state.snapshot.overlays || []), ...result.contributions];
@@ -614,6 +619,18 @@
         } catch (error) {
             renderAiAnalysis({available: false, message: `Analysis unavailable: ${error.message}`});
         }
+    }
+
+    async function loadAgentControls() {
+        try {
+            const response = await fetch('/api/chart/agents');
+            const data = await response.json();
+            const container = document.getElementById('ai-agents');
+            container.innerHTML = Object.entries(data.agents || {}).map(([id, agent]) => `<label class="ai-agent-row"><span>${escapeHtml(agent.label)}</span><input type="checkbox" data-agent="${id}" ${agent.enabled ? 'checked' : ''} /></label>`).join('');
+            container.querySelectorAll('input[data-agent]').forEach(input => input.addEventListener('change', async () => {
+                await fetch(`/api/chart/agents/${input.dataset.agent}/toggle`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: input.checked})});
+            }));
+        } catch (error) { document.getElementById('ai-agents').textContent = 'Agent controls unavailable'; }
     }
 
     function applySnapshot(data, resetOffset = false) {
@@ -706,6 +723,7 @@
     resize();
     load();
     loadDom();
+    loadAgentControls();
     setInterval(load, 30000);
     </script>
 </body>

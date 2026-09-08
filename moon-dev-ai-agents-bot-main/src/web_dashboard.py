@@ -854,7 +854,11 @@ async def _get_binance_agent_signals(data: list[dict], interval_seconds: int, ca
             "volume": 0,
         } for candle in source_candles]
         signals = []
+        from src.chart_workspace import get_agents
+        agent_state = get_agents()
         try:
+            if not agent_state.get("rbi_agent", {}).get("enabled", True):
+                raise RuntimeError("RBI agent disabled")
             from src.strategy_bridge import get_custom_strategy_chart_markers
             rbi = await asyncio.to_thread(get_custom_strategy_chart_markers, normalized)
             for marker in rbi.get("markers", []):
@@ -870,6 +874,8 @@ async def _get_binance_agent_signals(data: list[dict], interval_seconds: int, ca
         except Exception:
             pass
         try:
+            if not agent_state.get("custom_chart_bot", {}).get("enabled", True):
+                raise RuntimeError("custom chart bot disabled")
             from src.custom_chart_bots import run_custom_bots
             custom = await asyncio.to_thread(run_custom_bots, normalized)
             for marker in custom.markers:
@@ -968,6 +974,7 @@ async def api_binance_ai_analyze(payload: dict):
     """Ask Bedrock for bounded analysis of the current Binance chart snapshot."""
     snapshot = payload.get("snapshot") or {}
     question = str(payload.get("question") or "Analyze the current Binance order flow.").strip()[:2000]
+    session_id = str(payload.get("session_id") or "")[:80]
     if not snapshot:
         raise HTTPException(status_code=400, detail="snapshot is required")
     try:
@@ -982,12 +989,20 @@ async def api_binance_ai_analyze(payload: dict):
             "The action must be WAIT, WATCH, or PREPARE_REVIEW."
         )
         context = json.dumps(snapshot, separators=(",", ":"), default=str)[:24000]
-        response = await bedrock_chat([
-            ChatMessage(role="user", content=f"Question: {question}\nChart context:\n{context}"),
-        ], ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt))
+        messages = []
+        if session_id:
+            from src.chart_workspace import append_chat, get_chat
+            for item in get_chat(session_id, 12):
+                messages.append(ChatMessage(role=item["role"], content=item["content"]))
+            append_chat(session_id, "user", question, snapshot.get("symbol", ""), snapshot.get("timeframe", ""), snapshot.get("as_of"))
+        messages.append(ChatMessage(role="user", content=f"Question: {question}\nChart context:\n{context}"))
+        response = await bedrock_chat(messages, ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt))
         analysis = response.json_data or {"summary": response.text, "bias": "UNKNOWN", "confidence": 0, "action": "WAIT"}
         from src.chart_contracts import normalize_chart_contributions
         contributions = normalize_chart_contributions(analysis.get("chart_contributions", []), "bedrock")
+        if session_id:
+            from src.chart_workspace import append_chat
+            append_chat(session_id, "assistant", response.text, snapshot.get("symbol", ""), snapshot.get("timeframe", ""), snapshot.get("as_of"))
         return {
             "available": True,
             "analysis": analysis,
@@ -996,6 +1011,27 @@ async def api_binance_ai_analyze(payload: dict):
         }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
+
+
+@app.get("/api/binance/ai/sessions/{session_id}")
+async def api_binance_ai_session(session_id: str):
+    from src.chart_workspace import get_chat
+    return {"session_id": session_id, "messages": get_chat(session_id)}
+
+
+@app.get("/api/chart/agents")
+async def api_chart_agents():
+    from src.chart_workspace import get_agents
+    return {"agents": get_agents()}
+
+
+@app.post("/api/chart/agents/{agent_id}/toggle")
+async def api_chart_agent_toggle(agent_id: str, payload: dict):
+    from src.chart_workspace import toggle_agent
+    result = toggle_agent(agent_id, payload.get("enabled"), payload.get("render"))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Unknown chart agent")
+    return {"agent_id": agent_id, "state": result}
 
 @app.get("/api/smc")
 async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
