@@ -18,9 +18,10 @@ class BinanceChartService:
         tick_size: str | None,
         order_book: dict[str, Any] | None = None,
         agent_signals: list[dict[str, Any]] | None = None,
+        history_candles: list[dict[str, Any]] | None = None,
     ) -> ChartSnapshot:
         levels = aggregate_trades(trades, interval_seconds, tick_size)
-        candles = aggregate_ohlc(trades, interval_seconds)
+        candles = history_candles or aggregate_ohlc(trades, interval_seconds)
         signals = detect_order_flow_signals(levels, candles)
         serialized_levels = [self._serialize_level(level) for level in levels]
         serialized_candles = [self._serialize_candle(candle) for candle in candles]

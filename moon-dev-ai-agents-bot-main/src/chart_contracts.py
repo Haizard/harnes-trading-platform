@@ -5,6 +5,31 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def normalize_confidence(value: object) -> float | None:
+    """Normalize numeric and textual confidence values to the range [0, 1]."""
+    if value is None or isinstance(value, bool):
+        return None
+    raw = value
+    try:
+        if isinstance(value, str):
+            text = value.strip().lower()
+            percent = "%" in text
+            match = __import__("re").search(r"-?\d+(?:\.\d+)?", text)
+            if not match:
+                return None
+            number = float(match.group())
+            if percent or number > 1:
+                number /= 100
+        else:
+            number = float(value)
+            if number > 1:
+                number /= 100
+    except (TypeError, ValueError):
+        return None
+    normalized = max(0.0, min(1.0, number))
+    return round(normalized, 4)
+
+
 @dataclass
 class ChartOverlay:
     """A renderable contribution anchored to time, price, or a panel."""
@@ -23,6 +48,11 @@ class ChartOverlay:
     severity: str = "info"
     panel: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.confidence is not None:
+            self.details.setdefault("raw_confidence", self.confidence)
+            self.confidence = normalize_confidence(self.confidence)
 
 
 @dataclass

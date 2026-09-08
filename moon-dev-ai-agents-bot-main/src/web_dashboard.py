@@ -795,17 +795,23 @@ async def api_binance_footprint(
     hours: int = 24,
     interval_seconds: int = 60,
     tick_size: Optional[str] = None,
+    candle_limit: int = 100,
 ):
     """Return PostgreSQL-backed Binance footprint levels for research charts."""
     if interval_seconds < 1 or interval_seconds > 86400:
         raise HTTPException(status_code=400, detail="interval_seconds must be between 1 and 86400")
     try:
         from src.binance_chart_service import BinanceChartService
+        from src.binance_history import fetch_binance_klines
         from src.db_storage import get_binance_market_trades
 
         trades = await asyncio.to_thread(get_binance_market_trades, symbol, hours)
         dom = await _get_binance_dom_state(symbol)
-        agent_signals = await _get_binance_agent_signals(trades, interval_seconds)
+        try:
+            history_candles = await asyncio.to_thread(fetch_binance_klines, symbol, interval_seconds, candle_limit)
+        except Exception:
+            history_candles = []
+        agent_signals = await _get_binance_agent_signals(history_candles or trades, interval_seconds, candles=bool(history_candles))
         snapshot = BinanceChartService().build_snapshot(
             symbol=symbol,
             trades=trades,
@@ -813,6 +819,7 @@ async def api_binance_footprint(
             tick_size=tick_size,
             order_book=dom,
             agent_signals=agent_signals,
+            history_candles=history_candles,
         )
         result = snapshot.to_dict()
         result.update({
@@ -821,6 +828,7 @@ async def api_binance_footprint(
             "interval_seconds": interval_seconds,
             "tick_size": tick_size,
             "trade_count": len(trades),
+            "candle_limit": candle_limit,
             "timestamp": result["as_of"],
             "levels": result["footprint"]["levels"],
             "signals": result["footprint"]["signals"],
@@ -832,11 +840,11 @@ async def api_binance_footprint(
         return {"error": str(exc), "source": "binance", "storage": "postgresql"}
 
 
-async def _get_binance_agent_signals(trades: list[dict], interval_seconds: int) -> list[dict]:
+async def _get_binance_agent_signals(data: list[dict], interval_seconds: int, candles: bool = False) -> list[dict]:
     """Adapt existing candle-oriented RBI and bot outputs for the footprint chart."""
     try:
         from src.binance_footprint import aggregate_ohlc
-        candles = aggregate_ohlc(trades, interval_seconds)
+        source_candles = data if candles else aggregate_ohlc(data, interval_seconds)
         normalized = [{
             "time": int(candle["bucket_time"].timestamp()),
             "open": float(candle["open"]),
@@ -844,7 +852,7 @@ async def _get_binance_agent_signals(trades: list[dict], interval_seconds: int) 
             "low": float(candle["low"]),
             "close": float(candle["close"]),
             "volume": 0,
-        } for candle in candles]
+        } for candle in source_candles]
         signals = []
         try:
             from src.strategy_bridge import get_custom_strategy_chart_markers

@@ -161,10 +161,14 @@
             groups.get(level.bucket_time).push(level);
         });
         const candleMap = new Map((candles || []).map(candle => [candle.bucket_time, candle]));
+        (candles || []).forEach(candle => {
+            if (!groups.has(candle.bucket_time)) groups.set(candle.bucket_time, []);
+        });
         return [...groups.entries()].map(([time, rows]) => {
             const candle = candleMap.get(time);
             const prices = rows.map(row => Number(row.price));
-            return { time, rows, open: candle?.open ?? prices[0], close: candle?.close ?? prices[prices.length - 1], high: candle?.high ?? Math.max(...prices), low: candle?.low ?? Math.min(...prices) };
+            const fallback = Number(candle?.close || 0);
+            return { time, rows, open: candle?.open ?? prices[0] ?? fallback, close: candle?.close ?? prices[prices.length - 1] ?? fallback, high: candle?.high ?? Math.max(...prices, fallback), low: candle?.low ?? Math.min(...prices, fallback) };
         }).sort((left, right) => left.time.localeCompare(right.time));
     }
 
@@ -184,7 +188,7 @@
             context.fillText('No Binance trades in PostgreSQL yet. Start the research collector.', left, top + 28);
             return;
         }
-        const prices = visibleBars.flatMap(bar => bar.rows.map(row => Number(row.price)));
+        const prices = visibleBars.flatMap(bar => bar.rows.length ? bar.rows.map(row => Number(row.price)) : [bar.open, bar.high, bar.low, bar.close]);
         const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
         const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
         const targetColumnWidth = Math.max(80, Math.min(120, plotWidth / Math.max(state.visible, 1)));

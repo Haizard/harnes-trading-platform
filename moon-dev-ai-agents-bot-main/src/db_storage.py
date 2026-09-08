@@ -1579,6 +1579,28 @@ def save_binance_depth_update(symbol: str, depth: dict) -> Optional[int]:
     pool = get_pool()
     if not pool:
         return None
+    if not _ensure_binance_orderbook_schema():
+        return None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute("""
+                INSERT INTO binance_depth_updates (
+                    symbol, event_time, first_update_id, final_update_id,
+                    last_update_id, bids, asks, raw_data)
+                VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                symbol.upper(), depth.get("event_time"), depth.get("first_update_id"),
+                depth.get("final_update_id"), depth.get("last_update_id"),
+                json.dumps(depth.get("bids", []), default=str),
+                json.dumps(depth.get("asks", []), default=str),
+                json.dumps(depth.get("raw_data", {}), default=str),
+            )).fetchone()
+            conn.commit()
+            return row["id"] if row else None
+    except Exception as e:
+        print(f"[DB] save_binance_depth_update error: {e}")
+        return None
 
 
 def save_binance_orderbook_snapshot(symbol: str, snapshot: dict) -> Optional[int]:
@@ -1603,28 +1625,6 @@ def save_binance_orderbook_snapshot(symbol: str, snapshot: dict) -> Optional[int
     except Exception as e:
         print(f"[DB] save_binance_orderbook_snapshot error: {e}")
         return None
-    try:
-        with pool.connection() as conn:
-            row = conn.execute("""
-                INSERT INTO binance_depth_updates (
-                    symbol, event_time, first_update_id, final_update_id,
-                    last_update_id, bids, asks, raw_data)
-                VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                symbol.upper(), depth.get("event_time"), depth.get("first_update_id"),
-                depth.get("final_update_id"), depth.get("last_update_id"),
-                json.dumps(depth.get("bids", []), default=str),
-                json.dumps(depth.get("asks", []), default=str),
-                json.dumps(depth.get("raw_data", {}), default=str),
-            )).fetchone()
-            conn.commit()
-            return row["id"] if row else None
-    except Exception as e:
-        print(f"[DB] save_binance_depth_update error: {e}")
-        return None
-
-
 def get_binance_market_trades(symbol: str, hours: int = 24, limit: int = 100000) -> list:
     """Load normalized Binance trades for footprint aggregation."""
     pool = get_pool()
