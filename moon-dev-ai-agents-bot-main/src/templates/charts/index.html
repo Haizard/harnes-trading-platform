@@ -65,7 +65,7 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], tickSize: 0.1, offset: 0, visible: 18, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -108,8 +108,8 @@
         const left = 16, top = 72, right = 78, bottom = 42;
         const plotWidth = Math.max(1, width - left - right);
         const plotHeight = Math.max(1, height - top - bottom);
-        const end = state.bars.length - state.offset || undefined;
-        const visibleBars = state.bars.slice(Math.max(0, (end || state.bars.length) - state.visible), end);
+        const end = Math.max(0, state.bars.length - state.offset);
+        const visibleBars = state.bars.slice(Math.max(0, end - state.visible), end);
         if (!visibleBars.length) {
             context.fillStyle = '#778292'; context.font = '12px Consolas, monospace';
             context.fillText('No Binance trades in PostgreSQL yet. Start the research collector.', left, top + 28);
@@ -118,9 +118,9 @@
         const prices = visibleBars.flatMap(bar => bar.rows.map(row => Number(row.price)));
         const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
         const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
-        const chartWidth = Math.min(plotWidth, Math.max(320, visibleBars.length * 140));
-        const chartLeft = left + (plotWidth - chartWidth) / 2;
-        const xStep = chartWidth / visibleBars.length;
+        const chartWidth = plotWidth;
+        const chartLeft = left;
+        const xStep = chartWidth / Math.max(visibleBars.length, 1);
         const rowCount = Math.max(10, Math.min(24, Math.floor(plotHeight / 25)));
         const displayStep = state.tickSize * Math.max(1, Math.ceil(range / (state.tickSize * rowCount)));
         const displayHigh = Math.ceil(maxPrice / displayStep) * displayStep;
@@ -128,6 +128,7 @@
         const displayRange = Math.max(displayHigh - displayLow, displayStep);
         const priceY = price => top + (displayHigh - price) / displayRange * plotHeight;
         const displayRows = Array.from({length: Math.round(displayRange / displayStep) + 1}, (_, index) => displayHigh - index * displayStep);
+        const labelRows = displayRows.filter((_, idx) => idx % Math.max(1, Math.ceil(displayRows.length / 8)) === 0 || idx === displayRows.length - 1);
         const groupedRows = bar => {
             const grouped = new Map();
             bar.rows.forEach(row => {
@@ -143,13 +144,15 @@
         for (let line = 0; line <= 5; line++) {
             const lineY = top + line * plotHeight / 5;
             context.beginPath(); context.moveTo(left, lineY); context.lineTo(left + plotWidth, lineY); context.stroke();
-            context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
-            context.fillText((maxPrice - line * range / 5).toPrecision(8), left + plotWidth + 8, lineY + 3);
+            if (line % 2 === 0 || line === 5) {
+                context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
+                context.fillText((displayHigh - line * displayRange / 5).toFixed(Math.min(4, Math.max(2, state.tickSize < 1 ? 3 : 2))), left + plotWidth + 8, lineY + 3);
+            }
         }
         visibleBars.forEach((bar, index) => {
             const x = chartLeft + index * xStep;
             const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
-            const cellWidth = Math.max(56, xStep * .32);
+            const cellWidth = Math.max(22, Math.min(52, xStep * .28));
             const barSignals = state.signals.filter(signal => signal.bucket_time === bar.time);
             const rows = groupedRows(bar);
             context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
@@ -163,35 +166,32 @@
             context.fillStyle = candleColor;
             const bodyTop = Math.min(priceY(bar.open), priceY(bar.close));
             const bodyHeight = Math.max(4, Math.abs(priceY(bar.open) - priceY(bar.close)));
-            context.fillRect(x + xStep / 2 - 4, bodyTop, 8, bodyHeight);
+            context.fillRect(x + xStep / 2 - Math.max(3, xStep * 0.18), bodyTop, Math.max(6, xStep * 0.36), bodyHeight);
             context.globalAlpha = 1;
-            displayRows.forEach(price => {
+            const relevantRows = labelRows.filter(price => rows.has(price));
+            relevantRows.forEach(price => {
                 const row = rows.get(price) || {buy_volume: 0, sell_volume: 0, total_volume: 0};
                 const rowY = priceY(price);
                 const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
                 const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
-                context.font = '10px Consolas, monospace';
-                context.fillStyle = '#d7dee8';
                 if (buy > 0) {
                     context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
                     context.fillRect(x + 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                    context.fillStyle = '#d7dee8';
-                    context.fillText(formatVolume(buy), x + 6, rowY + 3);
                 }
                 if (sell > 0) {
                     context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
                     context.fillRect(x + xStep - cellWidth - 2, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                    context.fillStyle = '#d7dee8';
-                    context.fillText(formatVolume(sell), x + xStep - cellWidth + 4, rowY + 3);
                 }
             });
             context.font = '11px Consolas, monospace';
-            context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
-                context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 30, top - 42);
-            context.fillStyle = '#778292';
-                context.fillText('BUY', x + 6, top - 24);
-                context.fillText('SELL', x + xStep - cellWidth + 4, top - 24);
-                context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 28, top + plotHeight + 26);
+            if ((index % Math.max(2, Math.ceil(visibleBars.length / 6)) === 0 || index === visibleBars.length - 1) && !state.dragging) {
+                context.fillStyle = '#778292';
+                context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 18, top + plotHeight + 26);
+            }
+            if ((index % 4 === 0 || barSignals.length) && Math.abs(barDelta) > 0) {
+                context.fillStyle = barDelta >= 0 ? '#63d391' : '#ee7777';
+                context.fillText(`Δ ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 20, top - 22);
+            }
             barSignals.forEach((signal, signalIndex) => {
                 const signalY = top - 58 - signalIndex * 14;
                 context.fillStyle = signal.type === 'ABSORPTION' ? '#f7c65f' : (signal.side === 'BUY' ? '#63d391' : '#ee7777');
@@ -213,6 +213,16 @@
         const absolute = Math.abs(number);
         const decimals = absolute >= 1000 ? 0 : absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute >= 0.001 ? 5 : 8;
         return number.toFixed(decimals);
+    }
+
+    function formatCompact(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number === 0) return '0';
+        const abs = Math.abs(number);
+        if (abs >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
+        if (abs >= 1000) return `${(number / 1000).toFixed(1)}K`;
+        if (abs >= 1) return number.toFixed(2);
+        return number.toFixed(3);
     }
 
     function renderAnalysis() {
@@ -249,14 +259,39 @@
         const entries = [...levels.entries()].sort((a, b) => Number(b[0]) - Number(a[0]));
         if (!entries.length) return;
         const maxVolume = Math.max(...entries.map(entry => entry[1]), 1);
-        const rowHeight = Math.max(5, Math.min(16, (height - 28) / entries.length));
-        entries.slice(0, Math.floor((height - 28) / rowHeight)).forEach(([price, volume], index) => {
-            const y = 24 + index * rowHeight;
-            const barWidth = (width - 96) * volume / maxVolume;
-            profileContext.fillStyle = Number(volume) === maxVolume ? '#55d6e8' : 'rgba(85, 214, 232, .38)';
-            profileContext.fillRect(72, y, barWidth, Math.max(3, rowHeight - 2));
-            profileContext.fillStyle = '#778292'; profileContext.font = '9px Consolas, monospace';
-            profileContext.fillText(Number(price).toFixed(2), 8, y + rowHeight - 3);
+        const maxPoints = 36;
+        const step = Math.max(1, Math.ceil(entries.length / maxPoints));
+        const profilePoints = [];
+        for (let i = 0; i < entries.length; i += step) {
+            const slice = entries.slice(i, Math.min(entries.length, i + step));
+            const total = slice.reduce((sum, [, volume]) => sum + Number(volume), 0);
+            const price = slice[Math.floor(slice.length / 2)][0];
+            profilePoints.push({ price: Number(price), volume: total });
+        }
+        const left = 74, right = 14, top = 18, bottom = 18;
+        const plotWidth = width - left - right;
+        const plotHeight = height - top - bottom;
+        const pointStep = profilePoints.length > 1 ? plotWidth / (profilePoints.length - 1) : plotWidth;
+        profileContext.strokeStyle = '#55d6e8';
+        profileContext.lineWidth = 2;
+        profileContext.beginPath();
+        profilePoints.forEach(({ volume }, index) => {
+            const x = left + index * pointStep;
+            const y = top + plotHeight - (volume / maxVolume) * plotHeight;
+            if (index === 0) profileContext.moveTo(x, y); else profileContext.lineTo(x, y);
+        });
+        profileContext.stroke();
+        profileContext.lineTo(left + plotWidth, top + plotHeight);
+        profileContext.lineTo(left, top + plotHeight);
+        profileContext.closePath();
+        profileContext.fillStyle = 'rgba(85, 214, 232, 0.18)';
+        profileContext.fill();
+        profileContext.fillStyle = '#778292'; profileContext.font = '9px Consolas, monospace';
+        const labels = [entries[0], entries[Math.floor(entries.length / 2)], entries[entries.length - 1]];
+        labels.forEach(([price]) => {
+            const priceIndex = entries.findIndex(entry => Number(entry[0]) === Number(price));
+            const x = left + (priceIndex / Math.max(entries.length - 1, 1)) * plotWidth;
+            profileContext.fillText(Number(price).toFixed(2), x - 12, height - 6);
         });
     }
 
@@ -265,36 +300,53 @@
         const width = domCanvas.clientWidth, height = domCanvas.clientHeight;
         domContext.clearRect(0, 0, width, height);
         domContext.fillStyle = '#0c1016'; domContext.fillRect(0, 0, width, height);
-        if (!domState.available) {
+        const available = Boolean(domState && (domState.available || (Array.isArray(domState.bids) && Array.isArray(domState.asks))));
+        if (!available) {
             domContext.fillStyle = '#778292'; domContext.font = '10px Consolas, monospace';
             domContext.fillText('Waiting for a valid order-book snapshot', 12, 42);
             return;
         }
-        const levels = [...domState.asks.slice(0, 8).reverse().map(level => ({...level, side: 'ask'})), ...domState.bids.slice(0, 8).map(level => ({...level, side: 'bid'}))];
-        const maxQuantity = Math.max(...levels.map(level => level.quantity), 1);
-        const rowHeight = Math.max(8, Math.min(18, (height - 30) / levels.length));
-        levels.forEach((level, index) => {
-            const y = 24 + index * rowHeight;
-            const barWidth = (width - 112) * level.quantity / maxQuantity;
-            const barX = level.side === 'bid' ? 8 : width - 8 - barWidth;
-            domContext.fillStyle = level.side === 'bid' ? 'rgba(99,211,145,.55)' : 'rgba(238,119,119,.55)';
-            domContext.fillRect(barX, y, barWidth, Math.max(5, rowHeight - 2));
-            domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
-            domContext.fillText(level.price.toFixed(2), width / 2 - 32, y + rowHeight - 4);
-            domContext.fillStyle = '#778292';
-            domContext.fillText(formatVolume(level.quantity), level.side === 'bid' ? 8 : width - 54, y + rowHeight - 4);
-        });
-        const bestBid = domState.bids[0]?.price, bestAsk = domState.asks[0]?.price;
+        const bids = (domState.bids || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'bid' })).reverse();
+        const asks = (domState.asks || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'ask' })).reverse();
+        const maxQuantity = Math.max(...bids.concat(asks).map(level => level.quantity), 1);
+        const rowHeight = 18;
+        const centerX = width / 2;
+        const rowCount = Math.max(bids.length, asks.length, 6);
+        for (let i = 0; i < rowCount; i++) {
+            const y = 20 + i * rowHeight;
+            const bid = bids[i]; const ask = asks[i];
+            const bidBar = bid ? (centerX - 22) * bid.quantity / maxQuantity : 0;
+            const askBar = ask ? (width - (centerX + 22)) * ask.quantity / maxQuantity : 0;
+            if (bid) {
+                domContext.fillStyle = 'rgba(99, 211, 145, 0.7)';
+                domContext.fillRect(centerX - 10 - bidBar, y, bidBar, rowHeight - 4);
+                domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
+                domContext.fillText(formatCompact(bid.quantity), centerX - 10 - bidBar - 38, y + rowHeight - 6);
+                domContext.fillText(Number(bid.price).toFixed(2), centerX - 10 - bidBar + 4, y + rowHeight - 6);
+            }
+            if (ask) {
+                domContext.fillStyle = 'rgba(238, 119, 119, 0.7)';
+                domContext.fillRect(centerX + 10, y, askBar, rowHeight - 4);
+                domContext.fillStyle = '#d7dee8'; domContext.font = '9px Consolas, monospace';
+                domContext.fillText(Number(ask.price).toFixed(2), centerX + 18, y + rowHeight - 6);
+                domContext.fillText(formatCompact(ask.quantity), centerX + 18 + 56, y + rowHeight - 6);
+            }
+        }
+        const bestBid = bids[0]?.price, bestAsk = asks[0]?.price;
         if (bestBid && bestAsk) {
             domContext.fillStyle = '#55d6e8'; domContext.font = '10px Consolas, monospace';
             domContext.fillText(`spread ${(bestAsk - bestBid).toFixed(2)}`, 12, height - 8);
         }
+        domContext.fillStyle = '#778292'; domContext.font = '9px Consolas, monospace';
+        domContext.fillText('BID', centerX - 62, 14);
+        domContext.fillText('ASK', centerX + 32, 14);
     }
 
     async function loadDom() {
         try {
             const response = await fetch(`/api/binance/dom?symbol=${document.getElementById('symbol').value}`);
             domState = await response.json();
+            domState.available = Boolean(domState && (domState.available || ((Array.isArray(domState.bids) && domState.bids.length) || (Array.isArray(domState.asks) && domState.asks.length))));
         } catch (error) {
             domState = {bids: [], asks: [], available: false};
         }
@@ -350,12 +402,12 @@
     canvas.addEventListener('mouseleave', () => { state.crosshair = null; render(); });
     canvas.addEventListener('mousedown', event => { state.dragging = true; state.dragX = event.clientX; state.dragOffset = state.offset; });
     window.addEventListener('mouseup', () => { state.dragging = false; });
-    canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(8, Math.min(120, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
+    canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(12, Math.min(96, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
     document.getElementById('symbol').addEventListener('change', load);
     document.getElementById('interval').addEventListener('change', load);
-    document.getElementById('zoom-out').addEventListener('click', () => { state.visible = Math.min(120, state.visible + 4); render(); });
-    document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(8, state.visible - 4); render(); });
-    document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 18; state.offset = 0; render(); });
+    document.getElementById('zoom-out').addEventListener('click', () => { state.visible = Math.min(96, state.visible + 4); render(); });
+    document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(12, state.visible - 4); render(); });
+    document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 30; state.offset = 0; render(); });
     document.getElementById('refresh').addEventListener('click', load);
     window.addEventListener('resize', resize);
     resize();

@@ -45,6 +45,7 @@ _pool = None
 
 
 _pool_failed = False  # Track if pool creation failed to avoid retrying
+_binance_orderbook_schema_ready = False
 
 
 def _get_database_url() -> str:
@@ -461,6 +462,40 @@ def _init_tables():
             print("[DB] Tables initialized")
     except Exception as e:
         print(f"[DB] Index init error: {e}")
+
+
+def _ensure_binance_orderbook_schema() -> bool:
+    """Repair the order-book table after a transient initialization failure."""
+    global _binance_orderbook_schema_ready
+    if _binance_orderbook_schema_ready:
+        return True
+
+    pool = get_pool()
+    if not pool:
+        return False
+
+    try:
+        with pool.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS binance_orderbook_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    snapshot_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_update_id BIGINT NOT NULL,
+                    bids JSONB NOT NULL DEFAULT '[]',
+                    asks JSONB NOT NULL DEFAULT '[]',
+                    raw_data JSONB NOT NULL DEFAULT '{}'
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_binance_snapshot_symbol_time
+                ON binance_orderbook_snapshots(symbol, snapshot_time)
+            """)
+        _binance_orderbook_schema_ready = True
+        return True
+    except Exception as e:
+        print(f"[DB] Binance order-book schema unavailable: {e}")
+        return False
 
 
 # ── Trade Operations ─────────────────────────────────────────
@@ -1568,7 +1603,7 @@ def save_binance_depth_update(symbol: str, depth: dict) -> Optional[int]:
 def save_binance_orderbook_snapshot(symbol: str, snapshot: dict) -> Optional[int]:
     """Persist the REST snapshot used to seed diff-depth reconstruction."""
     pool = get_pool()
-    if not pool:
+    if not pool or not _ensure_binance_orderbook_schema():
         return None
     try:
         with pool.connection() as conn:
@@ -1635,7 +1670,7 @@ def get_binance_market_trades(symbol: str, hours: int = 24, limit: int = 100000)
 def get_binance_orderbook_state(symbol: str, update_limit: int = 10000) -> dict | None:
     """Reconstruct the latest Binance order book from snapshot plus diff updates."""
     pool = get_pool()
-    if not pool:
+    if not pool or not _ensure_binance_orderbook_schema():
         return None
     try:
         from src.binance_orderbook import BinanceOrderBook, OrderBookGapError
