@@ -417,7 +417,16 @@ def _init_tables():
             with pool.connection() as conn2:
                 conn2.execute("ALTER TABLE ohlcv_candles ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '1m'")
                 conn2.execute("ALTER TABLE ohlcv_candles DROP CONSTRAINT IF EXISTS ohlcv_candles_token_address_candle_time_key")
-                conn2.execute("ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe)")
+                # Use DO block to avoid error if constraint already exists
+                conn2.execute("""
+                    DO $$ BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint WHERE conname = 'ohlcv_candles_unique'
+                        ) THEN
+                            ALTER TABLE ohlcv_candles ADD CONSTRAINT ohlcv_candles_unique UNIQUE (token_address, candle_time, timeframe);
+                        END IF;
+                    END $$;
+                """)
                 print("[DB] Timeframe migration complete")
         except Exception as e:
             print(f"[DB] Timeframe migration: {e}")

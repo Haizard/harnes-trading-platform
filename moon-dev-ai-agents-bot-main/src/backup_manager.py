@@ -89,6 +89,7 @@ class BackupManager:
                     CREATE TABLE IF NOT EXISTS backup_history (
                         id SERIAL PRIMARY KEY,
                         backup_time TIMESTAMPTZ DEFAULT NOW(),
+                        completed_at TIMESTAMPTZ,
                         tables_backed TEXT[],
                         rows_exported INTEGER DEFAULT 0,
                         size_mb NUMERIC DEFAULT 0,
@@ -97,6 +98,8 @@ class BackupManager:
                         error TEXT
                     )
                 """)
+                # Migrate existing tables that lack completed_at
+                conn.execute("ALTER TABLE backup_history ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
 
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS backup_manifest (
