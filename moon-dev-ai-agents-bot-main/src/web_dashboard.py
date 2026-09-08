@@ -1033,6 +1033,57 @@ async def api_chart_agent_toggle(agent_id: str, payload: dict):
         raise HTTPException(status_code=404, detail="Unknown chart agent")
     return {"agent_id": agent_id, "state": result}
 
+
+@app.get("/api/chart/drawings")
+async def api_chart_drawings(symbol: str = "BTCUSDT", timeframe: str = "5m"):
+    from src.chart_drawings import get_drawings
+    return {"drawings": get_drawings(symbol.upper(), timeframe)}
+
+
+@app.post("/api/chart/drawings")
+async def api_chart_drawing_save(payload: dict):
+    try:
+        from src.chart_drawings import save_drawing
+        return {"drawing": save_drawing(payload)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/chart/drawings/{drawing_id}")
+async def api_chart_drawing_delete(drawing_id: str):
+    from src.chart_drawings import delete_drawing
+    return {"deleted": delete_drawing(drawing_id)}
+
+
+@app.post("/api/trade/tickets")
+async def api_trade_ticket_create(payload: dict):
+    """Create a risk-previewed ticket; this endpoint never executes an order."""
+    try:
+        from src.trade_tickets import create_ticket
+        return {"ticket": (await create_ticket(payload)).to_dict()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/trade/tickets/{ticket_id}/confirm")
+async def api_trade_ticket_confirm(ticket_id: str, payload: dict):
+    try:
+        from src.trade_tickets import confirm_ticket
+        return {"ticket": (await confirm_ticket(ticket_id, str(payload.get("nonce") or ""))).to_dict()}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (PermissionError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/trade/tickets/{ticket_id}/cancel")
+async def api_trade_ticket_cancel(ticket_id: str):
+    try:
+        from src.trade_tickets import cancel_ticket
+        return {"ticket": cancel_ticket(ticket_id).to_dict()}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
 @app.get("/api/smc")
 async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
     """SMC pattern detection + OHLCV + indicators for chart rendering."""

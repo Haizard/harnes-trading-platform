@@ -94,6 +94,8 @@
                 <button class="tool-button" title="Trend line">╱</button>
                 <button class="tool-button" title="Horizontal level">━</button>
                 <button class="tool-button" title="Measure">⌁</button>
+                <button class="tool-button" title="Ray">↗</button>
+                <button class="tool-button" title="Fibonacci">φ</button>
                 <span class="tool-divider"></span>
                 <button class="tool-button" title="Zoom in">⌕</button>
                 <button class="tool-button" title="Settings">⚙</button>
@@ -110,6 +112,7 @@
                     <div class="ai-section"><div class="ai-section-title">Evidence</div><ul class="ai-list" id="ai-evidence"><li>Footprint context will appear here.</li></ul></div>
                     <div class="ai-section"><div class="ai-section-title">Risk notes</div><ul class="ai-list ai-risk" id="ai-risk"><li>Analysis is informational until reviewed.</li></ul></div>
                     <div class="ai-section"><div class="ai-section-title">Chart agents</div><div class="ai-agents" id="ai-agents"><span class="ai-note">Loading agent controls...</span></div></div>
+                    <div class="ai-section"><div class="ai-section-title">Session memory</div><div class="ai-list" id="ai-session-log"><span class="ai-note">No chart conversation yet.</span></div></div>
                     <form class="ai-question" id="ai-question"><input id="ai-input" autocomplete="off" placeholder="Ask about this chart..." /><button type="submit">ASK</button></form>
                     <div class="ai-note">Bedrock can explain setups and prepare a review. It cannot place a trade directly from this panel.</div>
                 </div>
@@ -138,7 +141,7 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], snapshot: null, socket: null, sessionId: localStorage.getItem('moondev-chart-session') || crypto.randomUUID(), tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], snapshot: null, socket: null, drawings: [], drawingTool: null, pendingAnchor: null, view: null, sessionId: localStorage.getItem('moondev-chart-session') || crypto.randomUUID(), agents: {}, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
     localStorage.setItem('moondev-chart-session', state.sessionId);
 
     function resize() {
@@ -207,6 +210,7 @@
         const displayLow = Math.floor(minPrice / displayStep) * displayStep;
         const displayRange = Math.max(displayHigh - displayLow, displayStep);
         const priceY = price => top + (displayHigh - price) / displayRange * plotHeight;
+        state.view = {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars};
         const displayRows = Array.from({length: Math.round(displayRange / displayStep) + 1}, (_, index) => displayHigh - index * displayStep);
         const labelRows = displayRows.filter((_, idx) => idx % Math.max(1, Math.ceil(displayRows.length / 8)) === 0 || idx === displayRows.length - 1);
         const groupedRows = bar => {
@@ -311,11 +315,88 @@
             }
         });
         renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight);
+        renderDrawings();
         if (state.crosshair) {
             context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
             context.beginPath(); context.moveTo(state.crosshair.x, top); context.lineTo(state.crosshair.x, top + plotHeight); context.stroke();
             context.setLineDash([]);
         }
+    }
+
+    function renderDrawings() {
+        if (!state.view || !state.drawings.length) return;
+        const {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars} = state.view;
+        const positions = new Map(visibleBars.map((bar, index) => [bar.time, index]));
+        state.drawings.forEach(drawing => {
+            const anchors = drawing.anchors || [];
+            if (!anchors.length) return;
+            const point = anchor => {
+                const index = positions.get(anchor.time);
+                if (index == null) return null;
+                return {x: chartLeft + index * xStep + xStep / 2, y: top + (displayHigh - Number(anchor.price)) / displayRange * plotHeight};
+            };
+            const first = point(anchors[0]);
+            const second = point(anchors[1] || anchors[0]);
+            if (!first || !second) return;
+            const color = drawing.style?.color || '#f5c96a';
+            context.save();
+            context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 2;
+            context.setLineDash(drawing.type === 'horizontal_level' ? [5, 4] : []);
+
+            if (drawing.type === 'horizontal_level') {
+                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(chartLeft + visibleBars.length * xStep, first.y); context.stroke();
+                context.fillText(`LEVEL ${Number(anchors[0].price).toFixed(2)}`, first.x + 5, first.y - 5);
+            } else if (drawing.type === 'ray') {
+                const dx = second.x - first.x;
+                const dy = second.y - first.y;
+                const endX = chartLeft + visibleBars.length * xStep;
+                const endY = first.y + (endX - first.x) * (dy / Math.max(Math.abs(dx), 1));
+                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(endX, endY); context.stroke();
+                context.fillText('RAY', first.x + 5, first.y - 5);
+            } else if (drawing.type === 'fibonacci') {
+                const startPrice = Number(anchors[0].price);
+                const endPrice = Number(anchors[1]?.price || anchors[0].price);
+                const range = Math.abs(endPrice - startPrice) || 1;
+                const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+                const low = Math.min(startPrice, endPrice);
+                const high = Math.max(startPrice, endPrice);
+                levels.forEach(level => {
+                    const price = high - (high - low) * level;
+                    const y = top + (displayHigh - price) / displayRange * plotHeight;
+                    context.beginPath(); context.moveTo(first.x, y); context.lineTo(second.x, y); context.stroke();
+                    context.fillText(`Fib ${level.toFixed(3)}`, second.x + 5, y - 4);
+                });
+            } else {
+                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(second.x, second.y); context.stroke();
+                if (drawing.type === 'measure') context.fillText(`${(Number(anchors[1]?.price || anchors[0].price) - Number(anchors[0].price)).toFixed(2)}`, second.x + 5, second.y - 5);
+            }
+            context.setLineDash([]);
+            context.restore();
+        });
+    }
+
+    async function loadDrawings() {
+        try {
+            const symbol = document.getElementById('symbol').value;
+            const interval = Number(document.getElementById('interval').value);
+            const response = await fetch(`/api/chart/drawings?symbol=${symbol}&timeframe=${Math.round(interval / 60)}m`);
+            state.drawings = (await response.json()).drawings || [];
+            render();
+        } catch (error) { state.drawings = []; }
+    }
+
+    async function handleDrawingClick(event) {
+        if (!state.drawingTool || !state.view) return;
+        const {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars} = state.view;
+        const index = Math.max(0, Math.min(visibleBars.length - 1, Math.round((event.offsetX - chartLeft - xStep / 2) / xStep)));
+        const bar = visibleBars[index];
+        const anchor = {time: bar.time, price: Number(displayHigh - (event.offsetY - top) / plotHeight * displayRange)};
+        if (state.drawingTool === 'horizontal_level') state.pendingAnchor = null;
+        else if (!state.pendingAnchor) { state.pendingAnchor = anchor; return; }
+        const anchors = state.pendingAnchor ? [state.pendingAnchor, anchor] : [anchor];
+        const drawing = {id: crypto.randomUUID(), type: state.drawingTool, symbol: document.getElementById('symbol').value, timeframe: `${Math.round(Number(document.getElementById('interval').value) / 60)}m`, anchors, style: {color: '#f5c96a'}};
+        state.drawings.push(drawing); state.pendingAnchor = null; state.drawingTool = null; canvas.style.cursor = 'default'; render();
+        await fetch('/api/chart/drawings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(drawing)});
     }
 
     function renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight) {
@@ -324,6 +405,8 @@
         const visibleTimes = new Map(visibleBars.map((bar, index) => [bar.time, index]));
         const dense = xStep < 100;
         overlays.forEach(overlay => {
+            const agentState = state.agents[overlay.source] || {enabled: true, render: true};
+            if (!agentState.enabled || !agentState.render) return;
             const index = visibleTimes.get(overlay.bucket_time);
             if (index == null) return;
             const bar = visibleBars[index];
@@ -615,9 +698,26 @@
                 state.snapshot.overlays = [...(state.snapshot.overlays || []), ...result.contributions];
                 render();
             }
+            await loadSessionHistory();
             renderAiAnalysis(result);
         } catch (error) {
             renderAiAnalysis({available: false, message: `Analysis unavailable: ${error.message}`});
+        }
+    }
+
+    async function loadSessionHistory() {
+        try {
+            const response = await fetch(`/api/binance/ai/sessions/${state.sessionId}`);
+            const data = await response.json();
+            const container = document.getElementById('ai-session-log');
+            const messages = Array.isArray(data.messages) ? data.messages : [];
+            if (!messages.length) {
+                container.innerHTML = '<span class="ai-note">No chart conversation yet.</span>';
+                return;
+            }
+            container.innerHTML = messages.slice(-6).map(message => `<div class="ai-note"><strong>${escapeHtml(message.role || 'note')}:</strong> ${escapeHtml(String(message.content || '')).slice(0, 180)}</div>`).join('');
+        } catch (error) {
+            document.getElementById('ai-session-log').innerHTML = '<span class="ai-note">Session memory unavailable.</span>';
         }
     }
 
@@ -625,10 +725,32 @@
         try {
             const response = await fetch('/api/chart/agents');
             const data = await response.json();
+            state.agents = data.agents || {};
             const container = document.getElementById('ai-agents');
-            container.innerHTML = Object.entries(data.agents || {}).map(([id, agent]) => `<label class="ai-agent-row"><span>${escapeHtml(agent.label)}</span><input type="checkbox" data-agent="${id}" ${agent.enabled ? 'checked' : ''} /></label>`).join('');
+            container.innerHTML = Object.entries(data.agents || {}).map(([id, agent]) => `
+                <div class="ai-agent-row">
+                    <span>${escapeHtml(agent.label)}</span>
+                    <div>
+                        <label><input type="checkbox" data-agent="${id}" data-kind="enabled" ${agent.enabled ? 'checked' : ''} /></label>
+                        <label title="Render on chart"><input type="checkbox" data-agent="${id}" data-kind="render" ${agent.render ? 'checked' : ''} /></label>
+                    </div>
+                </div>
+            `).join('');
             container.querySelectorAll('input[data-agent]').forEach(input => input.addEventListener('change', async () => {
-                await fetch(`/api/chart/agents/${input.dataset.agent}/toggle`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: input.checked})});
+                const agentId = input.dataset.agent;
+                const kind = input.dataset.kind;
+                const stateValue = input.checked;
+                const agent = state.agents[agentId] || {enabled: true, render: true};
+                const payload = {
+                    enabled: kind === 'enabled' ? stateValue : Boolean(agent.enabled),
+                    render: kind === 'render' ? stateValue : Boolean(agent.render),
+                };
+                const updated = await fetch(`/api/chart/agents/${agentId}/toggle`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+                if (updated.ok) {
+                    const result = await updated.json();
+                    state.agents[agentId] = result.state || payload;
+                    render();
+                }
             }));
         } catch (error) { document.getElementById('ai-agents').textContent = 'Agent controls unavailable'; }
     }
@@ -688,6 +810,7 @@
     });
     canvas.addEventListener('mouseleave', () => { state.crosshair = null; render(); });
     canvas.addEventListener('mousedown', event => { state.dragging = true; state.dragX = event.clientX; state.dragOffset = state.offset; });
+    canvas.addEventListener('click', handleDrawingClick);
     window.addEventListener('mouseup', () => { state.dragging = false; });
     canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(12, Math.min(96, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
     document.getElementById('symbol').addEventListener('change', load);
@@ -713,9 +836,20 @@
             } else if (tool === 'Settings') {
                 document.querySelector('.legend').classList.toggle('is-hidden');
             } else if (tool === 'Crosshair') {
+                state.drawingTool = null; state.pendingAnchor = null; canvas.style.cursor = 'crosshair';
+            } else if (['Trend line', 'Horizontal level', 'Measure', 'Ray', 'Fibonacci'].includes(tool)) {
+                const mapping = {
+                    'Trend line': 'trend_line',
+                    'Horizontal level': 'horizontal_level',
+                    'Measure': 'measure',
+                    'Ray': 'ray',
+                    'Fibonacci': 'fibonacci',
+                };
+                state.drawingTool = mapping[tool];
+                state.pendingAnchor = null;
                 canvas.style.cursor = 'crosshair';
             } else {
-                canvas.style.cursor = 'default';
+                state.drawingTool = null; state.pendingAnchor = null; canvas.style.cursor = 'default';
             }
         });
     });
@@ -724,7 +858,9 @@
     load();
     loadDom();
     loadAgentControls();
-    setInterval(load, 30000);
+    loadSessionHistory();
+    loadDrawings();
+    setInterval(() => { load(); loadSessionHistory(); }, 30000);
     </script>
 </body>
 </html>
