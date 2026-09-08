@@ -6,7 +6,14 @@ from typing import Any
 
 
 def normalize_confidence(value: object) -> float | None:
-    """Normalize numeric and textual confidence values to the range [0, 1]."""
+    """Normalize numeric and textual confidence values to the range [0, 1].
+    
+    Handles common formats:
+    - Numeric: 0.72, 72
+    - Percentage strings: '72%', 'Confidence: 72%'
+    - Ranges: '70-80%' (takes midpoint)
+    - Returns None for unparseable values
+    """
     if value is None or isinstance(value, bool):
         return None
     raw = value
@@ -14,12 +21,23 @@ def normalize_confidence(value: object) -> float | None:
         if isinstance(value, str):
             text = value.strip().lower()
             percent = "%" in text
-            match = __import__("re").search(r"-?\d+(?:\.\d+)?", text)
-            if not match:
-                return None
-            number = float(match.group())
-            if percent or number > 1:
-                number /= 100
+            
+            # Handle ranges like '70-80%' by taking midpoint
+            range_match = __import__("re").search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", text)
+            if range_match:
+                num1 = float(range_match.group(1))
+                num2 = float(range_match.group(2))
+                number = (num1 + num2) / 2
+                if percent or number > 1:
+                    number /= 100
+            else:
+                # Single number pattern
+                match = __import__("re").search(r"-?\d+(?:\.\d+)?", text)
+                if not match:
+                    return None
+                number = float(match.group())
+                if percent or number > 1:
+                    number /= 100
         else:
             number = float(value)
             if number > 1:

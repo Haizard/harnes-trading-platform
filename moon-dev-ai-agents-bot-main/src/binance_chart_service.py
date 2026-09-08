@@ -20,6 +20,7 @@ class BinanceChartService:
         order_book: dict[str, Any] | None = None,
         agent_signals: list[dict[str, Any]] | None = None,
         history_candles: list[dict[str, Any]] | None = None,
+        warnings: list[str] | None = None,
     ) -> ChartSnapshot:
         levels = aggregate_trades(trades, interval_seconds, tick_size)
         candles = history_candles or aggregate_ohlc(trades, interval_seconds)
@@ -40,6 +41,9 @@ class BinanceChartService:
         ask_depth = sum(float(level.get("quantity", 0)) for level in order_book.get("asks", []))
 
         agent_signals = agent_signals or []
+        all_warnings = list(warnings or [])
+        if not trades:
+            all_warnings.append("No Binance trades were available for this window.")
         return ChartSnapshot(
             symbol=symbol.upper(),
             timeframe=timeframe_label(interval_seconds),
@@ -63,7 +67,7 @@ class BinanceChartService:
             indicators=compute_indicators(serialized_candles),
             overlays=overlays + self._agent_overlays(agent_signals),
             agent_signals=agent_signals,
-            warnings=[] if trades else ["No Binance trades were available for this window."],
+            warnings=all_warnings,
         )
 
     @staticmethod

@@ -7,6 +7,10 @@ def test_normalize_confidence_accepts_common_formats():
     assert normalize_confidence("72%") == 0.72
     assert normalize_confidence("Confidence: 72%") == 0.72
     assert normalize_confidence("unknown") is None
+    # Pathological ranges (issue #10)
+    assert normalize_confidence("70-80%") == 0.75  # midpoint of 70 and 80
+    assert normalize_confidence("65.5-75.5%") == 0.705  # midpoint with decimals
+    assert normalize_confidence("Range: 60-90%") == 0.75  # prefix + range
 
 
 def test_overlay_preserves_raw_confidence_and_serializes():
