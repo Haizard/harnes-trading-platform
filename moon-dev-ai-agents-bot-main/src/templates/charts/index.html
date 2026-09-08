@@ -17,7 +17,7 @@
         button:active { transform: translateY(1px); }
         .status { margin-left: auto; color: var(--muted); font-size: 11px; }
         .chart-shell { height: calc(100vh - 60px); min-height: 680px; position: relative; display: grid; grid-template-rows: minmax(390px, 1fr) 150px 96px; }
-        .chart-main-row { min-height: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); }
+        .chart-main-row { min-height: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) 300px; }
         .tool-rail { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 6px; border-right: 1px solid var(--grid); background: rgba(9,15,23,.8); }
         .tool-button { width: 29px; height: 29px; padding: 0; border: 1px solid transparent; color: var(--muted); background: transparent; font-size: 15px; line-height: 1; }
         .tool-button:hover, .tool-button.active { color: var(--cyan); border-color: rgba(88,217,232,.3); background: rgba(88,217,232,.08); }
@@ -25,6 +25,24 @@
         .chart-stage { min-width: 0; min-height: 0; position: relative; }
         .chart-stage::before { content: "LIVE  ·  BINANCE  ·  FOOTPRINT"; position: absolute; top: 14px; right: 18px; z-index: 1; color: rgba(127,145,165,.65); font-size: 10px; letter-spacing: .08em; pointer-events: none; }
         #market-canvas { display: block; width: 100%; height: 100%; }
+        .ai-panel { min-width: 0; overflow: auto; border-left: 1px solid var(--grid); background: linear-gradient(180deg, rgba(18,28,40,.98), rgba(9,15,23,.98)); }
+        .ai-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 14px 11px; border-bottom: 1px solid var(--grid); }
+        .ai-panel-title { color: var(--cyan); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
+        .ai-status { color: var(--muted); font-size: 9px; white-space: nowrap; }
+        .ai-content { padding: 13px 14px; }
+        .ai-bias { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 11px; border: 1px solid var(--grid); border-radius: 5px; background: rgba(88,217,232,.05); }
+        .ai-bias-label { color: var(--muted); font-size: 9px; letter-spacing: .08em; }
+        .ai-bias-value { margin-top: 4px; color: var(--text); font-size: 16px; font-weight: 600; }
+        .ai-confidence { color: var(--amber); font-size: 11px; }
+        .ai-section { margin-top: 15px; }
+        .ai-section-title { margin-bottom: 7px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+        .ai-summary, .ai-list { color: var(--text); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+        .ai-list { margin: 0; padding-left: 17px; }
+        .ai-risk { color: var(--red); }
+        .ai-question { display: flex; gap: 6px; margin-top: 15px; }
+        .ai-question input { min-width: 0; flex: 1; border: 1px solid var(--grid); border-radius: 4px; background: #0a1018; color: var(--text); padding: 8px; font: inherit; font-size: 10px; }
+        .ai-question button { padding: 7px 9px; color: #061017; background: var(--cyan); border-color: var(--cyan); font-size: 10px; }
+        .ai-note { margin-top: 12px; color: var(--muted); font-size: 9px; line-height: 1.45; }
         .analysis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--grid); background: rgba(9,15,23,.86); min-width: 0; }
         .analysis-panel { min-width: 0; min-height: 0; position: relative; overflow: hidden; border-right: 1px solid var(--grid); background: linear-gradient(180deg, rgba(18,28,40,.72), rgba(13,20,30,.62)); }
         .analysis-panel canvas { display: block; width: 100%; height: 100%; }
@@ -49,8 +67,9 @@
         #session-low { color: var(--red); }
         .chart-shell::after { content: "MOON DEV  /  BINANCE FOOTPRINT"; position: absolute; left: 58px; bottom: 14px; color: rgba(127,145,165,.4); font-size: 10px; letter-spacing: .12em; pointer-events: none; }
         @media (max-width: 820px) { header { padding: 10px 12px; } h1 { width: 100%; } .status { margin-left: 0; } }
-        @media (max-width: 820px) { .analysis-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; } .analysis-panel { min-width: 180px; } }
-        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .stat { padding: 9px 8px; } .stat-label { font-size: 9px; } .stat-value { font-size: 11px; } .chart-shell { min-height: 700px; grid-template-rows: minmax(380px, 1fr) 220px 108px; } .chart-main-row { grid-template-columns: 34px minmax(0, 1fr); } .tool-rail { padding-left: 3px; padding-right: 3px; } .tool-button { width: 27px; } }
+        @media (max-width: 1000px) { .chart-main-row { grid-template-columns: 42px minmax(0, 1fr) 260px; } .ai-panel { font-size: 10px; } }
+        @media (max-width: 820px) { .analysis-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; } .analysis-panel { min-width: 180px; } .chart-main-row { grid-template-columns: 34px minmax(0, 1fr); } .ai-panel { grid-column: 1 / -1; border-top: 1px solid var(--grid); border-left: 0; max-height: 300px; } }
+        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .stat { padding: 9px 8px; } .stat-label { font-size: 9px; } .stat-value { font-size: 11px; } .chart-shell { min-height: 700px; grid-template-rows: minmax(380px, 1fr) 220px 108px; } .tool-rail { padding-left: 3px; padding-right: 3px; } .tool-button { width: 27px; } }
         @media (max-width: 460px) { .chart-shell { height: auto; min-height: 0; grid-template-rows: 380px auto auto; } .analysis-grid { grid-template-columns: 1fr; overflow: visible; } .analysis-panel { min-width: 0; min-height: 150px; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     </style>
 </head>
@@ -80,6 +99,17 @@
                 <canvas id="market-canvas" aria-label="Native Binance footprint chart"></canvas>
                 <div class="legend"><strong>BINANCE FOOTPRINT</strong><span class="legend-chip buy">BUY</span><span class="legend-chip sell">SELL</span><span class="legend-chip delta">DELTA</span></div>
             </section>
+            <aside class="ai-panel" aria-label="AI chart analysis">
+                <div class="ai-panel-header"><span class="ai-panel-title">AI MARKET DESK</span><span class="ai-status" id="ai-status">SNAPSHOT READY</span></div>
+                <div class="ai-content">
+                    <div class="ai-bias"><div><div class="ai-bias-label">CURRENT BIAS</div><div class="ai-bias-value" id="ai-bias">WAITING</div></div><div class="ai-confidence" id="ai-confidence">--</div></div>
+                    <div class="ai-section"><div class="ai-section-title">Chart read</div><div class="ai-summary" id="ai-summary">Ask the Bedrock analyst to interpret the current footprint, delta, profile, and DOM.</div></div>
+                    <div class="ai-section"><div class="ai-section-title">Evidence</div><ul class="ai-list" id="ai-evidence"><li>Footprint context will appear here.</li></ul></div>
+                    <div class="ai-section"><div class="ai-section-title">Risk notes</div><ul class="ai-list ai-risk" id="ai-risk"><li>Analysis is informational until reviewed.</li></ul></div>
+                    <form class="ai-question" id="ai-question"><input id="ai-input" autocomplete="off" placeholder="Ask about this chart..." /><button type="submit">ASK</button></form>
+                    <div class="ai-note">Bedrock can explain setups and prepare a review. It cannot place a trade directly from this panel.</div>
+                </div>
+            </aside>
         </div>
         <div class="analysis-grid">
             <div class="analysis-panel"><span class="analysis-label">CUMULATIVE DELTA</span><canvas id="delta-canvas" aria-label="Cumulative delta chart"></canvas></div>
@@ -104,7 +134,7 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], snapshot: null, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -504,6 +534,36 @@
         document.getElementById('candle-count').textContent = state.bars.length;
     }
 
+    function renderAiAnalysis(result) {
+        const analysis = result?.analysis || {};
+        const bias = String(analysis.bias || 'WAITING').toUpperCase();
+        const confidence = Number(analysis.confidence);
+        document.getElementById('ai-status').textContent = result?.available ? 'BEDROCK CONNECTED' : 'LOCAL SNAPSHOT';
+        document.getElementById('ai-bias').textContent = bias;
+        document.getElementById('ai-bias').style.color = bias.includes('BULL') ? 'var(--green)' : bias.includes('BEAR') ? 'var(--red)' : 'var(--text)';
+        document.getElementById('ai-confidence').textContent = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}% CONF.` : '--';
+        document.getElementById('ai-summary').textContent = analysis.summary || result?.message || 'Ask the Bedrock analyst to interpret the current chart.';
+        const evidence = Array.isArray(analysis.key_evidence) && analysis.key_evidence.length ? analysis.key_evidence : ['Footprint context is ready for analysis.'];
+        const risks = Array.isArray(analysis.risk_notes) && analysis.risk_notes.length ? analysis.risk_notes : ['Review invalidation and position size before acting.'];
+        document.getElementById('ai-evidence').innerHTML = evidence.slice(0, 5).map(item => `<li>${escapeHtml(String(item))}</li>`).join('');
+        document.getElementById('ai-risk').innerHTML = risks.slice(0, 5).map(item => `<li>${escapeHtml(String(item))}</li>`).join('');
+    }
+
+    function escapeHtml(value) {
+        return value.replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]));
+    }
+
+    async function askChartAi(question) {
+        if (!state.snapshot) return;
+        document.getElementById('ai-status').textContent = 'ANALYZING...';
+        try {
+            const response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question, snapshot: state.snapshot}) });
+            renderAiAnalysis(await response.json());
+        } catch (error) {
+            renderAiAnalysis({available: false, message: `Analysis unavailable: ${error.message}`});
+        }
+    }
+
     async function load() {
         const symbol = document.getElementById('symbol').value;
         const interval = Number(document.getElementById('interval').value);
@@ -512,6 +572,7 @@
             state.tickSize = Number(tickSizeFor(symbol));
             const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
             const data = await response.json();
+            state.snapshot = data;
             state.bars = groupBars(data.levels || [], data.candles || []);
             state.signals = data.signals || [];
             state.offset = 0;
@@ -541,6 +602,12 @@
     document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(12, state.visible - 4); render(); });
     document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 30; state.offset = 0; render(); });
     document.getElementById('refresh').addEventListener('click', load);
+    document.getElementById('ai-question').addEventListener('submit', event => {
+        event.preventDefault();
+        const input = document.getElementById('ai-input');
+        const question = input.value.trim();
+        if (question) { input.value = ''; askChartAi(question); }
+    });
     document.querySelectorAll('.tool-button').forEach(button => {
         button.addEventListener('click', () => {
             document.querySelectorAll('.tool-button').forEach(item => item.classList.remove('active'));

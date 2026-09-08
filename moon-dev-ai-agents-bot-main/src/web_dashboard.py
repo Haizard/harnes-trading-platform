@@ -800,66 +800,87 @@ async def api_binance_footprint(
     if interval_seconds < 1 or interval_seconds > 86400:
         raise HTTPException(status_code=400, detail="interval_seconds must be between 1 and 86400")
     try:
-        from src.binance_footprint import aggregate_ohlc, aggregate_trades, detect_order_flow_signals
+        from src.binance_chart_service import BinanceChartService
         from src.db_storage import get_binance_market_trades
 
         trades = await asyncio.to_thread(get_binance_market_trades, symbol, hours)
-        levels = aggregate_trades(
-            trades,
+        dom = await _get_binance_dom_state(symbol)
+        agent_signals = await _get_binance_agent_signals(trades, interval_seconds)
+        snapshot = BinanceChartService().build_snapshot(
+            symbol=symbol,
+            trades=trades,
             interval_seconds=interval_seconds,
             tick_size=tick_size,
+            order_book=dom,
+            agent_signals=agent_signals,
         )
-        candles = aggregate_ohlc(trades, interval_seconds=interval_seconds)
-        signals = detect_order_flow_signals(levels, candles)
-
-        def serialize_level(level):
-            return {
-                "bucket_time": level["bucket_time"].isoformat(),
-                "price": float(level["price"]),
-                "buy_volume": float(level["buy_volume"]),
-                "sell_volume": float(level["sell_volume"]),
-                "delta": float(level["delta"]),
-                "total_volume": float(level["total_volume"]),
-                "trade_count": level["trade_count"],
-            }
-
-        return {
-            "source": "binance",
+        result = snapshot.to_dict()
+        result.update({
             "storage": "postgresql",
-            "symbol": symbol.upper(),
             "hours": hours,
             "interval_seconds": interval_seconds,
             "tick_size": tick_size,
             "trade_count": len(trades),
-            "candles": [
-                {
-                    "bucket_time": candle["bucket_time"].isoformat(),
-                    "open": float(candle["open"]),
-                    "high": float(candle["high"]),
-                    "low": float(candle["low"]),
-                    "close": float(candle["close"]),
-                }
-                for candle in candles
-            ],
-            "signals": [
-                {
-                    **signal,
-                    "bucket_time": signal["bucket_time"].isoformat(),
-                }
-                for signal in signals
-            ],
-            "levels": [serialize_level(level) for level in levels],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+            "timestamp": result["as_of"],
+            "levels": result["footprint"]["levels"],
+            "signals": result["footprint"]["signals"],
+        })
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         return {"error": str(exc), "source": "binance", "storage": "postgresql"}
 
 
-@app.get("/api/binance/dom")
-async def api_binance_dom(symbol: str = "BTCUSDT"):
-    """Return reconstructed Binance top-of-book levels from PostgreSQL."""
+async def _get_binance_agent_signals(trades: list[dict], interval_seconds: int) -> list[dict]:
+    """Adapt existing candle-oriented RBI and bot outputs for the footprint chart."""
+    try:
+        from src.binance_footprint import aggregate_ohlc
+        candles = aggregate_ohlc(trades, interval_seconds)
+        normalized = [{
+            "time": int(candle["bucket_time"].timestamp()),
+            "open": float(candle["open"]),
+            "high": float(candle["high"]),
+            "low": float(candle["low"]),
+            "close": float(candle["close"]),
+            "volume": 0,
+        } for candle in candles]
+        signals = []
+        try:
+            from src.strategy_bridge import get_custom_strategy_chart_markers
+            rbi = await asyncio.to_thread(get_custom_strategy_chart_markers, normalized)
+            for marker in rbi.get("markers", []):
+                signals.append({
+                    **marker,
+                    "source": "rbi_agent",
+                    "type": "agent_signal",
+                    "bucket_time": datetime.fromtimestamp(marker["time"], tz=timezone.utc).isoformat(),
+                    "direction": marker.get("direction"),
+                    "confidence": marker.get("strength"),
+                    "label": marker.get("text", "RBI signal"),
+                })
+        except Exception:
+            pass
+        try:
+            from src.custom_chart_bots import run_custom_bots
+            custom = await asyncio.to_thread(run_custom_bots, normalized)
+            for marker in custom.markers:
+                signals.append({
+                    **marker,
+                    "source": "custom_chart_bot",
+                    "type": "bot_signal",
+                    "bucket_time": datetime.fromtimestamp(marker["time"], tz=timezone.utc).isoformat(),
+                    "label": marker.get("text", "Chart bot signal"),
+                })
+        except Exception:
+            pass
+        return signals[:120]
+    except Exception:
+        return []
+
+
+async def _get_binance_dom_state(symbol: str) -> dict:
+    """Load and serialize the latest persisted Binance order-book state."""
     try:
         from src.db_storage import get_binance_orderbook_state
         state = await asyncio.to_thread(get_binance_orderbook_state, symbol)
@@ -876,8 +897,42 @@ async def api_binance_dom(symbol: str = "BTCUSDT"):
             "asks": [serialize(level) for level in state["asks"]],
             "available": True,
         }
+    except Exception:
+        return {"source": "binance", "storage": "postgresql", "symbol": symbol.upper(), "bids": [], "asks": [], "available": False}
+
+
+@app.get("/api/binance/dom")
+async def api_binance_dom(symbol: str = "BTCUSDT"):
+    """Return reconstructed Binance top-of-book levels from PostgreSQL."""
+    return await _get_binance_dom_state(symbol)
+
+
+@app.post("/api/binance/ai/analyze")
+async def api_binance_ai_analyze(payload: dict):
+    """Ask Bedrock for bounded analysis of the current Binance chart snapshot."""
+    snapshot = payload.get("snapshot") or {}
+    question = str(payload.get("question") or "Analyze the current Binance order flow.").strip()[:2000]
+    if not snapshot:
+        raise HTTPException(status_code=400, detail="snapshot is required")
+    try:
+        from src.bedrock_llm import ChatMessage, ChatOptions, bedrock_chat, is_bedrock_configured
+        if not is_bedrock_configured():
+            return {"available": False, "message": "AWS Bedrock is not configured for this environment."}
+        import json
+        system_prompt = (
+            "You are Moon Dev's chart analysis assistant. Analyze only the supplied Binance chart context. "
+            "Return valid JSON with keys summary, bias, confidence, key_evidence, levels, risk_notes, "
+            "action, and chart_contributions. Never claim certainty. Never place or authorize trades. "
+            "The action must be WAIT, WATCH, or PREPARE_REVIEW."
+        )
+        context = json.dumps(snapshot, separators=(",", ":"), default=str)[:24000]
+        response = await bedrock_chat([
+            ChatMessage(role="user", content=f"Question: {question}\nChart context:\n{context}"),
+        ], ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt))
+        analysis = response.json_data or {"summary": response.text, "bias": "UNKNOWN", "confidence": 0, "action": "WAIT"}
+        return {"available": True, "analysis": analysis, "model_text": response.text}
     except Exception as exc:
-        return {"error": str(exc), "source": "binance", "storage": "postgresql"}
+        return {"available": False, "error": str(exc)}
 
 @app.get("/api/smc")
 async def api_smc(symbol: str = "SOLUSDT", interval: str = "1h", limit: int = 100):
