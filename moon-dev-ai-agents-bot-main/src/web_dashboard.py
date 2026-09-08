@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 # FastAPI
-from fastapi import FastAPI, HTTPException, Request, Response, Form
+from fastapi import FastAPI, HTTPException, Request, Response, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -913,6 +913,54 @@ async def _get_binance_dom_state(symbol: str) -> dict:
 async def api_binance_dom(symbol: str = "BTCUSDT"):
     """Return reconstructed Binance top-of-book levels from PostgreSQL."""
     return await _get_binance_dom_state(symbol)
+
+
+@app.websocket("/ws/binance/{symbol}")
+async def ws_binance_chart(websocket: WebSocket, symbol: str):
+    """Stream snapshot-diff updates from persisted Binance market state."""
+    await websocket.accept()
+    interval_seconds = int(websocket.query_params.get("interval_seconds", "300"))
+    tick_size = websocket.query_params.get("tick_size")
+    candle_limit = int(websocket.query_params.get("candle_limit", "100"))
+    last_signature = None
+    try:
+        from src.binance_chart_service import BinanceChartService
+        from src.binance_history import fetch_binance_klines
+        from src.db_storage import get_binance_market_trades
+        try:
+            history_candles = await asyncio.to_thread(fetch_binance_klines, symbol, interval_seconds, candle_limit)
+        except Exception:
+            history_candles = []
+        while True:
+            trades = await asyncio.to_thread(get_binance_market_trades, symbol, 24)
+            dom = await _get_binance_dom_state(symbol)
+            agent_signals = await _get_binance_agent_signals(history_candles or trades, interval_seconds, candles=bool(history_candles))
+            snapshot = BinanceChartService().build_snapshot(
+                symbol=symbol, trades=trades, interval_seconds=interval_seconds,
+                tick_size=tick_size, order_book=dom, agent_signals=agent_signals,
+                history_candles=history_candles,
+            ).to_dict()
+            snapshot.update({
+                "storage": "postgresql", "trade_count": len(trades),
+                "levels": snapshot["footprint"]["levels"],
+                "signals": snapshot["footprint"]["signals"],
+                "timestamp": snapshot["as_of"],
+            })
+            latest = snapshot["levels"][-1] if snapshot["levels"] else {}
+            signature = (len(trades), latest.get("bucket_time"), latest.get("trade_count"), dom.get("last_update_id"))
+            if signature != last_signature:
+                await websocket.send_json({"type": "snapshot", "data": snapshot})
+                last_signature = signature
+            else:
+                await websocket.send_json({"type": "heartbeat", "timestamp": datetime.now(timezone.utc).isoformat()})
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
 
 
 @app.post("/api/binance/ai/analyze")

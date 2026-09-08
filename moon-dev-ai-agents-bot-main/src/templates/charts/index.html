@@ -134,7 +134,7 @@
     const profileContext = profileCanvas.getContext('2d');
     const domCanvas = document.getElementById('dom-canvas');
     const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], snapshot: null, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
+    const state = { bars: [], signals: [], snapshot: null, socket: null, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
 
     function resize() {
         const box = canvas.getBoundingClientRect();
@@ -611,6 +611,35 @@
         }
     }
 
+    function applySnapshot(data, resetOffset = false) {
+        state.snapshot = data;
+        state.bars = groupBars(data.levels || [], data.candles || []);
+        state.signals = data.signals || [];
+        if (resetOffset) state.offset = 0;
+        document.getElementById('status').textContent = `${data.symbol || document.getElementById('symbol').value} | ${data.trade_count || 0} trades | ${data.candles?.length || 0} candles | realtime`;
+        updateStats();
+        render();
+        renderAnalysis();
+    }
+
+    function connectRealtime() {
+        if (state.socket) state.socket.close();
+        const symbol = document.getElementById('symbol').value;
+        const interval = Number(document.getElementById('interval').value);
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        state.socket = new WebSocket(`${protocol}//${window.location.host}/ws/binance/${symbol}?interval_seconds=${interval}&tick_size=${state.tickSize}&candle_limit=100`);
+        state.socket.onopen = () => { document.getElementById('ai-status').textContent = 'REALTIME CONNECTED'; };
+        state.socket.onmessage = event => {
+            const message = JSON.parse(event.data);
+            if (message.type === 'snapshot') applySnapshot(message.data);
+            if (message.type === 'error') document.getElementById('status').textContent = `Realtime error: ${message.message}`;
+        };
+        state.socket.onclose = () => {
+            document.getElementById('ai-status').textContent = 'RECONNECTING...';
+            window.setTimeout(connectRealtime, 2000);
+        };
+    }
+
     async function load() {
         const symbol = document.getElementById('symbol').value;
         const interval = Number(document.getElementById('interval').value);
@@ -619,12 +648,8 @@
             state.tickSize = Number(tickSizeFor(symbol));
             const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
             const data = await response.json();
-            state.snapshot = data;
-            state.bars = groupBars(data.levels || [], data.candles || []);
-            state.signals = data.signals || [];
-            state.offset = 0;
-            document.getElementById('status').textContent = `${symbol} | ${data.trade_count || 0} trades | PostgreSQL | native Canvas`;
-            updateStats();
+            applySnapshot(data, true);
+            connectRealtime();
             loadDom();
         } catch (error) {
             state.bars = [];
