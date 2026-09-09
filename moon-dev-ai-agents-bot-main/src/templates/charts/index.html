@@ -133,734 +133,823 @@
         </div>
     </main>
     <script>
-    const canvas = document.getElementById('market-canvas');
-    const context = canvas.getContext('2d');
-    const deltaCanvas = document.getElementById('delta-canvas');
-    const deltaContext = deltaCanvas.getContext('2d');
-    const profileCanvas = document.getElementById('profile-canvas');
-    const profileContext = profileCanvas.getContext('2d');
-    const domCanvas = document.getElementById('dom-canvas');
-    const domContext = domCanvas.getContext('2d');
-    const state = { bars: [], signals: [], snapshot: null, socket: null, drawings: [], drawingTool: null, pendingAnchor: null, view: null, sessionId: localStorage.getItem('moondev-chart-session') || crypto.randomUUID(), agents: {}, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 };
-    localStorage.setItem('moondev-chart-session', state.sessionId);
+/* chart_workspace.js
+ * Shared panel/workspace model for the chart pages.
+ *
+ * Purpose: give each chart page one place that owns panel state, so
+ * symbol, timeframe, chart style, indicators, drawings, overlays/markers,
+ * data, and render handles are all owned by a panel instance instead of
+ * scattered across page-global variables.
+ *
+ * This pass does NOT merge the two pages into one UI and does NOT add
+ * favorites, AI chat features, footprint settings, or multi-panel chrome.
+ * It only introduces the model and makes both pages panel-owned.
+ */
+(function () {
+  'use strict';
 
-    function resize() {
-        const box = canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(box.width * ratio);
-        canvas.height = Math.floor(box.height * ratio);
-        context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        [deltaCanvas, profileCanvas, domCanvas].forEach(panel => {
-            const panelBox = panel.getBoundingClientRect();
-            panel.width = Math.floor(panelBox.width * ratio);
-            panel.height = Math.floor(panelBox.height * ratio);
-        });
-        deltaContext.setTransform(ratio, 0, 0, ratio, 0, 0);
-        profileContext.setTransform(ratio, 0, 0, ratio, 0, 0);
-        domContext.setTransform(ratio, 0, 0, ratio, 0, 0);
-        render();
-        renderAnalysis();
+  var PANEL_TYPES = ['footprint', 'smc'];
+
+  function createPanel(options) {
+    options = options || {};
+    var type = options.type || 'footprint';
+    if (PANEL_TYPES.indexOf(type) === -1) {
+      throw new Error('Unknown chart panel type: ' + type);
+    }
+    return {
+      id: options.id || ('panel-' + Math.random().toString(36).slice(2, 10)),
+      type: type,
+
+      // owned chart config
+      symbol: options.symbol || '',
+      timeframe: options.timeframe || '',
+      chartStyle: options.chartStyle || '',
+
+      // owned state sets: one owner per concern
+      indicators: options.indicators || {},
+      drawings: options.drawings || [],
+      overlays: options.overlays || [],
+      markers: options.markers || [],
+
+      // panel-specific data payload
+      data: options.data || null,
+
+      // panel-local render handles (set by the page host)
+      ui: options.ui || null,
+
+      // host hooks so the workspace can dispatch without knowing the render
+      // internals of footprint vs lightweight-charts.
+      hooks: options.hooks || null,
+
+      // panel-local cache for page-specific state that does not belong to the
+      // shared ownership model yet (for example a websocket handle).
+      private: options.private || {}
+    };
+  }
+
+  function createWorkspace() {
+    var panels = [];
+    var activePanelId = null;
+
+    function addPanel(panel) {
+      panels.push(panel);
+      if (!activePanelId) activePanelId = panel.id;
+      return panel;
     }
 
-    function groupBars(levels, candles) {
-        const groups = new Map();
-        levels.forEach(level => {
-            if (!groups.has(level.bucket_time)) groups.set(level.bucket_time, []);
-            groups.get(level.bucket_time).push(level);
-        });
-        const candleMap = new Map((candles || []).map(candle => [candle.bucket_time, candle]));
-        (candles || []).forEach(candle => {
-            if (!groups.has(candle.bucket_time)) groups.set(candle.bucket_time, []);
-        });
-        return [...groups.entries()].map(([time, rows]) => {
-            const candle = candleMap.get(time);
-            const prices = rows.map(row => Number(row.price));
-            const fallback = Number(candle?.close || 0);
-            return { time, rows, open: candle?.open ?? prices[0] ?? fallback, close: candle?.close ?? prices[prices.length - 1] ?? fallback, high: candle?.high ?? Math.max(...prices, fallback), low: candle?.low ?? Math.min(...prices, fallback) };
-        }).sort((left, right) => left.time.localeCompare(right.time));
+    function removePanel(panelId) {
+      var idx = -1;
+      for (var i = 0; i < panels.length; i++) {
+        if (panels[i].id === panelId) { idx = i; break; }
+      }
+      if (idx === -1) return null;
+      var removed = panels.splice(idx, 1)[0];
+      if (activePanelId === panelId) {
+        activePanelId = panels.length ? panels[0].id : null;
+      }
+      return removed;
     }
 
-    function render() {
-        const width = canvas.clientWidth;
-        const height = canvas.clientHeight;
-        context.clearRect(0, 0, width, height);
-        context.fillStyle = '#090b10';
-        context.fillRect(0, 0, width, height);
-        const left = 16, top = 96, right = 78, bottom = 42;
-        const plotWidth = Math.max(1, width - left - right);
-        const plotHeight = Math.max(1, height - top - bottom);
-        const end = Math.max(0, state.bars.length - state.offset);
-        const visibleBars = state.bars.slice(Math.max(0, end - state.visible), end);
-        if (!visibleBars.length) {
-            context.fillStyle = '#778292'; context.font = '12px Consolas, monospace';
-            context.fillText('No Binance trades in PostgreSQL yet. Start the research collector.', left, top + 28);
-            return;
-        }
-        const prices = visibleBars.flatMap(bar => bar.rows.length ? bar.rows.map(row => Number(row.price)) : [bar.open, bar.high, bar.low, bar.close]);
-        const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
-        const range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
-        const targetColumnWidth = Math.max(80, Math.min(120, plotWidth / Math.max(state.visible, 1)));
-        const zoomScale = 30 / Math.max(state.visible, 1);
-        const chartWidth = Math.min(plotWidth, Math.max(120, visibleBars.length * targetColumnWidth * zoomScale));
-        const chartLeft = left + (plotWidth - chartWidth) / 2;
-        const xStep = chartWidth / Math.max(visibleBars.length, 1);
-        const rowCount = Math.max(10, Math.min(24, Math.floor(plotHeight / 25)));
-        const displayStep = state.tickSize * Math.max(1, Math.ceil(range / (state.tickSize * rowCount)));
-        const displayHigh = Math.ceil(maxPrice / displayStep) * displayStep;
-        const displayLow = Math.floor(minPrice / displayStep) * displayStep;
-        const displayRange = Math.max(displayHigh - displayLow, displayStep);
-        const priceY = price => top + (displayHigh - price) / displayRange * plotHeight;
-        state.view = {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars};
-        const displayRows = Array.from({length: Math.round(displayRange / displayStep) + 1}, (_, index) => displayHigh - index * displayStep);
-        const labelRows = displayRows.filter((_, idx) => idx % Math.max(1, Math.ceil(displayRows.length / 8)) === 0 || idx === displayRows.length - 1);
-        const groupedRows = bar => {
-            const grouped = new Map();
-            bar.rows.forEach(row => {
-                const price = Math.floor(Number(row.price) / displayStep) * displayStep;
-                const current = grouped.get(price) || {buy_volume: 0, sell_volume: 0, delta: 0, total_volume: 0};
-                current.buy_volume += Number(row.buy_volume); current.sell_volume += Number(row.sell_volume);
-                current.delta += Number(row.delta); current.total_volume += Number(row.total_volume);
-                grouped.set(price, current);
-            });
-            return grouped;
+    function getPanel(panelId) {
+      for (var i = 0; i < panels.length; i++) {
+        if (panels[i].id === panelId) return panels[i];
+      }
+      return null;
+    }
+
+    function activePanel() {
+      return activePanelId ? getPanel(activePanelId) : null;
+    }
+
+    function setActivePanel(panelId) {
+      if (!getPanel(panelId)) return false;
+      activePanelId = panelId;
+      return true;
+    }
+
+    function allPanels() {
+      return panels.slice();
+    }
+
+    return {
+      panels: panels,
+      activePanelId: activePanelId,
+      addPanel: addPanel,
+      removePanel: removePanel,
+      getPanel: getPanel,
+      activePanel: activePanel,
+      setActivePanel: setActivePanel,
+      allPanels: allPanels
+    };
+  }
+
+  function dispatchPanel(panel, action, payload) {
+    if (!panel.hooks || typeof panel.hooks[action] !== 'function') return;
+    return panel.hooks[action](panel, payload);
+  }
+
+  window.ChartWorkspace = {
+    PANEL_TYPES: PANEL_TYPES,
+    createPanel: createPanel,
+    createWorkspace: createWorkspace,
+    dispatchPanel: dispatchPanel
+  };
+})();
+
+    </script>
+    <script>
+    (function () {
+        var ChartWorkspace = window.ChartWorkspace;
+        if (!ChartWorkspace) throw new Error('chart_workspace.js must load before index.html');
+
+        var ui = {
+            canvas: document.getElementById('market-canvas'),
+            context: document.getElementById('market-canvas').getContext('2d'),
+            deltaCanvas: document.getElementById('delta-canvas'),
+            deltaContext: document.getElementById('delta-canvas').getContext('2d'),
+            profileCanvas: document.getElementById('profile-canvas'),
+            profileContext: document.getElementById('profile-canvas').getContext('2d'),
+            domCanvas: document.getElementById('dom-canvas'),
+            domContext: document.getElementById('dom-canvas').getContext('2d'),
+            sessionId: localStorage.getItem('moondev-chart-session') || crypto.randomUUID()
         };
-        context.strokeStyle = '#202733'; context.lineWidth = 1;
-        for (let line = 0; line <= 5; line++) {
-            const lineY = top + line * plotHeight / 5;
-            context.beginPath(); context.moveTo(left, lineY); context.lineTo(left + plotWidth, lineY); context.stroke();
-            if (line % 2 === 0 || line === 5) {
-                context.fillStyle = '#778292'; context.font = '10px Consolas, monospace';
-                context.fillText((displayHigh - line * displayRange / 5).toFixed(Math.min(4, Math.max(2, state.tickSize < 1 ? 3 : 2))), left + plotWidth + 8, lineY + 3);
-            }
+        localStorage.setItem('moondev-chart-session', ui.sessionId);
+
+        var workspace = ChartWorkspace.createWorkspace();
+        var panel = ChartWorkspace.createPanel({
+            type: 'footprint',
+            symbol: document.getElementById('symbol').value,
+            timeframe: document.getElementById('interval').value,
+            ui: ui,
+            data: { bars: [], signals: [], snapshot: null, drawings: [], drawingTool: null, pendingAnchor: null, view: null, agents: {}, tickSize: 0.1, offset: 0, visible: 30, crosshair: null, dragging: false, dragX: 0, dragOffset: 0 },
+            hooks: {}
+        });
+        workspace.addPanel(panel);
+
+        function escapeHtml(v) {
+            return String(v).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]; });
         }
-        context.fillStyle = '#0d141e';
-        context.fillRect(left, top - 54, plotWidth, 38);
-        context.strokeStyle = '#213040';
-        context.strokeRect(left, top - 54, plotWidth, 38);
-        context.fillStyle = '#64e6a0'; context.font = '600 10px Consolas, monospace';
-        context.fillText('BUY VOLUME', left + 10, top - 36);
-        context.fillStyle = '#ff7887';
-        context.fillText('SELL VOLUME', left + plotWidth - 78, top - 36);
-        context.fillStyle = '#7f91a5'; context.font = '9px Consolas, monospace';
-        context.fillText('PRICE LEVEL', left + 10, top - 23);
-        visibleBars.forEach((bar, index) => {
-            const x = chartLeft + index * xStep;
-            const barDelta = bar.rows.reduce((sum, row) => sum + Number(row.delta), 0);
-            const cellWidth = Math.max(8, Math.min(44, xStep * .34));
-            const barSignals = state.signals.filter(signal => signal.bucket_time === bar.time);
-            const compactSignalMode = xStep < 100;
-            const rows = groupedRows(bar);
-            context.strokeStyle = '#303844'; context.setLineDash([2, 3]);
-            context.beginPath(); context.moveTo(x, top); context.lineTo(x, top + plotHeight); context.stroke(); context.setLineDash([]);
-            const candleColor = bar.close >= bar.open ? '#63d391' : '#ee7777';
-            context.strokeStyle = candleColor;
-            context.setLineDash([3, 3]);
-            context.beginPath(); context.moveTo(x + xStep / 2, priceY(bar.high)); context.lineTo(x + xStep / 2, priceY(bar.low)); context.stroke();
-            context.setLineDash([]);
-            context.globalAlpha = 0.65;
-            context.fillStyle = candleColor;
-            const bodyTop = Math.min(priceY(bar.open), priceY(bar.close));
-            const bodyHeight = Math.max(4, Math.abs(priceY(bar.open) - priceY(bar.close)));
-            context.fillRect(x + xStep / 2 - 2, bodyTop, 4, bodyHeight);
-            context.globalAlpha = 1;
-            const showValues = xStep >= 48 || index === visibleBars.length - 1;
-            displayRows.forEach(price => {
-                const row = rows.get(price) || {buy_volume: 0, sell_volume: 0, total_volume: 0};
-                const rowY = priceY(price);
-                const buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
-                const cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
-                if (buy > 0) {
-                    context.fillStyle = `rgba(99, 211, 145, ${Math.min(.8, .16 + buy / total * .64)})`;
-                    const buyCellX = x + xStep / 2 - cellWidth - 3;
-                    context.fillRect(buyCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                    if (showValues) {
-                        context.fillStyle = '#d7dee8';
-                        drawCellValue(buy, buyCellX, rowY, cellWidth, cellHeight - 2);
-                    }
-                }
-                if (sell > 0) {
-                    context.fillStyle = `rgba(238, 119, 119, ${Math.min(.8, .16 + sell / total * .64)})`;
-                    const sellCellX = x + xStep / 2 + 3;
-                    context.fillRect(sellCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
-                    if (showValues) {
-                        context.fillStyle = '#d7dee8';
-                        drawCellValue(sell, sellCellX, rowY, cellWidth, cellHeight - 2);
-                    }
-                }
+
+        function formatVolume(p, v) {
+            var n = Number(v);
+            if (!Number.isFinite(n) || n === 0) return '0';
+            var abs = Math.abs(n);
+            var d = abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.1 ? 3 : abs >= 0.001 ? 5 : 8;
+            return n.toFixed(d);
+        }
+
+        function formatCompact(p, v) {
+            var n = Number(v);
+            if (!Number.isFinite(n) || n === 0) return '0';
+            var abs = Math.abs(n);
+            if (abs >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+            if (abs >= 1000) return (n / 1000).toFixed(1) + 'K';
+            if (abs >= 1) return n.toFixed(2);
+            return n.toFixed(3);
+        }
+
+        function tickSizeFor(sym) {
+            return { BTCUSDT: '0.10', ETHUSDT: '0.01', SOLUSDT: '0.001', BNBUSDT: '0.01' }[sym] || '0.01';
+        }
+
+        function resize(p) {
+            var box = p.ui.canvas.getBoundingClientRect();
+            var ratio = window.devicePixelRatio || 1;
+            p.ui.canvas.width = Math.floor(box.width * ratio);
+            p.ui.canvas.height = Math.floor(box.height * ratio);
+            p.ui.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+            [p.ui.deltaCanvas, p.ui.profileCanvas, p.ui.domCanvas].forEach(function (c) {
+                var cb = c.getBoundingClientRect();
+                c.width = Math.floor(cb.width * ratio);
+                c.height = Math.floor(cb.height * ratio);
             });
-            context.font = '10px Consolas, monospace';
-            if ((index % Math.max(2, Math.ceil(visibleBars.length / 6)) === 0 || index === visibleBars.length - 1) && !state.dragging) {
-                context.fillStyle = '#778292';
-                context.fillText(new Date(bar.time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x + xStep / 2 - 18, top + plotHeight + 26);
-            }
-            if ((index % 4 === 0 || barSignals.length) && Math.abs(barDelta) > 0) {
-                const deltaColor = barDelta >= 0 ? '#64e6a0' : '#ff7887';
-                drawCanvasBadge(`DELTA ${barDelta >= 0 ? '+' : ''}${formatVolume(barDelta)}`, x + xStep / 2 - 27, top - 28, deltaColor);
-            }
-            if (barSignals.length && compactSignalMode) {
-                context.fillStyle = barSignals.some(signal => signal.side === 'SELL') ? '#ff7887' : '#64e6a0';
-                context.beginPath();
-                context.arc(x + xStep / 2, top - 8, 3, 0, Math.PI * 2);
-                context.fill();
-                if (index === visibleBars.length - 1) {
-                    drawCanvasBadge(summarizeSignals(barSignals), x + xStep / 2 - 42, top - 18, '#f5c96a');
-                }
-            } else {
-                barSignals.slice(0, 2).forEach((signal, signalIndex) => {
-                    const signalY = top - 8 - signalIndex * 17;
-                    const signalColor = signal.type === 'ABSORPTION' ? '#f5c96a' : (signal.side === 'BUY' ? '#64e6a0' : '#ff7887');
-                    const label = signal.type === 'ABSORPTION' ? `ABSORPTION · ${signal.side}` : `STACK ${signal.side} · ${signal.strength}`;
-                    drawCanvasBadge(label, x + xStep / 2 - 38, signalY, signalColor);
+            p.ui.deltaContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+            p.ui.profileContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+            p.ui.domContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        }
+
+        function groupBars(p, levels, candles) {
+            var groups = new Map();
+            levels.forEach(function (l) {
+                if (!groups.has(l.bucket_time)) groups.set(l.bucket_time, []);
+                groups.get(l.bucket_time).push(l);
+            });
+            var candleMap = new Map((candles || []).map(function (c) { return [c.bucket_time, c]; }));
+            (candles || []).forEach(function (c) {
+                if (!groups.has(c.bucket_time)) groups.set(c.bucket_time, []);
+            });
+            var entries = [];
+            groups.forEach(function (rows, time) {
+                var candle = candleMap.get(time);
+                var prices = rows.map(function (r) { return Number(r.price); });
+                var fallback = Number(candle ? candle.close : 0);
+                entries.push({
+                    time: time,
+                    rows: rows,
+                    open: candle ? candle.open : (prices[0] != null ? prices[0] : fallback),
+                    close: candle ? candle.close : (prices.length ? prices[prices.length - 1] : fallback),
+                    high: candle ? candle.high : Math.max.apply(null, prices.concat([fallback])),
+                    low: candle ? candle.low : Math.min.apply(null, prices.concat([fallback]))
                 });
-            }
-        });
-        renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight);
-        renderDrawings();
-        if (state.crosshair) {
-            context.strokeStyle = '#55d6e8'; context.setLineDash([4, 4]);
-            context.beginPath(); context.moveTo(state.crosshair.x, top); context.lineTo(state.crosshair.x, top + plotHeight); context.stroke();
-            context.setLineDash([]);
+            });
+            entries.sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+            return entries;
         }
-    }
 
-    function renderDrawings() {
-        if (!state.view || !state.drawings.length) return;
-        const {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars} = state.view;
-        const positions = new Map(visibleBars.map((bar, index) => [bar.time, index]));
-        state.drawings.forEach(drawing => {
-            const anchors = drawing.anchors || [];
-            if (!anchors.length) return;
-            const point = anchor => {
-                const index = positions.get(anchor.time);
-                if (index == null) return null;
-                return {x: chartLeft + index * xStep + xStep / 2, y: top + (displayHigh - Number(anchor.price)) / displayRange * plotHeight};
-            };
-            const first = point(anchors[0]);
-            const second = point(anchors[1] || anchors[0]);
-            if (!first || !second) return;
-            const color = drawing.style?.color || '#f5c96a';
-            context.save();
-            context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 2;
-            context.setLineDash(drawing.type === 'horizontal_level' ? [5, 4] : []);
-
-            if (drawing.type === 'horizontal_level') {
-                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(chartLeft + visibleBars.length * xStep, first.y); context.stroke();
-                context.fillText(`LEVEL ${Number(anchors[0].price).toFixed(2)}`, first.x + 5, first.y - 5);
-            } else if (drawing.type === 'ray') {
-                const dx = second.x - first.x;
-                const dy = second.y - first.y;
-                const endX = chartLeft + visibleBars.length * xStep;
-                const endY = first.y + (endX - first.x) * (dy / Math.max(Math.abs(dx), 1));
-                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(endX, endY); context.stroke();
-                context.fillText('RAY', first.x + 5, first.y - 5);
-            } else if (drawing.type === 'fibonacci') {
-                const startPrice = Number(anchors[0].price);
-                const endPrice = Number(anchors[1]?.price || anchors[0].price);
-                const range = Math.abs(endPrice - startPrice) || 1;
-                const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-                const low = Math.min(startPrice, endPrice);
-                const high = Math.max(startPrice, endPrice);
-                levels.forEach(level => {
-                    const price = high - (high - low) * level;
-                    const y = top + (displayHigh - price) / displayRange * plotHeight;
-                    context.beginPath(); context.moveTo(first.x, y); context.lineTo(second.x, y); context.stroke();
-                    context.fillText(`Fib ${level.toFixed(3)}`, second.x + 5, y - 4);
-                });
-            } else {
-                context.beginPath(); context.moveTo(first.x, first.y); context.lineTo(second.x, second.y); context.stroke();
-                if (drawing.type === 'measure') context.fillText(`${(Number(anchors[1]?.price || anchors[0].price) - Number(anchors[0].price)).toFixed(2)}`, second.x + 5, second.y - 5);
-            }
-            context.setLineDash([]);
-            context.restore();
-        });
-    }
-
-    async function loadDrawings() {
-        try {
-            const symbol = document.getElementById('symbol').value;
-            const interval = Number(document.getElementById('interval').value);
-            const response = await fetch(`/api/chart/drawings?symbol=${symbol}&timeframe=${Math.round(interval / 60)}m`);
-            state.drawings = (await response.json()).drawings || [];
-            render();
-        } catch (error) { state.drawings = []; }
-    }
-
-    async function handleDrawingClick(event) {
-        if (!state.drawingTool || !state.view) return;
-        const {chartLeft, xStep, top, plotHeight, displayHigh, displayRange, visibleBars} = state.view;
-        const index = Math.max(0, Math.min(visibleBars.length - 1, Math.round((event.offsetX - chartLeft - xStep / 2) / xStep)));
-        const bar = visibleBars[index];
-        const anchor = {time: bar.time, price: Number(displayHigh - (event.offsetY - top) / plotHeight * displayRange)};
-        if (state.drawingTool === 'horizontal_level') state.pendingAnchor = null;
-        else if (!state.pendingAnchor) { state.pendingAnchor = anchor; return; }
-        const anchors = state.pendingAnchor ? [state.pendingAnchor, anchor] : [anchor];
-        const drawing = {id: crypto.randomUUID(), type: state.drawingTool, symbol: document.getElementById('symbol').value, timeframe: `${Math.round(Number(document.getElementById('interval').value) / 60)}m`, anchors, style: {color: '#f5c96a'}};
-        state.drawings.push(drawing); state.pendingAnchor = null; state.drawingTool = null; canvas.style.cursor = 'default'; render();
-        await fetch('/api/chart/drawings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(drawing)});
-    }
-
-    function renderSharedOverlays(visibleBars, chartLeft, xStep, priceY, top, plotHeight) {
-        const overlays = state.snapshot?.overlays || [];
-        if (!overlays.length) return;
-        const visibleTimes = new Map(visibleBars.map((bar, index) => [bar.time, index]));
-        const dense = xStep < 100;
-        overlays.forEach(overlay => {
-            const agentState = state.agents[overlay.source] || {enabled: true, render: true};
-            if (!agentState.enabled || !agentState.render) return;
-            const index = visibleTimes.get(overlay.bucket_time);
-            if (index == null) return;
-            const bar = visibleBars[index];
-            const centerX = chartLeft + index * xStep + xStep / 2;
-            const color = overlay.color || '#ad9aff';
-            const anchorPrice = Number(overlay.price) || (overlay.side === 'SELL' ? Number(bar.high) : Number(bar.low));
-            const anchorY = priceY(anchorPrice);
-            context.save();
-            context.strokeStyle = color;
-            context.fillStyle = color;
-            context.lineWidth = 1;
-            if (overlay.price_low != null && overlay.price_high != null) {
-                const zoneTop = priceY(Number(overlay.price_high));
-                const zoneBottom = priceY(Number(overlay.price_low));
-                context.globalAlpha = .12;
-                context.fillRect(centerX - Math.max(12, xStep / 2 - 3), zoneTop, Math.max(24, xStep - 6), zoneBottom - zoneTop);
-                context.globalAlpha = .65;
-                context.strokeRect(centerX - Math.max(12, xStep / 2 - 3), zoneTop, Math.max(24, xStep - 6), zoneBottom - zoneTop);
-            } else {
-                context.beginPath();
-                context.moveTo(centerX, anchorY);
-                context.lineTo(centerX, anchorY + (overlay.side === 'SELL' ? -10 : 10));
-                context.stroke();
-                context.beginPath();
-                context.arc(centerX, anchorY, dense ? 3 : 4, 0, Math.PI * 2);
-                context.fill();
-            }
-            const showLabel = !dense || index === visibleBars.length - 1;
-            if (showLabel && overlay.label) {
-                const sourceLabel = overlay.source === 'rbi_agent' ? 'RBI' : overlay.source === 'custom_chart_bot' ? 'BOT' : 'FLOW';
-                drawCanvasBadge(`${sourceLabel} · ${String(overlay.label).slice(0, 22)}`, centerX - 42, anchorY + (overlay.side === 'SELL' ? -14 : 20), color);
-            }
-            context.restore();
-        });
-    }
-
-    function formatVolume(value) {
-        const number = Number(value);
-        if (!Number.isFinite(number) || number === 0) return '0';
-        const absolute = Math.abs(number);
-        const decimals = absolute >= 1000 ? 0 : absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute >= 0.001 ? 5 : 8;
-        return number.toFixed(decimals);
-    }
-
-    function drawCanvasBadge(label, x, baseline, color) {
-        context.save();
-        context.font = '600 9px Consolas, monospace';
-        const padding = 5;
-        const width = context.measureText(label).width + padding * 2;
-        const height = 15;
-        const y = baseline - height + 3;
-        context.fillStyle = 'rgba(7, 11, 18, .92)';
-        context.strokeStyle = color;
-        context.lineWidth = 1;
-        context.beginPath();
-        context.roundRect(x, y, width, height, 3);
-        context.fill();
-        context.stroke();
-        context.fillStyle = color;
-        context.textBaseline = 'middle';
-        context.fillText(label, x + padding, y + height / 2);
-        context.restore();
-    }
-
-    function summarizeSignals(signals) {
-        const groups = new Map();
-        signals.forEach(signal => {
-            const key = `${signal.type}-${signal.side}`;
-            const current = groups.get(key) || {type: signal.type, side: signal.side, count: 0, strength: 0};
-            current.count += 1;
-            current.strength = Math.max(current.strength, Number(signal.strength) || 0);
-            groups.set(key, current);
-        });
-        const summary = [...groups.values()][0];
-        if (!summary) return 'SIGNAL';
-        const label = summary.type === 'ABSORPTION' ? `ABSORPTION ${summary.side}` : `STACK ${summary.side} x${summary.strength || summary.count}`;
-        return groups.size > 1 ? `${label} +${groups.size - 1}` : label;
-    }
-
-    function drawCellValue(value, cellX, centerY, cellWidth, cellHeight) {
-        const padding = 3;
-        const availableWidth = Math.max(1, cellWidth - padding * 2);
-        const availableHeight = Math.max(1, cellHeight - 1);
-        const labels = [formatVolume(value), formatCompact(value), Number(value).toExponential(1)];
-        let label = labels[0];
-        let fontSize = Math.min(10, availableHeight * .72);
-        for (const candidate of labels) {
-            context.font = `${fontSize}px Consolas, monospace`;
-            if (context.measureText(candidate).width <= availableWidth) {
-                label = candidate;
-                break;
-            }
-            label = candidate;
+        function drawCanvasBadge(p, label, x, baseline, color) {
+            var ctx = p.ui.context;
+            ctx.save();
+            ctx.font = '600 9px Consolas, monospace';
+            var padding = 5;
+            var w = ctx.measureText(label).width + padding * 2;
+            var h = 15;
+            var y = baseline - h + 3;
+            ctx.fillStyle = 'rgba(7, 11, 18, .92)';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, h, 3);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = color;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x + padding, y + h / 2);
+            ctx.restore();
         }
-        context.font = `${fontSize}px Consolas, monospace`;
-        const measuredWidth = context.measureText(label).width;
-        fontSize = Math.max(.5, Math.min(fontSize, fontSize * availableWidth / Math.max(measuredWidth, 1)));
-        context.font = `${fontSize}px Consolas, monospace`;
-        context.save();
-        context.beginPath();
-        context.rect(cellX, centerY - cellHeight / 2, cellWidth, cellHeight);
-        context.clip();
-        context.textBaseline = 'middle';
-        context.fillText(label, cellX + padding, centerY);
-        context.restore();
-    }
 
-    function formatCompact(value) {
-        const number = Number(value);
-        if (!Number.isFinite(number) || number === 0) return '0';
-        const abs = Math.abs(number);
-        if (abs >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
-        if (abs >= 1000) return `${(number / 1000).toFixed(1)}K`;
-        if (abs >= 1) return number.toFixed(2);
-        return number.toFixed(3);
-    }
-
-    function renderAnalysis() {
-        drawCumulativeDelta();
-        drawVolumeProfile();
-        drawDom();
-    }
-
-    function drawCumulativeDelta() {
-        const width = deltaCanvas.clientWidth, height = deltaCanvas.clientHeight;
-        deltaContext.clearRect(0, 0, width, height);
-        deltaContext.fillStyle = '#0c1016'; deltaContext.fillRect(0, 0, width, height);
-        if (!state.bars.length) return;
-        const values = []; let running = 0;
-        state.bars.forEach(bar => { running += bar.rows.reduce((sum, row) => sum + Number(row.delta), 0); values.push(running); });
-        const min = Math.min(0, ...values), max = Math.max(0, ...values), range = Math.max(max - min, 0.000001);
-        const left = 14, top = 40, plotWidth = Math.max(1, width - 28), plotHeight = Math.max(1, height - 56);
-        const x = index => left + index * plotWidth / Math.max(values.length - 1, 1);
-        const y = value => top + (max - value) / range * plotHeight;
-        const zeroY = y(0);
-        deltaContext.strokeStyle = '#28313d'; deltaContext.setLineDash([3, 3]); deltaContext.beginPath(); deltaContext.moveTo(left, zeroY); deltaContext.lineTo(left + plotWidth, zeroY); deltaContext.stroke(); deltaContext.setLineDash([]);
-        deltaContext.beginPath();
-        values.forEach((value, index) => index ? deltaContext.lineTo(x(index), y(value)) : deltaContext.moveTo(x(index), y(value)));
-        deltaContext.lineTo(x(values.length - 1), zeroY); deltaContext.lineTo(x(0), zeroY); deltaContext.closePath();
-        deltaContext.fillStyle = values[values.length - 1] >= 0 ? 'rgba(100,230,160,.16)' : 'rgba(255,120,135,.16)';
-        deltaContext.fill();
-        deltaContext.strokeStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887'; deltaContext.lineWidth = 2; deltaContext.beginPath();
-        values.forEach((value, index) => index ? deltaContext.lineTo(x(index), y(value)) : deltaContext.moveTo(x(index), y(value)));
-        deltaContext.stroke(); deltaContext.lineWidth = 1;
-        deltaContext.fillStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887';
-        deltaContext.font = '600 11px Consolas, monospace'; deltaContext.fillText(`${values[values.length - 1] >= 0 ? '+' : ''}${formatVolume(values[values.length - 1])}`, width - 66, 23);
-        deltaContext.fillStyle = '#7f91a5'; deltaContext.font = '9px Consolas, monospace'; deltaContext.fillText('0', left, zeroY - 5);
-    }
-
-    function drawVolumeProfile() {
-        const width = profileCanvas.clientWidth, height = profileCanvas.clientHeight;
-        profileContext.clearRect(0, 0, width, height);
-        profileContext.fillStyle = '#0c1016'; profileContext.fillRect(0, 0, width, height);
-        const levels = new Map();
-        state.bars.flatMap(bar => bar.rows).forEach(row => levels.set(row.price, (levels.get(row.price) || 0) + Number(row.total_volume)));
-        const entries = [...levels.entries()].sort((a, b) => Number(b[0]) - Number(a[0]));
-        if (!entries.length) return;
-        const maxVolume = Math.max(...entries.map(entry => Number(entry[1])), 1);
-        const maxPoints = Math.max(5, Math.min(14, Math.floor((height - 42) / 10)));
-        const step = Math.max(1, Math.ceil(entries.length / maxPoints));
-        const buckets = [];
-        for (let i = 0; i < entries.length; i += step) {
-            const slice = entries.slice(i, Math.min(entries.length, i + step));
-            buckets.push({ price: Number(slice[Math.floor(slice.length / 2)][0]), volume: slice.reduce((sum, [, volume]) => sum + Number(volume), 0) });
+        function summarizeSignals(p, signals) {
+            var groups = new Map();
+            signals.forEach(function (s) {
+                var key = s.type + '-' + s.side;
+                var cur = groups.get(key) || { type: s.type, side: s.side, count: 0, strength: 0 };
+                cur.count += 1;
+                cur.strength = Math.max(cur.strength, Number(s.strength) || 0);
+                groups.set(key, cur);
+            });
+            var arr = [];
+            groups.forEach(function (v) { arr.push(v); });
+            var summary = arr[0];
+            if (!summary) return 'SIGNAL';
+            var label = summary.type === 'ABSORPTION' ? 'ABSORPTION ' + summary.side : 'STACK ' + summary.side + ' x' + (summary.strength || summary.count);
+            return groups.size > 1 ? label + ' +' + (groups.size - 1) : label;
         }
-        const left = 58, right = 14, top = 38, bottom = 12;
-        const plotWidth = Math.max(1, width - left - right), rowHeight = Math.max(8, (height - top - bottom) / buckets.length);
-        const poc = buckets.reduce((best, current) => current.volume > best.volume ? current : best, buckets[0]);
-        buckets.forEach((bucket, index) => {
-            const y = top + index * rowHeight;
-            const barWidth = plotWidth * bucket.volume / maxVolume;
-            profileContext.fillStyle = bucket === poc ? 'rgba(245,201,106,.78)' : 'rgba(88,217,232,.5)';
-            profileContext.fillRect(left, y + 1, barWidth, Math.max(4, rowHeight - 3));
-            if (index === 0 || index === Math.floor(buckets.length / 2) || index === buckets.length - 1 || bucket === poc) {
-                profileContext.fillStyle = bucket === poc ? '#f5c96a' : '#7f91a5'; profileContext.font = '9px Consolas, monospace';
-                profileContext.fillText(bucket.price.toFixed(2), 6, y + rowHeight - 3);
+
+        function drawCellValue(p, value, cellX, centerY, cellWidth, cellHeight) {
+            var ctx = p.ui.context;
+            var padding = 3;
+            var aw = Math.max(1, cellWidth - padding * 2);
+            var ah = Math.max(1, cellHeight - 1);
+            var labels = [formatVolume(p, value), formatCompact(p, value), Number(value).toExponential(1)];
+            var lbl = labels[0];
+            var fontSize = Math.min(10, ah * .72);
+            for (var ci = 0; ci < labels.length; ci++) {
+                ctx.font = fontSize + 'px Consolas, monospace';
+                if (ctx.measureText(labels[ci]).width <= aw) { lbl = labels[ci]; break; }
+                lbl = labels[ci];
             }
-        });
-        profileContext.fillStyle = '#f5c96a'; profileContext.font = '600 9px Consolas, monospace';
-        profileContext.fillText(`POC ${poc.price.toFixed(2)}`, Math.max(left, width - 78), 23);
-    }
-
-    let domState = {bids: [], asks: [], available: false};
-    function drawDom() {
-        const width = domCanvas.clientWidth, height = domCanvas.clientHeight;
-        domContext.clearRect(0, 0, width, height);
-        domContext.fillStyle = '#0c1016'; domContext.fillRect(0, 0, width, height);
-        const available = Boolean(domState && (domState.available || (Array.isArray(domState.bids) && Array.isArray(domState.asks))));
-        if (!available) {
-            domContext.fillStyle = '#778292'; domContext.font = '10px Consolas, monospace';
-            domContext.fillText('Waiting for a valid order-book snapshot', 12, 42);
-            return;
+            ctx.font = fontSize + 'px Consolas, monospace';
+            var mw = ctx.measureText(lbl).width;
+            fontSize = Math.max(.5, Math.min(fontSize, fontSize * aw / Math.max(mw, 1)));
+            ctx.font = fontSize + 'px Consolas, monospace';
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(cellX, centerY - cellHeight / 2, cellWidth, cellHeight);
+            ctx.clip();
+            ctx.textBaseline = 'middle';
+            ctx.fillText(lbl, cellX + padding, centerY);
+            ctx.restore();
         }
-        const bids = (domState.bids || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'bid' })).reverse();
-        const asks = (domState.asks || []).slice(0, 8).map(level => ({ ...level, price: Number(level.price), quantity: Number(level.quantity), side: 'ask' })).reverse();
-        const maxQuantity = Math.max(...bids.concat(asks).map(level => level.quantity), 1);
-        const rowHeight = Math.max(16, Math.min(22, (height - 36) / Math.max(bids.length, asks.length, 6)));
-        const centerX = width / 2;
-        const rowCount = Math.max(bids.length, asks.length, 6);
-        const bidPriceX = Math.max(44, centerX - 45), askPriceX = centerX + 8;
-        for (let i = 0; i < rowCount; i++) {
-            const y = 29 + i * rowHeight;
-            const bid = bids[i]; const ask = asks[i];
-            const bidBar = bid ? (centerX - 58) * bid.quantity / maxQuantity : 0;
-            const askBar = ask ? (width - (centerX + 58)) * ask.quantity / maxQuantity : 0;
-            domContext.strokeStyle = 'rgba(33,48,64,.55)'; domContext.beginPath(); domContext.moveTo(8, y + rowHeight - 2); domContext.lineTo(width - 8, y + rowHeight - 2); domContext.stroke();
-            if (bid) {
-                domContext.fillStyle = 'rgba(100, 230, 160, .22)';
-                domContext.fillRect(8, y + 2, bidBar, rowHeight - 6);
-                domContext.fillStyle = '#64e6a0'; domContext.font = '9px Consolas, monospace';
-                domContext.textAlign = 'right'; domContext.fillText(formatCompact(bid.quantity), centerX - 58, y + rowHeight - 7);
-                domContext.fillStyle = '#d7dee8'; domContext.textAlign = 'left'; domContext.fillText(Number(bid.price).toFixed(2), bidPriceX, y + rowHeight - 7);
-            }
-            if (ask) {
-                domContext.fillStyle = 'rgba(255, 120, 135, .22)';
-                domContext.fillRect(centerX + 58, y + 2, askBar, rowHeight - 6);
-                domContext.fillStyle = '#d7dee8'; domContext.textAlign = 'left'; domContext.fillText(Number(ask.price).toFixed(2), askPriceX, y + rowHeight - 7);
-                domContext.fillStyle = '#ff7887'; domContext.textAlign = 'left'; domContext.fillText(formatCompact(ask.quantity), width - 8, y + rowHeight - 7);
-            }
-        }
-        const bestBid = bids[0]?.price, bestAsk = asks[0]?.price;
-        if (bestBid && bestAsk) {
-            domContext.fillStyle = '#58d9e8'; domContext.font = '600 9px Consolas, monospace'; domContext.textAlign = 'left';
-            domContext.fillText(`SPREAD ${(bestAsk - bestBid).toFixed(2)}`, 10, height - 8);
-        }
-        domContext.fillStyle = '#64e6a0'; domContext.font = '600 9px Consolas, monospace'; domContext.textAlign = 'right';
-        domContext.fillText('BID SIZE', centerX - 58, 17);
-        domContext.fillStyle = '#7f91a5'; domContext.textAlign = 'left'; domContext.fillText('PRICE', centerX - 45, 17);
-        domContext.fillStyle = '#ff7887'; domContext.fillText('ASK SIZE', centerX + 58, 17);
-        domContext.textAlign = 'left';
-    }
 
-    async function loadDom() {
-        try {
-            const response = await fetch(`/api/binance/dom?symbol=${document.getElementById('symbol').value}`);
-            domState = await response.json();
-            domState.available = Boolean(domState && (domState.available || ((Array.isArray(domState.bids) && domState.bids.length) || (Array.isArray(domState.asks) && domState.asks.length))));
-        } catch (error) {
-            domState = {bids: [], asks: [], available: false};
-        }
-        drawDom();
-    }
-
-    function tickSizeFor(symbol) {
-        return {BTCUSDT: '0.10', ETHUSDT: '0.01', SOLUSDT: '0.001', BNBUSDT: '0.01'}[symbol] || '0.01';
-    }
-
-    function updateStats() {
-        const rows = state.bars.flatMap(bar => bar.rows);
-        const volume = rows.reduce((sum, row) => sum + Number(row.total_volume), 0);
-        const delta = rows.reduce((sum, row) => sum + Number(row.delta), 0);
-        const byPrice = new Map();
-        rows.forEach(row => byPrice.set(row.price, (byPrice.get(row.price) || 0) + Number(row.total_volume)));
-        const poc = [...byPrice.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-        document.getElementById('session-volume').textContent = formatVolume(volume);
-        document.getElementById('session-delta').textContent = `${delta >= 0 ? '+' : ''}${formatVolume(delta)}`;
-        document.getElementById('poc').textContent = poc == null ? '-' : Number(poc).toFixed(2);
-        document.getElementById('session-high').textContent = rows.length ? Math.max(...rows.map(row => Number(row.price))).toFixed(2) : '-';
-        document.getElementById('session-low').textContent = rows.length ? Math.min(...rows.map(row => Number(row.price))).toFixed(2) : '-';
-        document.getElementById('candle-count').textContent = state.bars.length;
-    }
-
-    function renderAiAnalysis(result) {
-        const analysis = result?.analysis || {};
-        const bias = String(analysis.bias || 'WAITING').toUpperCase();
-        const confidence = Number(analysis.confidence);
-        document.getElementById('ai-status').textContent = result?.available ? 'BEDROCK CONNECTED' : 'LOCAL SNAPSHOT';
-        document.getElementById('ai-bias').textContent = bias;
-        document.getElementById('ai-bias').style.color = bias.includes('BULL') ? 'var(--green)' : bias.includes('BEAR') ? 'var(--red)' : 'var(--text)';
-        document.getElementById('ai-confidence').textContent = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}% CONF.` : '--';
-        document.getElementById('ai-summary').textContent = analysis.summary || result?.message || 'Ask the Bedrock analyst to interpret the current chart.';
-        const evidence = Array.isArray(analysis.key_evidence) && analysis.key_evidence.length ? analysis.key_evidence : ['Footprint context is ready for analysis.'];
-        const risks = Array.isArray(analysis.risk_notes) && analysis.risk_notes.length ? analysis.risk_notes : ['Review invalidation and position size before acting.'];
-        document.getElementById('ai-evidence').innerHTML = evidence.slice(0, 5).map(item => `<li>${escapeHtml(String(item))}</li>`).join('');
-        document.getElementById('ai-risk').innerHTML = risks.slice(0, 5).map(item => `<li>${escapeHtml(String(item))}</li>`).join('');
-    }
-
-    function escapeHtml(value) {
-        return value.replace(/[&<>'"]/g, character => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[character]));
-    }
-
-    async function askChartAi(question) {
-        if (!state.snapshot) return;
-        document.getElementById('ai-status').textContent = 'ANALYZING...';
-        try {
-            const response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question, session_id: state.sessionId, snapshot: state.snapshot}) });
-            const result = await response.json();
-            if (Array.isArray(result.contributions) && state.snapshot) {
-                state.snapshot.overlays = [...(state.snapshot.overlays || []), ...result.contributions];
-                render();
-            }
-            await loadSessionHistory();
-            renderAiAnalysis(result);
-        } catch (error) {
-            renderAiAnalysis({available: false, message: `Analysis unavailable: ${error.message}`});
-        }
-    }
-
-    async function loadSessionHistory() {
-        try {
-            const response = await fetch(`/api/binance/ai/sessions/${state.sessionId}`);
-            const data = await response.json();
-            const container = document.getElementById('ai-session-log');
-            const messages = Array.isArray(data.messages) ? data.messages : [];
-            if (!messages.length) {
-                container.innerHTML = '<span class="ai-note">No chart conversation yet.</span>';
+        function render(p) {
+            var ctx = p.ui.context;
+            var width = p.ui.canvas.clientWidth;
+            var height = p.ui.canvas.clientHeight;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#090b10';
+            ctx.fillRect(0, 0, width, height);
+            var left = 16, top = 96, right = 78, bottom = 42;
+            var plotWidth = Math.max(1, width - left - right);
+            var plotHeight = Math.max(1, height - top - bottom);
+            var end = Math.max(0, p.data.bars.length - p.data.offset);
+            var visibleBars = p.data.bars.slice(Math.max(0, end - p.data.visible), end);
+            if (!visibleBars.length) {
+                ctx.fillStyle = '#778292'; ctx.font = '12px Consolas, monospace';
+                ctx.fillText('No Binance trades in PostgreSQL yet. Start the research collector.', left, top + 28);
                 return;
             }
-            container.innerHTML = messages.slice(-6).map(message => `<div class="ai-note"><strong>${escapeHtml(message.role || 'note')}:</strong> ${escapeHtml(String(message.content || '')).slice(0, 180)}</div>`).join('');
-        } catch (error) {
-            document.getElementById('ai-session-log').innerHTML = '<span class="ai-note">Session memory unavailable.</span>';
-        }
-    }
-
-    async function loadAgentControls() {
-        try {
-            const response = await fetch('/api/chart/agents');
-            const data = await response.json();
-            state.agents = data.agents || {};
-            const container = document.getElementById('ai-agents');
-            container.innerHTML = Object.entries(data.agents || {}).map(([id, agent]) => `
-                <div class="ai-agent-row">
-                    <span>${escapeHtml(agent.label)}</span>
-                    <div>
-                        <label><input type="checkbox" data-agent="${id}" data-kind="enabled" ${agent.enabled ? 'checked' : ''} /></label>
-                        <label title="Render on chart"><input type="checkbox" data-agent="${id}" data-kind="render" ${agent.render ? 'checked' : ''} /></label>
-                    </div>
-                </div>
-            `).join('');
-            container.querySelectorAll('input[data-agent]').forEach(input => input.addEventListener('change', async () => {
-                const agentId = input.dataset.agent;
-                const kind = input.dataset.kind;
-                const stateValue = input.checked;
-                const agent = state.agents[agentId] || {enabled: true, render: true};
-                const payload = {
-                    enabled: kind === 'enabled' ? stateValue : Boolean(agent.enabled),
-                    render: kind === 'render' ? stateValue : Boolean(agent.render),
-                };
-                const updated = await fetch(`/api/chart/agents/${agentId}/toggle`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
-                if (updated.ok) {
-                    const result = await updated.json();
-                    state.agents[agentId] = result.state || payload;
-                    render();
+            var prices = [];
+            visibleBars.forEach(function (bar) {
+                if (bar.rows.length) bar.rows.forEach(function (r) { prices.push(Number(r.price)); });
+                else { prices.push(bar.open, bar.high, bar.low, bar.close); }
+            });
+            var minPrice = Math.min.apply(null, prices), maxPrice = Math.max.apply(null, prices);
+            var range = Math.max(maxPrice - minPrice, maxPrice * 0.0001, 0.00000001);
+            var targetColumnWidth = Math.max(80, Math.min(120, plotWidth / Math.max(p.data.visible, 1)));
+            var zoomScale = 30 / Math.max(p.data.visible, 1);
+            var chartWidth = Math.min(plotWidth, Math.max(120, visibleBars.length * targetColumnWidth * zoomScale));
+            var chartLeft = left + (plotWidth - chartWidth) / 2;
+            var xStep = chartWidth / Math.max(visibleBars.length, 1);
+            var displayStep = p.ui.tickSize * Math.max(1, Math.ceil(range / (p.ui.tickSize * Math.max(10, Math.min(24, Math.floor(plotHeight / 25))))));
+            var displayHigh = Math.ceil(maxPrice / displayStep) * displayStep;
+            var displayRange = Math.max(displayHigh - Math.floor(minPrice / displayStep) * displayStep, displayStep);
+            var priceY = function (pr) { return top + (displayHigh - pr) / displayRange * plotHeight; };
+            p.data.view = { chartLeft: chartLeft, xStep: xStep, top: top, plotHeight: plotHeight, displayHigh: displayHigh, displayRange: displayRange, visibleBars: visibleBars };
+            var displayRows = [];
+            for (var di = 0; di <= Math.round(displayRange / displayStep); di++) displayRows.push(displayHigh - di * displayStep);
+            var groupedRows = function (bar) {
+                var grouped = new Map();
+                bar.rows.forEach(function (row) {
+                    var price = Math.floor(Number(row.price) / displayStep) * displayStep;
+                    var cur = grouped.get(price) || { buy_volume: 0, sell_volume: 0, delta: 0, total_volume: 0 };
+                    cur.buy_volume += Number(row.buy_volume); cur.sell_volume += Number(row.sell_volume);
+                    cur.delta += Number(row.delta); cur.total_volume += Number(row.total_volume);
+                    grouped.set(price, cur);
+                });
+                return grouped;
+            };
+            ctx.strokeStyle = '#202733'; ctx.lineWidth = 1;
+            for (var li = 0; li <= 5; li++) {
+                var lineY = top + li * plotHeight / 5;
+                ctx.beginPath(); ctx.moveTo(left, lineY); ctx.lineTo(left + plotWidth, lineY); ctx.stroke();
+                if (li % 2 === 0 || li === 5) {
+                    ctx.fillStyle = '#778292'; ctx.font = '10px Consolas, monospace';
+                    ctx.fillText((displayHigh - li * displayRange / 5).toFixed(Math.min(4, Math.max(2, p.ui.tickSize < 1 ? 3 : 2))), left + plotWidth + 8, lineY + 3);
                 }
-            }));
-        } catch (error) { document.getElementById('ai-agents').textContent = 'Agent controls unavailable'; }
-    }
-
-    function applySnapshot(data, resetOffset = false) {
-        state.snapshot = data;
-        state.bars = groupBars(data.levels || [], data.candles || []);
-        state.signals = data.signals || [];
-        if (resetOffset) state.offset = 0;
-        document.getElementById('status').textContent = `${data.symbol || document.getElementById('symbol').value} | ${data.trade_count || 0} trades | ${data.candles?.length || 0} candles | realtime`;
-        updateStats();
-        render();
-        renderAnalysis();
-    }
-
-    function connectRealtime() {
-        if (state.socket) state.socket.close();
-        const symbol = document.getElementById('symbol').value;
-        const interval = Number(document.getElementById('interval').value);
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        state.socket = new WebSocket(`${protocol}//${window.location.host}/ws/binance/${symbol}?interval_seconds=${interval}&tick_size=${state.tickSize}&candle_limit=100`);
-        state.socket.onopen = () => { document.getElementById('ai-status').textContent = 'REALTIME CONNECTED'; };
-        state.socket.onmessage = event => {
-            const message = JSON.parse(event.data);
-            if (message.type === 'snapshot') applySnapshot(message.data);
-            if (message.type === 'error') document.getElementById('status').textContent = `Realtime error: ${message.message}`;
-        };
-        state.socket.onclose = () => {
-            document.getElementById('ai-status').textContent = 'RECONNECTING...';
-            window.setTimeout(connectRealtime, 2000);
-        };
-    }
-
-    async function load() {
-        const symbol = document.getElementById('symbol').value;
-        const interval = Number(document.getElementById('interval').value);
-        document.getElementById('status').textContent = `Loading ${symbol} from PostgreSQL...`;
-        try {
-            state.tickSize = Number(tickSizeFor(symbol));
-            const response = await fetch(`/api/binance/footprint?symbol=${symbol}&hours=24&interval_seconds=${interval}&tick_size=${state.tickSize}`);
-            const data = await response.json();
-            applySnapshot(data, true);
-            connectRealtime();
-            loadDom();
-        } catch (error) {
-            state.bars = [];
-            document.getElementById('status').textContent = `Data unavailable: ${error.message}`;
-        }
-        render();
-        renderAnalysis();
-    }
-
-    canvas.addEventListener('mousemove', event => {
-        state.crosshair = { x: event.offsetX, y: event.offsetY };
-        if (state.dragging) state.offset = Math.max(0, Math.min(state.bars.length - state.visible, state.dragOffset + Math.round((state.dragX - event.clientX) / 12)));
-        render();
-    });
-    canvas.addEventListener('mouseleave', () => { state.crosshair = null; render(); });
-    canvas.addEventListener('mousedown', event => { state.dragging = true; state.dragX = event.clientX; state.dragOffset = state.offset; });
-    canvas.addEventListener('click', handleDrawingClick);
-    window.addEventListener('mouseup', () => { state.dragging = false; });
-    canvas.addEventListener('wheel', event => { event.preventDefault(); state.visible = Math.max(12, Math.min(96, state.visible + (event.deltaY > 0 ? 4 : -4))); render(); }, { passive: false });
-    document.getElementById('symbol').addEventListener('change', load);
-    document.getElementById('interval').addEventListener('change', load);
-    document.getElementById('zoom-out').addEventListener('click', () => { state.visible = Math.min(96, state.visible + 4); render(); });
-    document.getElementById('zoom-in').addEventListener('click', () => { state.visible = Math.max(12, state.visible - 4); render(); });
-    document.getElementById('zoom-reset').addEventListener('click', () => { state.visible = 30; state.offset = 0; render(); });
-    document.getElementById('refresh').addEventListener('click', load);
-    document.getElementById('ai-question').addEventListener('submit', event => {
-        event.preventDefault();
-        const input = document.getElementById('ai-input');
-        const question = input.value.trim();
-        if (question) { input.value = ''; askChartAi(question); }
-    });
-    document.querySelectorAll('.tool-button').forEach(button => {
-        button.addEventListener('click', () => {
-            document.querySelectorAll('.tool-button').forEach(item => item.classList.remove('active'));
-            button.classList.add('active');
-            const tool = button.title;
-            if (tool === 'Zoom in') {
-                state.visible = Math.max(12, state.visible - 4);
-                render();
-            } else if (tool === 'Settings') {
-                document.querySelector('.legend').classList.toggle('is-hidden');
-            } else if (tool === 'Crosshair') {
-                state.drawingTool = null; state.pendingAnchor = null; canvas.style.cursor = 'crosshair';
-            } else if (['Trend line', 'Horizontal level', 'Measure', 'Ray', 'Fibonacci'].includes(tool)) {
-                const mapping = {
-                    'Trend line': 'trend_line',
-                    'Horizontal level': 'horizontal_level',
-                    'Measure': 'measure',
-                    'Ray': 'ray',
-                    'Fibonacci': 'fibonacci',
-                };
-                state.drawingTool = mapping[tool];
-                state.pendingAnchor = null;
-                canvas.style.cursor = 'crosshair';
-            } else {
-                state.drawingTool = null; state.pendingAnchor = null; canvas.style.cursor = 'default';
             }
+            ctx.fillStyle = '#0d141e'; ctx.fillRect(left, top - 54, plotWidth, 38);
+            ctx.strokeStyle = '#213040'; ctx.strokeRect(left, top - 54, plotWidth, 38);
+            ctx.fillStyle = '#64e6a0'; ctx.font = '600 10px Consolas, monospace'; ctx.fillText('BUY VOLUME', left + 10, top - 36);
+            ctx.fillStyle = '#ff7887'; ctx.fillText('SELL VOLUME', left + plotWidth - 78, top - 36);
+            ctx.fillStyle = '#7f91a5'; ctx.font = '9px Consolas, monospace'; ctx.fillText('PRICE LEVEL', left + 10, top - 23);
+            visibleBars.forEach(function (bar, index) {
+                var x = chartLeft + index * xStep;
+                var barDelta = bar.rows.reduce(function (s, r) { return s + Number(r.delta); }, 0);
+                var cellWidth = Math.max(8, Math.min(44, xStep * .34));
+                var barSignals = p.data.signals.filter(function (sig) { return sig.bucket_time === bar.time; });
+                var compactSignalMode = xStep < 100;
+                var rows = groupedRows(bar);
+                ctx.strokeStyle = '#303844'; ctx.setLineDash([2, 3]);
+                ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + plotHeight); ctx.stroke(); ctx.setLineDash([]);
+                var candleColor = bar.close >= bar.open ? '#63d391' : '#ee7777';
+                ctx.strokeStyle = candleColor; ctx.setLineDash([3, 3]);
+                ctx.beginPath(); ctx.moveTo(x + xStep / 2, priceY(bar.high)); ctx.lineTo(x + xStep / 2, priceY(bar.low)); ctx.stroke(); ctx.setLineDash([]);
+                ctx.globalAlpha = 0.65; ctx.fillStyle = candleColor;
+                var bodyTop = Math.min(priceY(bar.open), priceY(bar.close));
+                var bodyHeight = Math.max(4, Math.abs(priceY(bar.open) - priceY(bar.close)));
+                ctx.fillRect(x + xStep / 2 - 2, bodyTop, 4, bodyHeight);
+                ctx.globalAlpha = 1;
+                var showValues = xStep >= 48 || index === visibleBars.length - 1;
+                displayRows.forEach(function (price) {
+                    var row = rows.get(price) || { buy_volume: 0, sell_volume: 0, total_volume: 0 };
+                    var rowY = priceY(price);
+                    var buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
+                    var cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
+                    if (buy > 0) {
+                        ctx.fillStyle = 'rgba(99, 211, 145, ' + Math.min(.8, .16 + buy / total * .64) + ')';
+                        var buyCellX = x + xStep / 2 - cellWidth - 3;
+                        ctx.fillRect(buyCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                        if (showValues) { ctx.fillStyle = '#d7dee8'; drawCellValue(p, buy, buyCellX, rowY, cellWidth, cellHeight - 2); }
+                    }
+                    if (sell > 0) {
+                        ctx.fillStyle = 'rgba(238, 119, 119, ' + Math.min(.8, .16 + sell / total * .64) + ')';
+                        var sellCellX = x + xStep / 2 + 3;
+                        ctx.fillRect(sellCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
+                        if (showValues) { ctx.fillStyle = '#d7dee8'; drawCellValue(p, sell, sellCellX, rowY, cellWidth, cellHeight - 2); }
+                    }
+                });
+                ctx.font = '10px Consolas, monospace';
+                if ((index % Math.max(2, Math.ceil(visibleBars.length / 6)) === 0 || index === visibleBars.length - 1) && !p.data.dragging) {
+                    ctx.fillStyle = '#778292';
+                    ctx.fillText(new Date(bar.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x + xStep / 2 - 18, top + plotHeight + 26);
+                }
+                if ((index % 4 === 0 || barSignals.length) && Math.abs(barDelta) > 0) {
+                    drawCanvasBadge(p, 'DELTA ' + (barDelta >= 0 ? '+' : '') + formatVolume(p, barDelta), x + xStep / 2 - 27, top - 28, barDelta >= 0 ? '#64e6a0' : '#ff7887');
+                }
+                if (barSignals.length && compactSignalMode) {
+                    ctx.fillStyle = barSignals.some(function (s) { return s.side === 'SELL'; }) ? '#ff7887' : '#64e6a0';
+                    ctx.beginPath(); ctx.arc(x + xStep / 2, top - 8, 3, 0, Math.PI * 2); ctx.fill();
+                    if (index === visibleBars.length - 1) drawCanvasBadge(p, summarizeSignals(p, barSignals), x + xStep / 2 - 42, top - 18, '#f5c96a');
+                } else {
+                    barSignals.slice(0, 2).forEach(function (signal, si) {
+                        var signalY = top - 8 - si * 17;
+                        var signalColor = signal.type === 'ABSORPTION' ? '#f5c96a' : (signal.side === 'BUY' ? '#64e6a0' : '#ff7887');
+                        var lbl = signal.type === 'ABSORPTION' ? 'ABSORPTION · ' + signal.side : 'STACK ' + signal.side + ' · ' + signal.strength;
+                        drawCanvasBadge(p, lbl, x + xStep / 2 - 38, signalY, signalColor);
+                    });
+                }
+            });
+            renderSharedOverlays(p, visibleBars, chartLeft, xStep, priceY, top, plotHeight);
+            renderDrawings(p);
+            if (p.data.crosshair) {
+                ctx.strokeStyle = '#55d6e8'; ctx.setLineDash([4, 4]);
+                ctx.beginPath(); ctx.moveTo(p.data.crosshair.x, top); ctx.lineTo(p.data.crosshair.x, top + plotHeight); ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+
+        function renderSharedOverlays(p, visibleBars, chartLeft, xStep, priceY, top, plotHeight) {
+            var overlays = p.data.snapshot ? (p.data.snapshot.overlays || []) : [];
+            if (!overlays.length) return;
+            var visibleTimes = new Map();
+            visibleBars.forEach(function (b, i) { visibleTimes.set(b.time, i); });
+            var dense = xStep < 100;
+            overlays.forEach(function (overlay) {
+                var agentState = p.data.agents[overlay.source] || { enabled: true, render: true };
+                if (!agentState.enabled || !agentState.render) return;
+                var idx = visibleTimes.get(overlay.bucket_time);
+                if (idx == null) return;
+                var bar = visibleBars[idx];
+                var centerX = chartLeft + idx * xStep + xStep / 2;
+                var color = overlay.color || '#ad9aff';
+                var anchorPrice = Number(overlay.price) || (overlay.side === 'SELL' ? Number(bar.high) : Number(bar.low));
+                var anchorY = priceY(anchorPrice);
+                var ctx = p.ui.context;
+                ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
+                if (overlay.price_low != null && overlay.price_high != null) {
+                    var zt = priceY(Number(overlay.price_high)), zb = priceY(Number(overlay.price_low));
+                    ctx.globalAlpha = .12; ctx.fillRect(centerX - Math.max(12, xStep / 2 - 3), zt, Math.max(24, xStep - 6), zb - zt);
+                    ctx.globalAlpha = .65; ctx.strokeRect(centerX - Math.max(12, xStep / 2 - 3), zt, Math.max(24, xStep - 6), zb - zt);
+                } else {
+                    ctx.beginPath(); ctx.moveTo(centerX, anchorY); ctx.lineTo(centerX, anchorY + (overlay.side === 'SELL' ? -10 : 10)); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(centerX, anchorY, dense ? 3 : 4, 0, Math.PI * 2); ctx.fill();
+                }
+                var showLabel = !dense || idx === visibleBars.length - 1;
+                if (showLabel && overlay.label) {
+                    var srcLabel = overlay.source === 'rbi_agent' ? 'RBI' : overlay.source === 'custom_chart_bot' ? 'BOT' : 'FLOW';
+                    drawCanvasBadge(p, srcLabel + ' · ' + String(overlay.label).slice(0, 22), centerX - 42, anchorY + (overlay.side === 'SELL' ? -14 : 20), color);
+                }
+                ctx.restore();
+            });
+        }
+
+        function renderDrawings(p) {
+            if (!p.data.view || !p.data.drawings.length) return;
+            var v = p.data.view;
+            var positions = new Map();
+            v.visibleBars.forEach(function (b, i) { positions.set(b.time, i); });
+            var ctx = p.ui.context;
+            p.data.drawings.forEach(function (drawing) {
+                var anchors = drawing.anchors || [];
+                if (!anchors.length) return;
+                var pt = function (a) {
+                    var idx = positions.get(a.time);
+                    if (idx == null) return null;
+                    return { x: v.chartLeft + idx * v.xStep + v.xStep / 2, y: v.top + (v.displayHigh - Number(a.price)) / v.displayRange * v.plotHeight };
+                };
+                var first = pt(anchors[0]), second = pt(anchors[1] || anchors[0]);
+                if (!first || !second) return;
+                var color = (drawing.style && drawing.style.color) || '#f5c96a';
+                ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+                ctx.setLineDash(drawing.type === 'horizontal_level' ? [5, 4] : []);
+                if (drawing.type === 'horizontal_level') {
+                    ctx.beginPath(); ctx.moveTo(first.x, first.y); ctx.lineTo(v.chartLeft + v.visibleBars.length * v.xStep, first.y); ctx.stroke();
+                    ctx.fillText('LEVEL ' + Number(anchors[0].price).toFixed(2), first.x + 5, first.y - 5);
+                } else if (drawing.type === 'ray') {
+                    var dx = second.x - first.x, dy = second.y - first.y, endX = v.chartLeft + v.visibleBars.length * v.xStep;
+                    var endY = first.y + (endX - first.x) * (dy / Math.max(Math.abs(dx), 1));
+                    ctx.beginPath(); ctx.moveTo(first.x, first.y); ctx.lineTo(endX, endY); ctx.stroke(); ctx.fillText('RAY', first.x + 5, first.y - 5);
+                } else if (drawing.type === 'fibonacci') {
+                    var sp = Number(anchors[0].price), ep = Number((anchors[1] ? anchors[1].price : null) || anchors[0].price);
+                    var fr = Math.abs(ep - sp) || 1, fl = Math.min(sp, ep), fh = Math.max(sp, ep);
+                    [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].forEach(function (l) {
+                        var pr = fh - (fh - fl) * l, y = v.top + (v.displayHigh - pr) / v.displayRange * v.plotHeight;
+                        ctx.beginPath(); ctx.moveTo(first.x, y); ctx.lineTo(second.x, y); ctx.stroke();
+                        ctx.fillText('Fib ' + l.toFixed(3), second.x + 5, y - 4);
+                    });
+                } else {
+                    ctx.beginPath(); ctx.moveTo(first.x, first.y); ctx.lineTo(second.x, second.y); ctx.stroke();
+                    if (drawing.type === 'measure') ctx.fillText((Number((anchors[1] ? anchors[1].price : 0) || anchors[0].price) - Number(anchors[0].price)).toFixed(2), second.x + 5, second.y - 5);
+                }
+                ctx.setLineDash([]); ctx.restore();
+            });
+        }
+
+        var domState = { bids: [], asks: [], available: false };
+
+        function renderAnalysis(p) {
+            drawCumulativeDelta(p);
+            drawVolumeProfile(p);
+            drawDom(p);
+        }
+
+        function drawCumulativeDelta(p) {
+            var c = p.ui.deltaCanvas, ctx = p.ui.deltaContext;
+            var width = c.clientWidth, height = c.clientHeight;
+            ctx.clearRect(0, 0, width, height); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, width, height);
+            if (!p.data.bars.length) return;
+            var values = [], running = 0;
+            p.data.bars.forEach(function (bar) { running += bar.rows.reduce(function (s, r) { return s + Number(r.delta); }, 0); values.push(running); });
+            var mn = Math.min.apply(null, [0].concat(values)), mx = Math.max.apply(null, [0].concat(values)), range = Math.max(mx - mn, 0.000001);
+            var left = 14, top = 40, pw = Math.max(1, width - 28), ph = Math.max(1, height - 56);
+            var x = function (i) { return left + i * pw / Math.max(values.length - 1, 1); };
+            var y = function (v) { return top + (mx - v) / range * ph; };
+            var zy = y(0);
+            ctx.strokeStyle = '#28313d'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(left, zy); ctx.lineTo(left + pw, zy); ctx.stroke(); ctx.setLineDash([]);
+            ctx.beginPath();
+            values.forEach(function (v, i) { i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+            ctx.lineTo(x(values.length - 1), zy); ctx.lineTo(x(0), zy); ctx.closePath();
+            ctx.fillStyle = values[values.length - 1] >= 0 ? 'rgba(100,230,160,.16)' : 'rgba(255,120,135,.16)'; ctx.fill();
+            ctx.strokeStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887'; ctx.lineWidth = 2; ctx.beginPath();
+            values.forEach(function (v, i) { i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+            ctx.stroke(); ctx.lineWidth = 1;
+            ctx.fillStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887';
+            ctx.font = '600 11px Consolas, monospace';
+            ctx.fillText((values[values.length - 1] >= 0 ? '+' : '') + formatVolume(p, values[values.length - 1]), width - 66, 23);
+            ctx.fillStyle = '#7f91a5'; ctx.font = '9px Consolas, monospace'; ctx.fillText('0', left, zy - 5);
+        }
+
+        function drawVolumeProfile(p) {
+            var c = p.ui.profileCanvas, ctx = p.ui.profileContext;
+            var width = c.clientWidth, height = c.clientHeight;
+            ctx.clearRect(0, 0, width, height); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, width, height);
+            var levels = new Map();
+            p.data.bars.forEach(function (bar) { bar.rows.forEach(function (row) { levels.set(row.price, (levels.get(row.price) || 0) + Number(row.total_volume)); }); });
+            var entries = []; levels.forEach(function (v, k) { entries.push([k, v]); }); entries.sort(function (a, b) { return Number(b[0]) - Number(a[0]); });
+            if (!entries.length) return;
+            var maxVol = Math.max.apply(null, entries.map(function (e) { return Number(e[1]); }).concat([1]));
+            var maxPts = Math.max(5, Math.min(14, Math.floor((height - 42) / 10)));
+            var step = Math.max(1, Math.ceil(entries.length / maxPts));
+            var buckets = [];
+            for (var bi = 0; bi < entries.length; bi += step) {
+                var slice = entries.slice(bi, Math.min(entries.length, bi + step));
+                buckets.push({ price: Number(slice[Math.floor(slice.length / 2)][0]), volume: slice.reduce(function (s, e) { return s + Number(e[1]); }, 0) });
+            }
+            var left = 58, right = 14, top = 38, bottom = 12, pw = Math.max(1, width - left - right), rh = Math.max(8, (height - top - bottom) / buckets.length);
+            var poc = buckets.reduce(function (best, cur) { return cur.volume > best.volume ? cur : best; }, buckets[0]);
+            buckets.forEach(function (bucket, idx) {
+                var y = top + idx * rh, bw = pw * bucket.volume / maxVol;
+                ctx.fillStyle = bucket === poc ? 'rgba(245,201,106,.78)' : 'rgba(88,217,232,.5)';
+                ctx.fillRect(left, y + 1, bw, Math.max(4, rh - 3));
+                if (idx === 0 || idx === Math.floor(buckets.length / 2) || idx === buckets.length - 1 || bucket === poc) {
+                    ctx.fillStyle = bucket === poc ? '#f5c96a' : '#7f91a5'; ctx.font = '9px Consolas, monospace';
+                    ctx.fillText(bucket.price.toFixed(2), 6, y + rh - 3);
+                }
+            });
+            ctx.fillStyle = '#f5c96a'; ctx.font = '600 9px Consolas, monospace';
+            ctx.fillText('POC ' + poc.price.toFixed(2), Math.max(left, width - 78), 23);
+        }
+
+        function drawDom(p) {
+            var c = p.ui.domCanvas, ctx = p.ui.domContext;
+            var width = c.clientWidth, height = c.clientHeight;
+            ctx.clearRect(0, 0, width, height); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, width, height);
+            var avail = domState && (domState.available || (Array.isArray(domState.bids) && domState.bids.length) || (Array.isArray(domState.asks) && domState.asks.length));
+            if (!avail) { ctx.fillStyle = '#778292'; ctx.font = '10px Consolas, monospace'; ctx.fillText('Waiting for a valid order-book snapshot', 12, 42); return; }
+            var bids = (domState.bids || []).slice(0, 8).map(function (l) { return { price: Number(l.price), quantity: Number(l.quantity), side: 'bid' }; }).reverse();
+            var asks = (domState.asks || []).slice(0, 8).map(function (l) { return { price: Number(l.price), quantity: Number(l.quantity), side: 'ask' }; }).reverse();
+            var maxQ = Math.max.apply(null, bids.concat(asks).map(function (l) { return l.quantity; }).concat([1]));
+            var rh = Math.max(16, Math.min(22, (height - 36) / Math.max(bids.length, asks.length, 6)));
+            var cx = width / 2, rc = Math.max(bids.length, asks.length, 6);
+            var bpX = Math.max(44, cx - 45), apX = cx + 8;
+            for (var ii = 0; ii < rc; ii++) {
+                var y = 29 + ii * rh, bid = bids[ii], ask = asks[ii];
+                var bidBar = bid ? (cx - 58) * bid.quantity / maxQ : 0;
+                var askBar = ask ? (width - (cx + 58)) * ask.quantity / maxQ : 0;
+                ctx.strokeStyle = 'rgba(33,48,64,.55)'; ctx.beginPath(); ctx.moveTo(8, y + rh - 2); ctx.lineTo(width - 8, y + rh - 2); ctx.stroke();
+                if (bid) {
+                    ctx.fillStyle = 'rgba(100, 230, 160, .22)'; ctx.fillRect(8, y + 2, bidBar, rh - 6);
+                    ctx.fillStyle = '#64e6a0'; ctx.font = '9px Consolas, monospace'; ctx.textAlign = 'right'; ctx.fillText(formatCompact(p, bid.quantity), cx - 58, y + rh - 7);
+                    ctx.fillStyle = '#d7dee8'; ctx.textAlign = 'left'; ctx.fillText(bid.price.toFixed(2), bpX, y + rh - 7);
+                }
+                if (ask) {
+                    ctx.fillStyle = 'rgba(255, 120, 135, .22)'; ctx.fillRect(cx + 58, y + 2, askBar, rh - 6);
+                    ctx.fillStyle = '#d7dee8'; ctx.textAlign = 'left'; ctx.fillText(ask.price.toFixed(2), apX, y + rh - 7);
+                    ctx.fillStyle = '#ff7887'; ctx.textAlign = 'left'; ctx.fillText(formatCompact(p, ask.quantity), width - 8, y + rh - 7);
+                }
+            }
+            if (bids[0] && asks[0]) {
+                ctx.fillStyle = '#58d9e8'; ctx.font = '600 9px Consolas, monospace'; ctx.textAlign = 'left';
+                ctx.fillText('SPREAD ' + (asks[0].price - bids[0].price).toFixed(2), 10, height - 8);
+            }
+            ctx.fillStyle = '#64e6a0'; ctx.font = '600 9px Consolas, monospace'; ctx.textAlign = 'right'; ctx.fillText('BID SIZE', cx - 58, 17);
+            ctx.fillStyle = '#7f91a5'; ctx.textAlign = 'left'; ctx.fillText('PRICE', cx - 45, 17);
+            ctx.fillStyle = '#ff7887'; ctx.fillText('ASK SIZE', cx + 58, 17);
+            ctx.textAlign = 'left';
+        }
+
+        function updateStats(p) {
+            var rows = p.data.bars.reduce(function (acc, bar) { return acc.concat(bar.rows); }, []);
+            var volume = rows.reduce(function (s, r) { return s + Number(r.total_volume); }, 0);
+            var delta = rows.reduce(function (s, r) { return s + Number(r.delta); }, 0);
+            var byPrice = new Map();
+            rows.forEach(function (r) { byPrice.set(r.price, (byPrice.get(r.price) || 0) + Number(r.total_volume)); });
+            var poc = null;
+            byPrice.forEach(function (v, k) { if (!poc || v > poc.v) { poc = { k: k, v: v }; } });
+            document.getElementById('session-volume').textContent = formatVolume(p, volume);
+            document.getElementById('session-delta').textContent = (delta >= 0 ? '+' : '') + formatVolume(p, delta);
+            document.getElementById('poc').textContent = poc == null ? '-' : Number(poc.k).toFixed(2);
+            document.getElementById('session-high').textContent = rows.length ? Math.max.apply(null, rows.map(function (r) { return Number(r.price); })).toFixed(2) : '-';
+            document.getElementById('session-low').textContent = rows.length ? Math.min.apply(null, rows.map(function (r) { return Number(r.price); })).toFixed(2) : '-';
+            document.getElementById('candle-count').textContent = p.data.bars.length;
+        }
+
+        function renderAiAnalysis(p, result) {
+            var analysis = (result && result.analysis) || {};
+            var bias = String(analysis.bias || 'WAITING').toUpperCase();
+            var confidence = Number(analysis.confidence);
+            document.getElementById('ai-status').textContent = result && result.available ? 'BEDROCK CONNECTED' : 'LOCAL SNAPSHOT';
+            document.getElementById('ai-bias').textContent = bias;
+            document.getElementById('ai-bias').style.color = bias.indexOf('BULL') >= 0 ? 'var(--green)' : bias.indexOf('BEAR') >= 0 ? 'var(--red)' : 'var(--text)';
+            document.getElementById('ai-confidence').textContent = Number.isFinite(confidence) ? Math.round(confidence * 100) + '% CONF.' : '--';
+            document.getElementById('ai-summary').textContent = analysis.summary || (result && result.message) || 'Ask the Bedrock analyst to interpret the current chart.';
+            var evidence = Array.isArray(analysis.key_evidence) && analysis.key_evidence.length ? analysis.key_evidence : ['Footprint context is ready for analysis.'];
+            var risks = Array.isArray(analysis.risk_notes) && analysis.risk_notes.length ? analysis.risk_notes : ['Review invalidation and position size before acting.'];
+            document.getElementById('ai-evidence').innerHTML = evidence.slice(0, 5).map(function (i) { return '<li>' + escapeHtml(String(i)) + '</li>'; }).join('');
+            document.getElementById('ai-risk').innerHTML = risks.slice(0, 5).map(function (i) { return '<li>' + escapeHtml(String(i)) + '</li>'; }).join('');
+        }
+
+        async function askChartAi(p, question) {
+            if (!p.data.snapshot) return;
+            document.getElementById('ai-status').textContent = 'ANALYZING...';
+            try {
+                var response = await fetch('/api/binance/ai/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: question, session_id: p.ui.sessionId, snapshot: p.data.snapshot }) });
+                var result = await response.json();
+                if (Array.isArray(result.contributions) && p.data.snapshot) {
+                    p.data.snapshot.overlays = (p.data.snapshot.overlays || []).concat(result.contributions);
+                    render(p);
+                }
+                await loadSessionHistory(p);
+                renderAiAnalysis(p, result);
+            } catch (error) {
+                renderAiAnalysis(p, { available: false, message: 'Analysis unavailable: ' + error.message });
+            }
+        }
+
+        async function loadSessionHistory(p) {
+            try {
+                var response = await fetch('/api/binance/ai/sessions/' + p.ui.sessionId);
+                var data = await response.json();
+                var container = document.getElementById('ai-session-log');
+                var messages = Array.isArray(data.messages) ? data.messages : [];
+                if (!messages.length) { container.innerHTML = '<span class="ai-note">No chart conversation yet.</span>'; return; }
+                container.innerHTML = messages.slice(-6).map(function (m) {
+                    return '<div class="ai-note"><strong>' + escapeHtml(m.role || 'note') + ':</strong> ' + escapeHtml(String(m.content || '')).slice(0, 180) + '</div>';
+                }).join('');
+            } catch (error) {
+                document.getElementById('ai-session-log').innerHTML = '<span class="ai-note">Session memory unavailable.</span>';
+            }
+        }
+
+        async function loadAgentControls(p) {
+            try {
+                var response = await fetch('/api/chart/agents');
+                var data = await response.json();
+                p.data.agents = data.agents || {};
+                var container = document.getElementById('ai-agents');
+                container.innerHTML = Object.entries(data.agents || {}).map(function (entry) {
+                    var id = entry[0], agent = entry[1];
+                    return '<div class="ai-agent-row"><span>' + escapeHtml(agent.label) + '</span><div>' +
+                        '<label><input type="checkbox" data-agent="' + id + '" data-kind="enabled" ' + (agent.enabled ? 'checked' : '') + ' /></label>' +
+                        '<label title="Render on chart"><input type="checkbox" data-agent="' + id + '" data-kind="render" ' + (agent.render ? 'checked' : '') + ' /></label>' +
+                        '</div></div>';
+                }).join('');
+                container.querySelectorAll('input[data-agent]').forEach(function (input) {
+                    input.addEventListener('change', async function () {
+                        var agentId = input.dataset.agent, kind = input.dataset.kind, stateValue = input.checked;
+                        var agent = p.data.agents[agentId] || { enabled: true, render: true };
+                        var payload = { enabled: kind === 'enabled' ? stateValue : !!agent.enabled, render: kind === 'render' ? stateValue : !!agent.render };
+                        var updated = await fetch('/api/chart/agents/' + agentId + '/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (updated.ok) {
+                            var result = await updated.json();
+                            p.data.agents[agentId] = result.state || payload;
+                            render(p);
+                        }
+                    });
+                });
+            } catch (error) { document.getElementById('ai-agents').textContent = 'Agent controls unavailable'; }
+        }
+
+        async function loadDrawings(p) {
+            try {
+                var sym = document.getElementById('symbol').value;
+                var iv = Number(document.getElementById('interval').value);
+                var response = await fetch('/api/chart/drawings?symbol=' + sym + '&timeframe=' + Math.round(iv / 60) + 'm');
+                p.data.drawings = (await response.json()).drawings || [];
+                render(p);
+            } catch (error) { p.data.drawings = []; }
+        }
+
+        async function handleDrawingClick(p, event) {
+            if (!p.data.drawingTool || !p.data.view) return;
+            var v = p.data.view;
+            var idx = Math.max(0, Math.min(v.visibleBars.length - 1, Math.round((event.offsetX - v.chartLeft - v.xStep / 2) / v.xStep)));
+            var bar = v.visibleBars[idx];
+            var anchor = { time: bar.time, price: Number(v.displayHigh - (event.offsetY - v.top) / v.plotHeight * v.displayRange) };
+            if (p.data.drawingTool === 'horizontal_level') p.data.pendingAnchor = null;
+            else if (!p.data.pendingAnchor) { p.data.pendingAnchor = anchor; return; }
+            var anchors = p.data.pendingAnchor ? [p.data.pendingAnchor, anchor] : [anchor];
+            var drawing = { id: crypto.randomUUID(), type: p.data.drawingTool, symbol: document.getElementById('symbol').value, timeframe: Math.round(Number(document.getElementById('interval').value) / 60) + 'm', anchors: anchors, style: { color: '#f5c96a' } };
+            p.data.drawings.push(drawing);
+            p.data.pendingAnchor = null; p.data.drawingTool = null; p.ui.canvas.style.cursor = 'default'; render(p);
+            await fetch('/api/chart/drawings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(drawing) });
+        }
+
+        function applySnapshot(p, data, resetOffset) {
+            p.data.snapshot = data;
+            p.data.bars = groupBars(p, data.levels || [], data.candles || []);
+            p.data.signals = data.signals || [];
+            if (resetOffset) p.data.offset = 0;
+            document.getElementById('status').textContent = (data.symbol || document.getElementById('symbol').value) + ' | ' + (data.trade_count || 0) + ' trades | ' + (data.candles ? data.candles.length : 0) + ' candles | realtime';
+            updateStats(p);
+            render(p);
+            renderAnalysis(p);
+        }
+
+        function connectRealtime(p) {
+            if (p.private.socket) p.private.socket.close();
+            var sym = document.getElementById('symbol').value;
+            var iv = Number(document.getElementById('interval').value);
+            var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            p.private.socket = new WebSocket(proto + '//' + window.location.host + '/ws/binance/' + sym + '?interval_seconds=' + iv + '&tick_size=' + p.ui.tickSize + '&candle_limit=100');
+            p.private.socket.onopen = function () { document.getElementById('ai-status').textContent = 'REALTIME CONNECTED'; };
+            p.private.socket.onmessage = function (event) {
+                var message = JSON.parse(event.data);
+                if (message.type === 'snapshot') applySnapshot(p, message.data);
+                if (message.type === 'error') document.getElementById('status').textContent = 'Realtime error: ' + message.message;
+            };
+            p.private.socket.onclose = function () {
+                document.getElementById('ai-status').textContent = 'RECONNECTING...';
+                window.setTimeout(function () { connectRealtime(p); }, 2000);
+            };
+        }
+
+        async function load(p) {
+            var sym = document.getElementById('symbol').value;
+            var iv = Number(document.getElementById('interval').value);
+            document.getElementById('status').textContent = 'Loading ' + sym + ' from PostgreSQL...';
+            try {
+                p.ui.tickSize = Number(tickSizeFor(sym));
+                var response = await fetch('/api/binance/footprint?symbol=' + sym + '&hours=24&interval_seconds=' + iv + '&tick_size=' + p.ui.tickSize);
+                var data = await response.json();
+                applySnapshot(p, data, true);
+                connectRealtime(p);
+                loadDom(p);
+            } catch (error) {
+                p.data.bars = [];
+                document.getElementById('status').textContent = 'Data unavailable: ' + error.message;
+            }
+            render(p);
+            renderAnalysis(p);
+        }
+
+        async function loadDom(p) {
+            try {
+                var response = await fetch('/api/binance/dom?symbol=' + document.getElementById('symbol').value);
+                domState = await response.json();
+                domState.available = !!domState && (!!domState.available || (Array.isArray(domState.bids) && domState.bids.length) || (Array.isArray(domState.asks) && domState.asks.length));
+            } catch (error) { domState = { bids: [], asks: [], available: false }; }
+            drawDom(p);
+        }
+
+        ui.canvas.addEventListener('mousemove', function (event) {
+            panel.data.crosshair = { x: event.offsetX, y: event.offsetY };
+            if (panel.data.dragging) panel.data.offset = Math.max(0, Math.min(panel.data.bars.length - panel.data.visible, panel.data.dragOffset + Math.round((panel.data.dragX - event.clientX) / 12)));
+            render(panel);
         });
-    });
-    window.addEventListener('resize', resize);
-    resize();
-    load();
-    loadDom();
-    loadAgentControls();
-    loadSessionHistory();
-    loadDrawings();
-    setInterval(() => { load(); loadSessionHistory(); }, 30000);
+        ui.canvas.addEventListener('mouseleave', function () { panel.data.crosshair = null; render(panel); });
+        ui.canvas.addEventListener('mousedown', function (event) { panel.data.dragging = true; panel.data.dragX = event.clientX; panel.data.dragOffset = panel.data.offset; });
+        ui.canvas.addEventListener('click', function (event) { handleDrawingClick(panel, event); });
+        window.addEventListener('mouseup', function () { panel.data.dragging = false; });
+        ui.canvas.addEventListener('wheel', function (event) {
+            event.preventDefault();
+            panel.data.visible = Math.max(12, Math.min(96, panel.data.visible + (event.deltaY > 0 ? 4 : -4)));
+            render(panel);
+        }, { passive: false });
+        document.getElementById('symbol').addEventListener('change', function () { load(panel); });
+        document.getElementById('interval').addEventListener('change', function () { load(panel); });
+        document.getElementById('zoom-out').addEventListener('click', function () { panel.data.visible = Math.min(96, panel.data.visible + 4); render(panel); });
+        document.getElementById('zoom-in').addEventListener('click', function () { panel.data.visible = Math.max(12, panel.data.visible - 4); render(panel); });
+        document.getElementById('zoom-reset').addEventListener('click', function () { panel.data.visible = 30; panel.data.offset = 0; render(panel); });
+        document.getElementById('refresh').addEventListener('click', function () { load(panel); });
+        document.getElementById('ai-question').addEventListener('submit', function (event) {
+            event.preventDefault();
+            var input = document.getElementById('ai-input');
+            var question = input.value.trim();
+            if (question) { input.value = ''; askChartAi(panel, question); }
+        });
+        document.querySelectorAll('.tool-button').forEach(function (button) {
+            button.addEventListener('click', function () {
+                document.querySelectorAll('.tool-button').forEach(function (item) { item.classList.remove('active'); });
+                button.classList.add('active');
+                var tool = button.title;
+                if (tool === 'Zoom in') { panel.data.visible = Math.max(12, panel.data.visible - 4); render(panel); }
+                else if (tool === 'Settings') { document.querySelector('.legend').classList.toggle('is-hidden'); }
+                else if (tool === 'Crosshair') { panel.data.drawingTool = null; panel.data.pendingAnchor = null; ui.canvas.style.cursor = 'crosshair'; }
+                else if (['Trend line', 'Horizontal level', 'Measure', 'Ray', 'Fibonacci'].indexOf(tool) >= 0) {
+                    var mapping = { 'Trend line': 'trend_line', 'Horizontal level': 'horizontal_level', 'Measure': 'measure', 'Ray': 'ray', 'Fibonacci': 'fibonacci' };
+                    panel.data.drawingTool = mapping[tool]; panel.data.pendingAnchor = null; ui.canvas.style.cursor = 'crosshair';
+                } else { panel.data.drawingTool = null; panel.data.pendingAnchor = null; ui.canvas.style.cursor = 'default'; }
+            });
+        });
+        window.addEventListener('resize', function () { resize(panel); });
+        resize(panel);
+        load(panel);
+        loadDom(panel);
+        loadAgentControls(panel);
+        loadSessionHistory(panel);
+        loadDrawings(panel);
+        setInterval(function () { load(panel); loadSessionHistory(panel); }, 30000);
+    })();
     </script>
 </body>
 </html>
