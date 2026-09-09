@@ -674,24 +674,91 @@
                 ctx.globalAlpha = 1;
 
                 var showValues = xStep >= 48 || index === visibleBars.length - 1;
+
+                // Build DOM lookup for bid/ask at each price level (for ladder coloring + imbalances)
+                var domBids = domState.bids || [];
+                var domAsks = domState.asks || [];
+                var domBidMap = {};
+                var domAskMap = {};
+                domBids.forEach(function (l) { var p = Math.floor(Number(l.price) / displayStep) * displayStep; domBidMap[p] = (domBidMap[p] || 0) + Number(l.quantity); });
+                domAsks.forEach(function (l) { var p = Math.floor(Number(l.price) / displayStep) * displayStep; domAskMap[p] = (domAskMap[p] || 0) + Number(l.quantity); });
+
                 displayRows.forEach(function (price) {
                     var row = rows.get(price) || { buy_volume: 0, sell_volume: 0, total_volume: 0 };
                     var rowY = priceY(price);
                     var buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
                     var cellHeight = Math.max(14, Math.min(24, plotHeight / displayRows.length));
+
+                    // DOM-based bid/ask ladder info for this price level
+                    var domBidQty = domBidMap[price] || 0;
+                    var domAskQty = domAskMap[price] || 0;
+                    var imbalance = 0;
+                    if (domBidQty + domAskQty > 0) {
+                        imbalance = (domBidQty - domAskQty) / (domBidQty + domAskQty);
+                    }
+
                     if (buy > 0) {
-                        ctx.fillStyle = 'rgba(99, 211, 145, ' + Math.min(.8, .16 + buy / total * .64) + ')';
+                        var buyAlpha = Math.min(.8, .16 + buy / total * .64);
+                        // Boost alpha for DOM imbalances (bid wall)
+                        if (imbalance > 0.3) buyAlpha = Math.min(.95, buyAlpha + imbalance * .3);
+                        ctx.fillStyle = 'rgba(99, 211, 145, ' + buyAlpha + ')';
                         var buyCellX = x + xStep / 2 - cellWidth - 3;
                         ctx.fillRect(buyCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                         if (showValues) { ctx.fillStyle = '#d7dee8'; drawCellValue(p, buy, buyCellX, rowY, cellWidth, cellHeight - 2); }
+                        // Imbalance badge for strong bid walls (>3:1)
+                        if (imbalance > 0.5 && domBidQty > 0) {
+                            ctx.fillStyle = 'rgba(100, 230, 160, .9)';
+                            ctx.font = '7px Consolas, monospace';
+                            ctx.fillText('B' + (imbalance * 100).toFixed(0), buyCellX + 1, rowY - cellHeight / 2 + 8);
+                        }
                     }
                     if (sell > 0) {
-                        ctx.fillStyle = 'rgba(238, 119, 119, ' + Math.min(.8, .16 + sell / total * .64) + ')';
+                        var sellAlpha = Math.min(.8, .16 + sell / total * .64);
+                        if (imbalance < -0.3) sellAlpha = Math.min(.95, sellAlpha + Math.abs(imbalance) * .3);
+                        ctx.fillStyle = 'rgba(238, 119, 119, ' + sellAlpha + ')';
                         var sellCellX = x + xStep / 2 + 3;
                         ctx.fillRect(sellCellX, rowY - cellHeight / 2, cellWidth, cellHeight - 2);
                         if (showValues) { ctx.fillStyle = '#d7dee8'; drawCellValue(p, sell, sellCellX, rowY, cellWidth, cellHeight - 2); }
+                        if (imbalance < -0.5 && domAskQty > 0) {
+                            ctx.fillStyle = 'rgba(255, 120, 135, .9)';
+                            ctx.font = '7px Consolas, monospace';
+                            ctx.fillText('S' + (Math.abs(imbalance) * 100).toFixed(0), sellCellX + 1, rowY - cellHeight / 2 + 8);
+                        }
+                    }
+                    // Unfinished auction: price level with DOM liquidity but no trade in this candle
+                    if (buy === 0 && sell === 0 && (domBidQty > 0 || domAskQty > 0) && cellHeight > 10) {
+                        ctx.fillStyle = 'rgba(88, 217, 232, .12)';
+                        ctx.fillRect(x + xStep / 2 - cellWidth - 3, rowY - cellHeight / 2, cellWidth * 2 + 6, cellHeight - 2);
+                        ctx.fillStyle = 'rgba(88, 217, 232, .3)';
+                        ctx.font = '7px Consolas, monospace';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('UA', x + xStep / 2, rowY + 2);
+                        ctx.textAlign = 'left';
                     }
                 });
+
+                // Draw DOM ladder edge markers (bid/ask wall indicators on the right edge)
+                if (xStep >= 60) {
+                    var domMaxQty = Math.max.apply(null, domBids.concat(domAsks).map(function (l) { return Number(l.quantity); }).concat([1]));
+                    domBids.slice(0, 5).forEach(function (level, i) {
+                        var lx = x + xStep + 4;
+                        var ly = priceY(Math.floor(Number(level.price) / displayStep) * displayStep);
+                        if (ly >= top && ly <= top + plotHeight) {
+                            var barW = Math.max(2, (Number(level.quantity) / domMaxQty) * 16);
+                            ctx.fillStyle = 'rgba(100, 230, 160, .25)';
+                            ctx.fillRect(lx, ly - 1, barW, 2);
+                        }
+                    });
+                    domAsks.slice(0, 5).forEach(function (level, i) {
+                        var lx = x + xStep + 4;
+                        var ly = priceY(Math.floor(Number(level.price) / displayStep) * displayStep);
+                        if (ly >= top && ly <= top + plotHeight) {
+                            var barW = Math.max(2, (Number(level.quantity) / domMaxQty) * 16);
+                            ctx.fillStyle = 'rgba(255, 120, 135, .25)';
+                            ctx.fillRect(lx, ly - 1, barW, 2);
+                        }
+                    });
+                }
 
                 ctx.font = '10px Consolas, monospace';
                 if ((index % Math.max(2, Math.ceil(visibleBars.length / 6)) === 0 || index === visibleBars.length - 1) && !p.data.dragging) {
@@ -943,17 +1010,87 @@
 
         function askChartAi(p, question) {
             if (!p.data.snapshot) return;
-            // Simplified: just trigger the analysis, results update via snapshot overlays
             fetch('/api/binance/ai/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question: question, session_id: p.ui.sessionId, snapshot: p.data.snapshot })
             }).then(function (r) { return r.json(); }).then(function (result) {
+                // Apply chart contributions (markers, zones, levels)
                 if (Array.isArray(result.contributions) && p.data.snapshot) {
                     p.data.snapshot.overlays = (p.data.snapshot.overlays || []).concat(result.contributions);
-                    render(p);
                 }
+                // Apply AI-requested indicators (e.g. EMA, RSI, BB, ATR)
+                if (Array.isArray(result.indicators) && result.indicators.length && p.type === 'smc' && p.ui.chart) {
+                    applyAiIndicators(p, result.indicators);
+                }
+                // Render with updated overlays
+                render(p);
+                renderAnalysis(p);
+                updateStats(p, p.ui.statsContainer);
             }).catch(function () {});
+        }
+
+        function applyAiIndicators(p, indicators) {
+            if (!p.ui.chart || !p.ui.candleSeries) return;
+            var closes = p.data.smcData ? p.data.smcData.candles.map(function (c) { return c.close; }) : [];
+            var times = p.data.smcData ? p.data.smcData.candles.map(function (c) { return c.time; }) : [];
+            if (!closes.length) return;
+
+            indicators.forEach(function (ind) {
+                var name = ind.name || '';
+                var series = null;
+                var label = '';
+                var color = '#22d3ee';
+
+                if (name === 'ema_9' || name === 'ema_21' || name === 'ema_50' || name === 'ema_200') {
+                    var period = parseInt(name.replace('ema_', ''));
+                    var ema = computeEMA(p, closes, period);
+                    series = p.ui.chart.addLineSeries({ color: color, lineWidth: 1 });
+                    series.setData(times.map(function (t, i) { return ema[i] !== null ? { time: t, value: ema[i] } : null; }).filter(Boolean));
+                    label = name.toUpperCase();
+                } else if (name === 'rsi_14') {
+                    var rsi = computeRSI(p, closes, 14);
+                    if (rsi.length && rsi.some(function (r) { return r.value !== null; })) {
+                        var avgRsi = rsi.reduce(function (a, b) { return a + b.value; }, 0) / rsi.length;
+                        var pl = p.ui.candleSeries.createPriceLine({ price: avgRsi, color: '#a78bfa', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RSI Avg' });
+                        p.indicators.rsi_14 = { series: pl, label: 'RSI 14 (avg)', color: '#a78bfa', enabled: true, visible: true, isPriceLine: true };
+                        updateIndicatorPanel(p);
+                        return;
+                    }
+                } else if (name === 'atr_14') {
+                    var atr = computeATR(p, p.data.smcData.candles, 14);
+                    if (atr !== null) {
+                        var pl = p.ui.candleSeries.createPriceLine({ price: atr, color: '#ff6b35', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'ATR' });
+                        p.indicators.atr_14 = { series: pl, label: 'ATR 14', color: '#ff6b35', enabled: true, visible: true, isPriceLine: true };
+                        updateIndicatorPanel(p);
+                        return;
+                    }
+                } else if (name === 'bollinger_20') {
+                    var bb = computeBollinger(p, closes, 20, 2.0);
+                    if (bb.upper && bb.upper.length) {
+                        series = p.ui.chart.addLineSeries({ color: '#fbbf24', lineWidth: 1 });
+                        series.setData(times.map(function (t, i) { return bb.upper[i] !== null ? { time: t, value: bb.upper[i] } : null; }).filter(Boolean));
+                        var series2 = p.ui.chart.addLineSeries({ color: '#fbbf24', lineWidth: 1, lineStyle: 2 });
+                        series2.setData(times.map(function (t, i) { return bb.lower[i] !== null ? { time: t, value: bb.lower[i] } : null; }).filter(Boolean));
+                        label = 'BB (20,2)';
+                    }
+                } else if (name === 'macd_12_26_9') {
+                    var macd = computeMACD(p, closes);
+                    if (macd.macd && macd.macd.length) {
+                        series = p.ui.chart.addLineSeries({ color: '#22d3ee', lineWidth: 1 });
+                        series.setData(times.map(function (t, i) { return macd.macd[i] !== null ? { time: t, value: macd.macd[i] } : null; }).filter(Boolean));
+                        var sig = p.ui.chart.addLineSeries({ color: '#a78bfa', lineWidth: 1, lineStyle: 2 });
+                        sig.setData(times.map(function (t, i) { return macd.signal[i] !== null ? { time: t, value: macd.signal[i] } : null; }).filter(Boolean));
+                        label = 'MACD';
+                    }
+                }
+
+                if (series) {
+                    var key = name + '_' + Date.now();
+                    p.indicators[key] = { series: series, label: label, color: color, enabled: true, visible: true };
+                    updateIndicatorPanel(p);
+                }
+            });
         }
 
         async function loadDrawings(p) {
@@ -994,9 +1131,27 @@
             p.data.signals = data.signals || [];
             if (resetOffset) p.data.offset = 0;
             if (data.symbol) p.symbol = data.symbol;
+            // Refresh AI markers: remove stale time-anchored markers, keep price-anchored ones
+            refreshAiMarkers(p);
             render(p);
             renderAnalysis(p);
             updateStats(p, p.ui.statsContainer);
+        }
+
+        function refreshAiMarkers(p) {
+            // Keep overlays that are price-anchored (price or price_low/price_high set)
+            // Remove overlays that are purely time-anchored and whose candle is no longer in view
+            if (!p.data.snapshot || !p.data.snapshot.overlays) return;
+            var visibleTimes = new Set();
+            p.data.bars.forEach(function (b) { visibleTimes.add(b.time); });
+            p.data.snapshot.overlays = (p.data.snapshot.overlays || []).filter(function (overlay) {
+                // Keep if price-anchored (persists across data updates)
+                if (overlay.price !== null || overlay.price_low !== null || overlay.price_high !== null) return true;
+                // Keep if its bucket_time is still in the visible bars
+                if (overlay.bucket_time && visibleTimes.has(overlay.bucket_time)) return true;
+                // Remove time-anchored overlays whose candle is gone
+                return false;
+            });
         }
 
         var domCache = {};
@@ -1251,6 +1406,53 @@
             return atr;
         }
 
+        function computeBollinger(closes, period, stdDev) {
+            if (closes.length < period) return { upper: [], lower: [], middle: [] };
+            var upper = [], lower = [], middle = [];
+            for (var i = period - 1; i < closes.length; i++) {
+                var window = closes.slice(i - period + 1, i + 1);
+                var sma = window.reduce(function (a, b) { return a + b; }, 0) / period;
+                var variance = window.reduce(function (a, b) { return a + (b - sma) * (b - sma); }, 0) / period;
+                var sd = Math.sqrt(variance);
+                middle.push(sma);
+                upper.push(sma + stdDev * sd);
+                lower.push(sma - stdDev * sd);
+            }
+            return { upper: upper, lower: lower, middle: middle };
+        }
+
+        function computeMACD(closes) {
+            var fastPeriod = 12, slowPeriod = 26, signalPeriod = 9;
+            if (closes.length < slowPeriod + signalPeriod) return { macd: [], signal: [], histogram: [] };
+            var fastEMA = computeEMA(null, closes, fastPeriod);
+            var slowEMA = computeEMA(null, closes, slowPeriod);
+            var macdLine = [];
+            for (var i = 0; i < closes.length; i++) {
+                if (fastEMA[i] !== null && slowEMA[i] !== null) {
+                    macdLine.push(fastEMA[i] - slowEMA[i]);
+                } else {
+                    macdLine.push(null);
+                }
+            }
+            var validMacd = macdLine.filter(function (v) { return v !== null; });
+            if (validMacd.length < signalPeriod) return { macd: [], signal: [], histogram: [] };
+            var signalEMA = computeEMA(null, validMacd, signalPeriod);
+            var signalLine = [];
+            var histogram = [];
+            var validIdx = 0;
+            for (var j = 0; j < macdLine.length; j++) {
+                if (macdLine[j] !== null) {
+                    signalLine.push(signalEMA[validIdx] !== null ? signalEMA[validIdx] : null);
+                    histogram.push(macdLine[j] - (signalEMA[validIdx] !== null ? signalEMA[validIdx] : 0));
+                    validIdx++;
+                } else {
+                    signalLine.push(null);
+                    histogram.push(null);
+                }
+            }
+            return { macd: macdLine, signal: signalLine, histogram: histogram };
+        }
+
         function renderChart(p) {
             if (!p.ui.chart || !p.data.smcData || !p.data.smcData.candles) return;
             var candles = p.data.smcData.candles;
@@ -1342,9 +1544,17 @@
 
                 renderChart(p);
                 analyzeSMC(p);
+                refreshAiMarkers(p);
             } catch (error) {
                 if (statusEl) statusEl.textContent = 'Error';
             }
+        }
+
+        function refreshAiMarkers(p) {
+            if (!p.data.snapshot) return;
+            p.data.obLines = (p.data.obLines || []).filter(function (line) { return line.price !== undefined; });
+            p.data.fvgAreas = (p.data.fvgAreas || []).filter(function (area) { return area.price !== undefined || area.low !== undefined; });
+            p.data.liqLines = (p.data.liqLines || []).filter(function (line) { return line.price !== undefined; });
         }
 
         function initChart(p) {

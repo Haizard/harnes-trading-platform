@@ -994,11 +994,19 @@ async def api_binance_ai_analyze(payload: dict):
         if session_id:
             from src.chart_workspace import append_chat
             append_chat(session_id, "assistant", response.text, snapshot.get("symbol", ""), snapshot.get("timeframe", ""), snapshot.get("as_of"))
+        # Include available indicator types so frontend can offer them
+        try:
+            from src.indicator_registry import list_indicators
+            available_indicators = list_indicators()
+        except Exception:
+            available_indicators = []
+
         return {
             "available": True,
             "analysis": analysis,
             "model_text": response.text,
             "contributions": [item.__dict__ for item in contributions],
+            "available_indicators": available_indicators,
         }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
