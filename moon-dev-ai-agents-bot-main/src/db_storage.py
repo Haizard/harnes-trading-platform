@@ -1555,27 +1555,31 @@ def save_binance_market_trade(symbol: str, trade: dict) -> Optional[int]:
 
 
 def save_binance_market_trades_bulk(symbol: str, trades: list) -> int:
-    """Persist a batch of normalized Binance trades in one transaction."""
+    """Persist a batch of normalized Binance trades in one transaction.
+
+    Uses executemany (pipelined) so large backfills don't pay one network
+    round-trip per row against the remote PostgreSQL.
+    """
     pool = get_pool()
     if not pool or not trades:
         return 0
-    saved = 0
     try:
+        rows = [
+            (symbol.upper(), trade["timestamp"], trade["price"], trade["quantity"],
+             trade["side"], trade["is_buyer_maker"], trade["agg_trade_id"],
+             json.dumps(trade.get("raw_data", {}), default=str))
+            for trade in trades
+        ]
         with pool.connection() as conn:
-            for trade in trades:
-                row = conn.execute("""
+            with conn.cursor() as cur:
+                cur.executemany("""
                     INSERT INTO binance_market_trades (
                         symbol, event_time, price, quantity, aggressor_side,
                         is_buyer_maker, agg_trade_id, raw_data)
                     VALUES (%s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (symbol, agg_trade_id) DO NOTHING
-                    RETURNING id
-                """, (
-                    symbol.upper(), trade["timestamp"], trade["price"], trade["quantity"],
-                    trade["side"], trade["is_buyer_maker"], trade["agg_trade_id"],
-                    json.dumps(trade.get("raw_data", {}), default=str),
-                )).fetchone()
-                saved += int(row is not None)
+                """, rows)
+                saved = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else len(rows)
             conn.commit()
         return saved
     except Exception as e:
@@ -1648,9 +1652,11 @@ def get_binance_market_trades(symbol: str, hours: int = 24, limit: int = 100000)
                 FROM binance_market_trades
                 WHERE symbol = %s
                   AND event_time >= NOW() - (%s * INTERVAL '1 hour')
-                ORDER BY event_time ASC
+                ORDER BY event_time DESC
                 LIMIT %s
             """, (symbol.upper(), hours, limit)).fetchall()
+            # Newest-window rows fetched DESC; return chronological order for aggregation.
+            rows.reverse()
             return [dict(row) for row in rows]
     except Exception as e:
         print(f"[DB] get_binance_market_trades error: {e}")

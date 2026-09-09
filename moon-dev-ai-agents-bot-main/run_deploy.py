@@ -158,20 +158,26 @@ def start_engine():
         # === Binance research collector (PostgreSQL-only) ===
         research_enabled = os.environ.get("ENABLE_BINANCE_RESEARCH", "true").lower() in ("1", "true", "yes", "on")
         if research_enabled:
-            research_symbol = os.environ.get("BINANCE_RESEARCH_SYMBOL", "BTCUSDT")
+            try:
+                from src.data.collectors.binance_ws import get_research_symbols
+                research_symbols = get_research_symbols()
+            except Exception as e:
+                print(f"[BINANCE] Collector import failed: {e}", flush=True)
+                research_symbols = []
 
             def start_binance_research():
                 try:
-                    from src.data.collectors.binance_ws import BinanceWS
+                    from src.data.collectors.binance_ws import start_research_collectors
                     import asyncio as _asyncio
-                    print(f"[BINANCE] Starting PostgreSQL research collector for {research_symbol}", flush=True)
-                    _asyncio.run(BinanceWS(symbol=research_symbol).start())
+                    print(f"[BINANCE] Starting PostgreSQL research collector for {', '.join(research_symbols)}", flush=True)
+                    _asyncio.run(start_research_collectors())
                 except Exception as e:
                     print(f"[BINANCE] Research collector stopped: {e}", flush=True)
 
-            binance_thread = threading.Thread(target=start_binance_research, daemon=True)
-            binance_thread.start()
-            print("[BINANCE] Research collector background thread launched", flush=True)
+            if research_symbols:
+                binance_thread = threading.Thread(target=start_binance_research, daemon=True)
+                binance_thread.start()
+                print("[BINANCE] Research collector background thread launched", flush=True)
         else:
             print("[BINANCE] Research collector disabled", flush=True)
 

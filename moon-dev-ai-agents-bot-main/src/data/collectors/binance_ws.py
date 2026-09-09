@@ -8,14 +8,39 @@ import json
 import asyncio
 import os
 import requests
-from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
 from termcolor import colored, cprint
 from datetime import datetime
 
 from src.data.processing.cleaner import DataCleaner
 from src.db_storage import save_binance_depth_update, save_binance_market_trade, save_binance_market_trades_bulk, save_binance_orderbook_snapshot
 
+RESEARCH_SYMBOLS_ENV = "BINANCE_RESEARCH_SYMBOLS"
+
+
+def get_research_symbols(default: str = "btcusdt") -> list:
+    """Resolve which Binance symbols to collect.
+
+    Priority:
+      1. BINANCE_RESEARCH_SYMBOLS — comma-separated list, e.g. "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
+      2. Legacy BINANCE_RESEARCH_SYMBOL — single symbol (kept for deploy compat)
+      3. Default — "btcusdt"
+    """
+    raw = (
+        os.environ.get(RESEARCH_SYMBOLS_ENV)
+        or os.environ.get("BINANCE_RESEARCH_SYMBOL")
+        or default
+    )
+    symbols = []
+    for part in raw.replace(";", ",").split(","):
+        symbol = part.strip().upper()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    return symbols or [default.upper()]
+
+
 class BinanceWS:
+    """Live trade + depth collector for one Binance symbol (run one instance per symbol)."""
+
     def __init__(self, symbol="btcusdt"):
         self.symbol = symbol.lower()
         self.queue = asyncio.Queue()
@@ -154,6 +179,8 @@ class BinanceWS:
         try:
             await self.backfill_trades()
             await self.seed_orderbook()
+            # Import here so REST-only usage (backfill/seed) works without the binance SDK
+            from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
             # Initialize client with thread-safe handler
             self.client = SpotWebsocketStreamClient(on_message=self.handle_message)
             
@@ -180,9 +207,23 @@ class BinanceWS:
         if self.client:
             self.client.stop()
 
+
+def start_research_collectors():
+    """Start one BinanceWS collector per configured symbol, each in its own task.
+
+    Reads BINANCE_RESEARCH_SYMBOLS (comma-separated, e.g. "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT").
+    Falls back to legacy BINANCE_RESEARCH_SYMBOL (single symbol), then "btcusdt".
+    Call inside a running event loop (e.g. from run_deploy's collector thread).
+    """
+    symbols = get_research_symbols()
+    cprint(f"[WS] Research collector symbols: {', '.join(symbols)}", "white", "on_blue")
+
+    async def _run_all():
+        collectors = [BinanceWS(symbol=symbol) for symbol in symbols]
+        await asyncio.gather(*(collector.start() for collector in collectors))
+
+    return asyncio.run(_run_all())
+
+
 if __name__ == "__main__":
-    collector = BinanceWS()
-    try:
-        asyncio.run(collector.start())
-    except KeyboardInterrupt:
-        pass
+    start_research_collectors()
