@@ -1186,6 +1186,19 @@ async def smc_charts_page():
         return HTMLResponse(f"<h1>SMC Charts error: {e}</h1>", status_code=500)
 
 
+@app.get("/charts/workspace/", response_class=HTMLResponse)
+async def chart_workspace_page():
+    """Multi-panel chart workspace — hosts footprint and SMC panels in one grid."""
+    try:
+        from pathlib import Path
+        html_file = Path(__file__).parent / "templates" / "charts" / "workspace.html"
+        if html_file.exists():
+            return HTMLResponse(html_file.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>Chart workspace module not available</h1>", status_code=503)
+    except Exception as e:
+        return HTMLResponse(f"<h1>Chart workspace error: {e}</h1>", status_code=500)
+
+
 # ── Auth API Endpoints ─────────────────────────────────────
 
 @app.post("/api/auth/signup")
