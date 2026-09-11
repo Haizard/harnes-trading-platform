@@ -1,0 +1,22 @@
+# https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository#configuring-the-template-chooser
+
+blank_issues_enabled: true
+contact_links:
+  - name: Website
+    url: http://fabricjs.com/
+    about: Checkout the website.
+  - name: Docs
+    url: http://fabricjs.com/docs/
+    about: Checkout the docs.
+  - name: Discussions
+    url: https://github.com/fabricjs/fabric.js/discussions
+    about: Please ask and answer questions here.
+  - name: Vanilla Demo
+    url: https://codesandbox.io/p/sandbox/fabric-vanillajs-sandbox-forked-e5r48u?file=%2FREADME.md
+    about: Vanilla demo.
+  - name: Node Demo
+    url: https://codesandbox.io/p/sandbox/fabric-node-sandbox-forked-xewlhg?file=%2FREADME.md
+    about: Node demo.
+  - name: Security
+    url: ./Security.md
+    about: Please report security vulnerabilities here.

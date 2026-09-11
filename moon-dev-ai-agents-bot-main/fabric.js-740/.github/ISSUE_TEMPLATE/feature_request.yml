@@ -1,0 +1,46 @@
+name: 🔓 Feature Request
+description: File a feature request
+title: '[Feature]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share the feature idea and the problem it solves.
+        For support questions, use Discussions: https://github.com/fabricjs/fabric.js/discussions
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Before submitting
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
+        - label: I searched existing issues, feature requests, and discussions
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem To Solve
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the behavior/API you would like to see
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Optional alternatives or workarounds you considered
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Mockups, examples, or references
+    validations:
+      required: false

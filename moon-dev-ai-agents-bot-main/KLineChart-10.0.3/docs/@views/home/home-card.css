@@ -1,0 +1,41 @@
+.home-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--home-brand-border);
+  background: transparent;
+}
+
+.home-card--overflow-visible {
+  overflow: visible;
+}
+
+.home-card--link {
+  transition: border-color .2s ease, background-color .2s ease;
+}
+
+.home-card--link:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--vp-c-brand-1) 44%, var(--vp-c-divider));
+  background: color-mix(in srgb, var(--vp-c-brand-1) 8%, var(--vp-c-bg));
+}
+
+.home-card h3 {
+  font-size: clamp(18px, 2vw, 20px);
+  line-height: 1.35;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.home-card .summary {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--vp-c-text-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-card--link {
+    transition: none;
+  }
+}

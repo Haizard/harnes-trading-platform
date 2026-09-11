@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KLineChart debug</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <div id="root">
+      <div id="toolbar">
+        <div id="period-switcher" aria-label="周期切换">
+          <button data-period="time-sharing" type="button">分时</button>
+          <button data-period="1m" type="button">1m</button>
+          <button data-period="5m" type="button">5m</button>
+          <button data-period="15m" type="button">15m</button>
+          <button data-period="1h" type="button">1h</button>
+          <button data-period="1d" type="button">1d</button>
+        </div>
+        <output id="fps-meter" aria-label="实时帧率" aria-live="off">FPS: --</output>
+      </div>
+      <div id="chart"></div>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

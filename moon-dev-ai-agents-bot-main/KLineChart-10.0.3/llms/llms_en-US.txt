@@ -1,0 +1,290 @@
+# KLineChart
+
+Highly customizable, professional, lightweight financial charting library for the web, built with HTML5 canvas and TypeScript. This `llms.txt`-style file is intended for large language models (LLMs) and tools that want to answer questions or generate code for KLineChart.
+
+**Current version:** `klinecharts@10.0.0-beta3` (v10 API — incompatible with v9; see §9 Migration).
+
+## 1. Overview
+
+- KLineChart renders high‑performance candlestick (K‑line) and related financial charts in the browser with zero runtime dependencies.
+- It focuses on **lightweight and smooth rendering**, **rich built‑in indicators and overlays**, and **strong extensibility** via plugins and custom drawing.
+- The project is written in **TypeScript**, ships type definitions, and exposes a clear **chart API** and **instance API**.
+- Official docs live locally under `docs/` and online at `https://www.klinecharts.com`.
+- **Required call order (v10):** `init` → `setSymbol` → `setPeriod` → `setDataLoader`.
+- The chart container must have explicit width and height; call `chart.resize()` when the container size changes.
+
+## 2. Guides (docs/en-US/guide/)
+
+- `docs/en-US/guide/introduction.md` – What is KLineChart, feature overview.
+- `docs/en-US/guide/quick-start.md` – Installation and “first chart” tutorial.
+- `docs/en-US/guide/environment.md` – Recommended runtime/build environment.
+- `docs/en-US/guide/data-integration.md` – Required data format (OHLCV + `turnover`) and how data is loaded via `setDataLoader`.
+- `docs/en-US/guide/styles.md` – Style system and customization.
+- `docs/en-US/guide/indicator.md` – Built‑in indicators and how to customize.
+- `docs/en-US/guide/overlay.md` – Overlays and drawing tools.
+- `docs/en-US/guide/figure.md` – Low‑level figure primitives.
+- `docs/en-US/guide/i18n.md` – Internationalization/locales.
+- `docs/en-US/guide/hot-key.md` – Keyboard shortcuts.
+- `docs/en-US/guide/local-development.md` – Local dev for this repo.
+- `docs/en-US/guide/changelog.md` – Change history.
+- `docs/en-US/guide/v9-to-v10.md` – Migration notes (v9 APIs removed).
+- `docs/en-US/guide/faq.md` – FAQ and common issues.
+- `docs/en-US/guide/feedback.md` – Feedback and support channels.
+- `docs/en-US/customize.md` – Higher‑level customization guidance.
+- `docs/en-US/sponsor.md` – Sponsorship info.
+
+## 3. API Docs – Chart Level (docs/en-US/api/chart/)
+
+Chart‑level APIs manage global registration and chart creation:
+
+- `init.md` – `init(dom, options?)` to create a chart instance.
+- `registerIndicator.md` – Register custom technical indicators globally.
+- `registerOverlay.md` – Register custom overlays/drawing tools.
+- `registerFigure.md` – Register low‑level figure types.
+- `registerStyles.md` – Register/override named styles.
+- `registerLocale.md` – Register new locales.
+- `registerXAxis.md` / `registerYAxis.md` – Register custom axes.
+- `registerHotkey.md` – Register custom hot keys globally.
+- `getHotkey.md` / `getSupportedHotkeys.md` – Query registered hot keys.
+- `getSupportedIndicators.md` / `getSupportedOverlays.md` / `getSupportedFigures.md` / `getSupportedLocales.md` – Query registered capabilities.
+- `utils.md` – Shared chart utilities.
+- `version.md` – Library version.
+- `dispose.md` – Destroy charts and free resources.
+
+Register custom extensions **before** calling `init()`.
+
+## 4. API Docs – Instance Level (docs/en-US/api/instance/)
+
+Instance‑level APIs configure a specific chart and drive interactions. All markdown files live in `docs/en-US/api/instance/`. Important groups:
+
+- **Data and symbol**
+  - `setDataLoader.md`, `resetData.md`, `getDataList.md`
+  - `getPeriod.md`, `setPeriod.md`
+  - `getSymbol.md`, `setSymbol.md`
+- **Layout, panes, styles**
+  - `setPaneOptions.md`, `getPaneOptions.md`
+  - Axis configuration is handled separately by `overrideYAxis.md` and `overrideXAxis.md`.
+  - `resize.md`, `getSize.md`
+  - `setStyles.md`, `getStyles.md`
+- **Scroll / zoom / viewport**
+  - `scrollByDistance.md`, `scrollToDataIndex.md`, `scrollToTimestamp.md`, `scrollToRealTime.md`
+  - `zoomAtDataIndex.md`, `zoomAtTimestamp.md`, `zoomAtCoordinate.md`
+  - `setScrollEnabled.md`, `isScrollEnabled.md`
+  - `setZoomEnabled.md`, `isZoomEnabled.md`
+  - `setZoomAnchor.md`, `getZoomAnchor.md`
+  - `setHotkey.md`, `getHotkey.md`
+  - `getVisibleRange.md`, `getBarSpace.md`, `setBarSpace.md`
+  - `getOffsetRightDistance.md`, `setOffsetRightDistance.md`, `setMaxOffsetRightDistance.md`, `setMaxOffsetLeftDistance.md`
+  - `setLeftMinVisibleBarCount.md`, `setRightMinVisibleBarCount.md`
+- **Indicators and overlays**
+  - `createIndicator.md`, `overrideIndicator.md`, `removeIndicator.md`, `getIndicators.md`
+  - `createIndicator(indicator, isStack?)` creates indicators; use `indicator.paneId` and `indicator.yAxisId` for pane/y-axis placement.
+  - Stackable on main chart: `BBI`, `BOLL`, `EMA`, `MA`, `SAR`, `SMA`.
+  - `createOverlay.md`, `overrideOverlay.md`, `removeOverlay.md`, `getOverlays.md`
+- **Locale / timezone / formatting**
+  - `setLocale.md`, `getLocale.md`
+  - `setTimezone.md`, `getTimezone.md`
+  - `setThousandsSeparator.md`, `getThousandsSeparator.md`
+  - `setDecimalFold.md`, `getDecimalFold.md`
+  - `setFormatter.md`, `getFormatter.md`
+- **DOM, coordinates, utilities**
+  - `getDom.md`
+  - `convertToPixel.md`, `convertFromPixel.md`
+  - `getConvertPictureUrl.md`
+- **Actions and events**
+  - `executeAction.md`
+  - `subscribeAction.md`, `unsubscribeAction.md`
+  - Action types: `onCrosshairChange`, `onCandleBarClick`, `onZoom`, `onScroll`, `onVisibleRangeChange`, `onPaneDrag`
+
+## 5. Data Model (from docs/en-US/guide/data-integration.md)
+
+Candlestick data objects should generally look like:
+
+- `timestamp` (number, required) – Millisecond UNIX timestamp per bar.
+- `open`, `close`, `high`, `low` (number, required).
+- `volume` (number, optional).
+- `turnover` (number, optional, required for some indicators such as `EMV` and `AVP`).
+
+Symbol and period:
+
+- `SymbolInfo`: `{ ticker: string, pricePrecision: number, volumePrecision: number }`
+- `Period`: `{ span: number, type: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year' }`
+
+## 6. Data Loading (`setDataLoader`)
+
+Source: `docs/en-US/guide/data-integration.md`, `src/common/DataLoader.ts`
+
+```ts
+chart.setDataLoader({
+  getBars: ({ type, timestamp, symbol, period, callback }) => {
+    // type: 'init' | 'forward' | 'backward'
+    // init: first load, timestamp = null
+    // forward: scrolled to left edge, timestamp = leftmost bar time
+    // backward: scrolled to right edge, timestamp = rightmost bar time
+    callback(bars, { forward: true, backward: false })
+  },
+  subscribeBar: ({ symbol, period, callback }) => {
+    // called after init getBars completes; push ONE KLineData per call
+    // same timestamp → update last bar; larger timestamp → append
+  },
+  unsubscribeBar: ({ symbol, period }) => {
+    // tear down WebSocket/polling on symbol/period change or dispose
+  }
+})
+```
+
+**Rules:**
+- Always call `callback` from `getBars`, even on failure (pass `[]`).
+- Bars sorted ascending by `timestamp`, no duplicates.
+- `subscribeBar` pushes one bar at a time, not an array.
+- `more` controls pagination: `boolean` or `{ forward?, backward? }`.
+- Changing period or symbol via `setPeriod()` / `setSymbol()` reloads data automatically.
+
+## 7. Built‑in Indicators (from docs/en-US/guide/indicator.md)
+
+Representative built‑in indicators include:
+
+- Moving‑average style: `MA`, `EMA`, `SMA`, `BBI`, `BOLL`
+- Momentum/oscillator style: `MACD`, `KDJ`, `RSI`, `TRIX`, `AO`, `MTM`, `WR`
+- Volume/flow style: `VOL`, `OBV`, `VR`, `PVT`, `AVP`, `EMV`
+- Trend/structure style: `DMI`, `SAR`, `CR`, `DMA`, `ROC`, `PSY`, `BRAR`, `CCI`
+
+Custom indicators are registered via `registerIndicator` (chart‑level) and used via `createIndicator` (instance‑level). See `docs/en-US/guide/indicator.md` and examples in `src/extension/indicator/`.
+
+## 8. Representative API Examples (from docs/@views/api/samples)
+
+These examples are adapted from the official samples in `docs/@views/api/samples/` and `docs/en-US/api/*`. Prefer them over inventing new patterns.
+
+### 8.1 Initialize a basic chart and load data
+
+Source: `docs/@views/api/samples/init-basic/index.js`
+
+```ts
+import { init } from 'klinecharts'
+
+const chart = init('init-basic-chart')
+
+chart.setSymbol({ ticker: 'TestSymbol', pricePrecision: 2, volumePrecision: 0 })
+chart.setPeriod({ span: 1, type: 'day' })
+chart.setDataLoader({
+  getBars: ({ callback }) => {
+    fetch('https://klinecharts.com/datas/kline.json')
+      .then(res => res.json())
+      .then(dataList => {
+        callback(dataList)
+      })
+  }
+})
+```
+
+### 8.2 Configure a full data loader with subscribeBar / unsubscribeBar
+
+Source: `docs/@views/api/samples/setDataLoader/index.js`, docs: `docs/en-US/api/instance/setDataLoader.md`
+
+```ts
+import { init } from 'klinecharts'
+
+const chart = init('setDataLoader-chart')
+
+chart.setSymbol({ ticker: 'TestSymbol', pricePrecision: 2, volumePrecision: 0 })
+chart.setPeriod({ span: 1, type: 'day' })
+chart.setDataLoader({
+  getBars: ({ callback }) => {
+    fetch('https://klinecharts.com/datas/kline.json')
+      .then(res => res.json())
+      .then(dataList => {
+        callback(dataList)
+      })
+  },
+  subscribeBar: ({ symbol, period, callback }) => {
+    // hook real-time data subscription here
+  },
+  unsubscribeBar: ({ symbol, period }) => {
+    // clean up subscription here
+  }
+})
+```
+
+### 8.3 Create indicators on the chart
+
+Source: `docs/@views/api/samples/createIndicator-basic/index.js`, docs: `docs/en-US/api/instance/createIndicator.md`
+
+```ts
+import { init } from 'klinecharts'
+
+const chart = init('createIndicator-basic-chart')
+
+// Create MA on the candle pane
+chart.createIndicator({ name: 'MA', paneId: 'candle_pane' })
+
+// Create a volume indicator on a separate pane
+chart.createIndicator('VOL')
+
+chart.setSymbol({ ticker: 'TestSymbol', pricePrecision: 2, volumePrecision: 0 })
+chart.setPeriod({ span: 1, type: 'day' })
+chart.setDataLoader({
+  getBars: ({ callback }) => {
+    fetch('https://klinecharts.com/datas/kline.json')
+      .then(res => res.json())
+      .then(dataList => {
+        callback(dataList)
+      })
+  }
+})
+```
+
+### 8.4 Programmatic scrolling
+
+Source: `docs/@views/api/samples/scrollByDistance/index.js`, docs: `docs/en-US/api/instance/scrollByDistance.md`
+
+```ts
+import { init } from 'klinecharts'
+
+const chart = init('scrollByDistance-chart')
+
+chart.setSymbol({ ticker: 'TestSymbol', pricePrecision: 2, volumePrecision: 0 })
+chart.setPeriod({ span: 1, type: 'day' })
+chart.setDataLoader({
+  getBars: ({ callback }) => {
+    fetch('https://klinecharts.com/datas/kline.json')
+      .then(res => res.json())
+      .then(dataList => {
+        callback(dataList)
+      })
+  }
+})
+
+setTimeout(() => {
+  // Scroll right by 200 logical units over 200 ms
+  chart.scrollByDistance(200, 200)
+}, 5000)
+```
+
+> For more concrete usage patterns, see all files under `docs/@views/api/samples/` and the corresponding markdown docs under `docs/en-US/api/chart/` and `docs/en-US/api/instance/`.
+
+## 9. Migration from v9 to v10
+
+v10 removed legacy data APIs. Do **not** generate code using these removed methods:
+
+| v9 (removed) | v10 replacement |
+|---|---|
+| `applyNewData(data)` | `getBars` with `type: 'init'` |
+| `updateData(bar)` | `subscribeBar` callback |
+| `applyMoreData(data, more)` | `getBars` with `'forward'` / `'backward'` |
+| `setLoadDataCallback` | `setDataLoader` |
+| `setPriceVolumePrecision` | `setSymbol({ pricePrecision, volumePrecision })` |
+| `setCustomApi` | `setFormatter` |
+| `clearData()` | `resetData()` |
+| Indicator `calc` returns array | `calc` returns `Record<timestamp, value>` |
+
+See `docs/en-US/guide/v9-to-v10.md` for style and extension changes.
+
+## 10. Guidance for LLMs and Tools
+
+- Prefer the **official markdown docs under `docs/en-US/`** as the primary source of truth.
+- When generating code, import from the published package (`import { init } from 'klinecharts'`) instead of internal paths.
+- Only use APIs documented in `docs/en-US/api/chart/` and `docs/en-US/api/instance/`; do not invent new methods or options.
+- When in doubt about behavior, follow the concrete patterns in `docs/@views/api/samples/` rather than guessing.
+- Always follow `init → setSymbol → setPeriod → setDataLoader` call order.
+- For data integration details, read `docs/en-US/guide/data-integration.md` before generating loader code.
+- For v9 upgrade questions, consult `docs/en-US/guide/v9-to-v10.md` and never suggest removed APIs.
