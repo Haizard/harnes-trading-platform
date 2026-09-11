@@ -41,6 +41,10 @@ from termcolor import cprint
 
 app = FastAPI(title="Moon Dev Trading Dashboard", version="1.0.0")
 
+# Serve chart JS libs as static files so <script src> works
+from pathlib import Path as _Path
+app.mount("/libs", StaticFiles(directory=str(_Path(__file__).parent / "templates" / "charts")), name="chart_libs")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
