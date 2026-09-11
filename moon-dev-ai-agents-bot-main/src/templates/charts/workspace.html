@@ -782,8 +782,13 @@
                 });
                 ro.observe(el);
             } catch (e) {
-                console.error('KLineChart init error:', e);
+                console.error('[initKLineChart] FAILED:', e.message);
                 document.getElementById('status').textContent = 'KLineChart error: ' + e.message;
+            }
+            if (panel.ui.chart) {
+                console.log('[initKLineChart] OK, container size:', el.clientWidth + 'x' + el.clientHeight);
+            } else {
+                console.error('[initKLineChart] panel.ui.chart is NULL after init!');
             }
         }
 
@@ -1435,16 +1440,23 @@
 
         function applySnapshot(data, resetView) {
             panel.data.snapshot = data;
-            panel.data.levels = data.levels || [];
+            panel.data.levels = data.levels || (data.footprint && data.footprint.levels) || [];
             panel.data.candles = data.candles || [];
-            panel.data.signals = data.signals || [];
+            panel.data.signals = data.signals || (data.footprint && data.footprint.signals) || [];
             panel.data.bars = groupBars(panel.data.levels, panel.data.candles);
 
             if (panel.ui.chart && panel.data.candles.length) {
                 var kData = panel.data.candles.map(function (c) {
                     return { timestamp: new Date(c.bucket_time).getTime(), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: 0 };
                 });
-                try { panel.ui.chart.applyNewData(kData); } catch (e) { console.warn('applyNewData:', e.message); }
+                kData.sort(function(a, b) { return a.timestamp - b.timestamp; });
+                try {
+                    panel.ui.chart.applyNewData(kData);
+                    console.log('[applySnapshot] applyNewData OK, candles=' + kData.length);
+                } catch (e) { console.error('[applySnapshot] applyNewData FAILED:', e.message); }
+                try { panel.ui.chart.resize(); } catch(e) {}
+            } else {
+                console.warn('[applySnapshot] chart=' + !!panel.ui.chart + ' candles=' + panel.data.candles.length);
             }
 
             if (panel.data.snapshot && panel.data.snapshot.footprint) {
@@ -1469,25 +1481,132 @@
             document.getElementById('status').textContent = (data.symbol || panel.symbol) + ' | ' +
                 (data.trade_count || 0) + ' trades | ' + (panel.data.candles.length) + ' candles | realtime';
 
-            setTimeout(function () { renderOverlay(); renderAnalysis(); syncFabricDrawings(); }, 60);
+            setTimeout(function () {
+                resizeOverlayCanvas();
+                renderOverlay();
+                renderAnalysis();
+                syncFabricDrawings();
+            }, 60);
         }
 
+        var wsReconnectAttempts = 0;
+        var wsMaxReconnectDelay = 30;
         function connectRealtime() {
-            if (panel.private.socket) panel.private.socket.close();
+            if (panel.private.socket) {
+                try { panel.private.socket.close(); } catch(e) {}
+                panel.private.socket = null;
+            }
             var sym = document.getElementById('symbol-input').value;
             var iv = Number(document.getElementById('interval').value);
             var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            panel.private.socket = new WebSocket(proto + '//' + window.location.host + '/ws/binance/' + sym + '?interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize + '&candle_limit=100');
-            panel.private.socket.onopen = function () { document.getElementById('ai-status').textContent = 'REALTIME'; };
+            var wsUrl = proto + '//' + window.location.host + '/ws/binance/' + encodeURIComponent(sym) + '?interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize + '&candle_limit=100';
+            console.log('[connectRealtime] Connecting:', wsUrl);
+            try {
+                panel.private.socket = new WebSocket(wsUrl);
+            } catch (e) {
+                console.warn('[connectRealtime] WebSocket creation failed:', e.message);
+                var statusEl = document.getElementById('ai-status');
+                if (statusEl) statusEl.textContent = 'OFFLINE';
+                return;
+            }
+            panel.private.socket.onopen = function () {
+                wsReconnectAttempts = 0;
+                var statusEl = document.getElementById('ai-status');
+                if (statusEl) statusEl.textContent = 'REALTIME';
+            };
             panel.private.socket.onmessage = function (event) {
-                var msg = JSON.parse(event.data);
-                if (msg.type === 'snapshot') applySnapshot(msg.data);
-                if (msg.type === 'error') document.getElementById('status').textContent = 'Error: ' + msg.message;
+                try {
+                    var msg = JSON.parse(event.data);
+                    if (msg.type === 'trade') {
+                        handleRealtimeTrade(msg.data);
+                    } else if (msg.type === 'snapshot') {
+                        applySnapshot(msg.data);
+                    } else if (msg.type === 'heartbeat') {
+                        // silent heartbeat
+                    } else if (msg.type === 'error') {
+                        console.warn('[ws] server error:', msg.message);
+                    }
+                } catch (e) { /* ignore parse errors */ }
             };
             panel.private.socket.onclose = function () {
-                document.getElementById('ai-status').textContent = 'RECONNECTING';
-                setTimeout(function () { connectRealtime(); }, 2000);
+                var statusEl = document.getElementById('ai-status');
+                if (statusEl) statusEl.textContent = 'OFFLINE';
+                wsReconnectAttempts++;
+                var delay = Math.min(wsReconnectAttempts * 2, wsMaxReconnectDelay);
+                if (wsReconnectAttempts <= 10) {
+                    console.log('[connectRealtime] Reconnecting in ' + delay + 's (attempt ' + wsReconnectAttempts + ')');
+                    setTimeout(function () {
+                        var currentSym = document.getElementById('symbol-input').value;
+                        if (currentSym === sym) connectRealtime();
+                    }, delay * 1000);
+                } else {
+                    console.warn('[connectRealtime] Max reconnection attempts reached');
+                }
             };
+            panel.private.socket.onerror = function () {
+                // onclose will handle reconnection
+            };
+        }
+
+        function handleRealtimeTrade(trade) {
+            if (!trade || !panel.data.bars.length) return;
+            var ts = trade.timestamp || Date.now();
+            var bucketMs = Math.floor(ts / 1000 / Number(document.getElementById('interval').value)) * Number(document.getElementById('interval').value) * 1000;
+            var lastBar = panel.data.bars[panel.data.bars.length - 1];
+            if (!lastBar) return;
+            var lastBarMs = lastBar.time;
+            if (bucketMs > lastBarMs) {
+                // New candle started — don't create here, let next load() handle it
+                return;
+            }
+            if (bucketMs === lastBarMs) {
+                lastBar.rows.push({
+                    price: trade.price,
+                    buy_volume: trade.is_buyer_maker ? 0 : trade.quantity,
+                    sell_volume: trade.is_buyer_maker ? trade.quantity : 0,
+                    total_volume: trade.quantity,
+                    delta: trade.is_buyer_maker ? -trade.quantity : trade.quantity
+                });
+                // Update last candle close
+                if (panel.ui.chart && panel.data.candles.length) {
+                    var lastCandle = panel.data.candles[panel.data.candles.length - 1];
+                    lastCandle.close = trade.price;
+                    if (trade.price > lastCandle.high) lastCandle.high = trade.price;
+                    if (trade.price < lastCandle.low) lastCandle.low = trade.price;
+                    var kData = panel.data.candles.map(function (c) {
+                        return { timestamp: new Date(c.bucket_time).getTime(), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: 0 };
+                    });
+                    try { panel.ui.chart.applyNewData(kData); } catch(e) {}
+                }
+            }
+            // Throttled overlay update
+            if (panel._tradeRAF) return;
+            panel._tradeRAF = requestAnimationFrame(function () {
+                panel._tradeRAF = null;
+                renderOverlay();
+            });
+        }
+
+        function fetchWithRetry(url, opts, retries) {
+            opts = opts || {};
+            retries = retries || 3;
+            var attempt = 0;
+            function attemptFetch() {
+                attempt++;
+                return fetch(url, opts).then(function(r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                }).catch(function(err) {
+                    if (attempt < retries) {
+                        console.warn('Fetch attempt ' + attempt + ' failed, retrying...', err.message);
+                        return new Promise(function(resolve) {
+                            setTimeout(resolve, 800 * attempt);
+                        }).then(attemptFetch);
+                    }
+                    throw err;
+                });
+            }
+            return attemptFetch();
         }
 
         function load() {
@@ -1495,24 +1614,25 @@
             var iv = Number(document.getElementById('interval').value);
             document.getElementById('status').textContent = 'Loading ' + sym + '...';
             panel.ui.tickSize = Number(tickSizes[sym] || '0.01');
-            fetch('/api/binance/footprint?symbol=' + sym + '&hours=24&interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize)
-                .then(function (r) { return r.json(); })
+            var apiUrl = '/api/binance/footprint?symbol=' + encodeURIComponent(sym) + '&hours=24&interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize;
+            console.log('[load] Fetching:', apiUrl);
+            fetchWithRetry(apiUrl, { cache: 'no-store' }, 3)
                 .then(function (data) {
+                    console.log('[load] Got data: candles=' + (data.candles||[]).length + ' levels=' + (data.levels||[]).length);
                     applySnapshot(data, true);
                     connectRealtime();
                     loadDom();
                 })
                 .catch(function (err) {
-                    panel.data.bars = [];
-                    document.getElementById('status').textContent = 'Error: ' + err.message;
+                    console.error('[load] All retries failed:', err.message);
+                    document.getElementById('status').textContent = 'Error: ' + err.message + ' (click Refresh to retry)';
                 });
             renderOverlay();
             renderAnalysis();
         }
 
         function loadDom() {
-            fetch('/api/binance/dom?symbol=' + document.getElementById('symbol-input').value)
-                .then(function (r) { return r.json(); })
+            fetchWithRetry('/api/binance/dom?symbol=' + encodeURIComponent(document.getElementById('symbol-input').value), { cache: 'no-store' }, 2)
                 .then(function (data) {
                     domState = data;
                     domState.available = !!data && (!!data.available || (Array.isArray(data.bids) && data.bids.length) || (Array.isArray(data.asks) && data.asks.length));
@@ -1653,10 +1773,10 @@
             var payload = { question: question, session_id: panel.ui.sessionId, model: panel.data.aiModel };
             if (panel.data.snapshot) payload.snapshot = panel.data.snapshot;
             if (imageData) payload.image = imageData;
-            fetch('/api/binance/ai/analyze', {
+            fetchWithRetry('/api/binance/ai/analyze', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
-            }).then(function (r) { return r.json(); })
+            }, 2)
               .then(function (result) {
                 if (Array.isArray(result.contributions) && panel.data.snapshot) {
                     panel.data.snapshot.overlays = (panel.data.snapshot.overlays || []).concat(result.contributions);
@@ -1670,8 +1790,7 @@
         }
 
         function loadSessionHistory() {
-            fetch('/api/binance/ai/sessions/' + panel.ui.sessionId)
-                .then(function (r) { return r.json(); })
+            fetchWithRetry('/api/binance/ai/sessions/' + encodeURIComponent(panel.ui.sessionId), { cache: 'no-store' }, 2)
                 .then(function (data) {
                     var msgs = Array.isArray(data.messages) ? data.messages : [];
                     var c = document.getElementById('ai-chat-log');
@@ -1696,8 +1815,7 @@
         }
 
         function loadAgentControls() {
-            fetch('/api/chart/agents')
-                .then(function (r) { return r.json(); })
+            fetchWithRetry('/api/chart/agents', { cache: 'no-store' }, 2)
                 .then(function (data) {
                     panel.data.agents = data.agents || {};
                     var c = document.getElementById('ai-agents');
@@ -2021,20 +2139,22 @@
 
         function loadSecondaryCellData(cell) {
             var sym = cell.symbol, iv = cell.timeframe;
-            fetch('/api/binance/footprint?symbol=' + sym + '&hours=24&interval_seconds=' + iv + '&tick_size=' + cell.tickSize)
-                .then(function (r) { return r.json(); })
+            fetchWithRetry('/api/binance/footprint?symbol=' + encodeURIComponent(sym) + '&hours=24&interval_seconds=' + iv + '&tick_size=' + cell.tickSize, { cache: 'no-store' }, 3)
                 .then(function (data) {
-                    cell.data.levels = data.levels || [];
+                    cell.data.levels = data.levels || (data.footprint && data.footprint.levels) || [];
                     cell.data.candles = data.candles || [];
                     cell.data.bars = groupBars(cell.data.levels, cell.data.candles);
                     if (cell.chart && cell.data.candles.length) {
                         var kData = cell.data.candles.map(function (c) {
                             return { timestamp: new Date(c.bucket_time).getTime(), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: 0 };
                         });
-                        try { cell.chart.applyNewData(kData); } catch (e) {}
+                        kData.sort(function(a, b) { return a.timestamp - b.timestamp; });
+                        try { cell.chart.applyNewData(kData); cell.chart.resize(); } catch (e) { console.warn('[secondary] applyNewData:', e.message); }
                     }
                     setTimeout(function () { renderCellOverlay(cell); }, 60);
-                }).catch(function () {});
+                }).catch(function (err) {
+                    console.warn('[secondary] load failed for ' + sym + ':', err.message);
+                });
         }
 
         function createSecondaryCell(cellIndex, symbol, timeframe) {
@@ -2443,6 +2563,15 @@
         resizeOverlayCanvas();
         initKLineChart();
         initFabricCanvas();
+        // Force a resize after the chart is created and DOM is laid out
+        setTimeout(function () {
+            if (panel.ui.chart && panel.ui.chart.resize) {
+                try { panel.ui.chart.resize(); } catch(e) {}
+            }
+            resizeOverlayCanvas();
+            resizeFabricCanvas();
+            renderOverlay();
+        }, 100);
         load();
         loadDom();
         loadAgentControls();
