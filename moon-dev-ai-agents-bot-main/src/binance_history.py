@@ -1,8 +1,8 @@
 """Public Binance candle history used to seed chart and agent context."""
 
+import json
+import urllib.request
 from datetime import datetime, timezone
-
-import requests
 
 
 _INTERVAL_NAMES = {
@@ -26,14 +26,15 @@ def fetch_binance_klines(symbol: str, interval_seconds: int, limit: int = 100) -
     interval = _INTERVAL_NAMES.get(interval_seconds)
     if interval is None:
         raise ValueError(f"Unsupported Binance kline interval: {interval_seconds}")
-    response = requests.get(
-        "https://api.binance.com/api/v3/klines",
-        params={"symbol": symbol.upper(), "interval": interval, "limit": max(1, min(int(limit), 1000))},
-        timeout=15,
-    )
-    response.raise_for_status()
+    params = f"symbol={symbol.upper()}&interval={interval}&limit={max(1, min(int(limit), 1000))}"
+    url = f"https://api.binance.com/api/v3/klines?{params}"
+    req = urllib.request.Request(url)
+    # Bypass proxy env vars by using a direct opener with no proxy
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    resp = opener.open(req, timeout=15)
+    raw = json.loads(resp.read())
     candles = []
-    for row in response.json():
+    for row in raw:
         candles.append({
             "bucket_time": datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc),
             "open": float(row[1]),

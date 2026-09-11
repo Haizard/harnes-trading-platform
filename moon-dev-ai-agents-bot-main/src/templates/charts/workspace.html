@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Moon Dev Chart Workspace</title>
+    <title>Moon Dev Footprint Chart</title>
     <script src="/libs/klinecharts.min.js"></script>
     <script>
     if (!window.ResizeObserver) {
@@ -16,12 +16,11 @@
     }
     </script>
     <script>
-    // ChartWorkspace — shared panel/workspace model (inline so both panels can use it)
     (function() {
-        var PANEL_TYPES = ['smc', 'footprint'];
+        var PANEL_TYPES = ['footprint'];
         function createPanel(options) {
             options = options || {};
-            var type = options.type || 'smc';
+            var type = options.type || 'footprint';
             if (PANEL_TYPES.indexOf(type) === -1) throw new Error('Unknown panel type: ' + type);
             return {
                 id: options.id || ('panel-' + Math.random().toString(36).slice(2, 10)),
@@ -69,416 +68,2392 @@
         body {
             background: radial-gradient(circle at 42% -18%, #173042 0, transparent 42%), var(--bg);
             color: var(--text); font: 12px "SF Mono", "Fira Code", Consolas, monospace;
-            min-height: 100vh; display: flex; flex-direction: column;
+            min-height: 100vh; display: flex; flex-direction: column; letter-spacing: .01em;
         }
         header {
-            min-height: 56px; display: flex; align-items: center; gap: 12px;
+            min-height: 56px; display: flex; align-items: center; gap: 10px;
             padding: 10px 18px; border-bottom: 1px solid var(--grid);
-            background: rgba(13,20,30,.95); flex-wrap: wrap;
+            background: rgba(13,20,30,.95); box-shadow: 0 8px 30px rgba(0,0,0,.18); flex-wrap: wrap;
         }
-        h1 { margin: 0; color: var(--cyan); font-size: 14px; letter-spacing: .08em; white-space: nowrap; }
+        h1 { margin: 0 8px 0 0; color: var(--cyan); font-size: 14px; letter-spacing: .08em; white-space: nowrap; }
         h1::before { content: ""; display: inline-block; width: 7px; height: 7px; margin: 0 9px 2px 0;
             border-radius: 50%; background: var(--green); box-shadow: 0 0 12px var(--green); }
-        .workspace-controls { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
         select, button {
             border: 1px solid var(--grid); border-radius: 5px; background: rgba(18,28,40,.9);
             color: var(--text); padding: 6px 10px; font: inherit; cursor: pointer;
-            transition: border-color .18s ease, background .18s ease;
+            transition: border-color .18s ease, background .18s ease, transform .18s ease;
         }
-        select { min-width: 90px; }
+        select { min-width: 80px; }
         button:hover, select:focus { border-color: var(--cyan); background: var(--panel-raised); outline: none; }
         button:active { transform: translateY(1px); }
-        button.primary { background: var(--cyan); color: #061017; border-color: var(--cyan); font-weight: 600; }
-        button.primary:hover { background: #7be0f0; }
-        button.danger { border-color: var(--red); color: var(--red); }
-        button.danger:hover { background: rgba(255,120,135,.15); }
-        .sync-toggle {
-            display: flex; align-items: center; gap: 6px; padding: 4px 10px;
-            border: 1px solid var(--grid); border-radius: 5px; background: rgba(18,28,40,.9);
-            cursor: pointer; user-select: none;
-        }
-        .sync-toggle.active { border-color: var(--cyan); background: rgba(88,217,232,.1); }
-        .sync-toggle input { accent-color: var(--cyan); }
-        .sync-label { font-size: 11px; color: var(--muted); }
-        .workspace-grid {
-            flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
-            grid-auto-rows: minmax(400px, 1fr); gap: 8px; padding: 12px; min-height: 0; overflow: auto;
-        }
-        .chart-panel {
-            background: var(--panel); border: 1px solid var(--grid); border-radius: 6px;
-            display: flex; flex-direction: column; min-height: 0; overflow: hidden; position: relative;
-        }
-        .panel-header {
-            display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-            border-bottom: 1px solid var(--grid); background: rgba(18,28,40,.6); flex-shrink: 0;
-        }
-        .panel-type-badge {
-            font-size: 9px; padding: 2px 6px; border-radius: 3px; letter-spacing: .06em; text-transform: uppercase;
-        }
-        .panel-type-badge.footprint { background: rgba(100,230,160,.15); color: var(--green); border: 1px solid rgba(100,230,160,.3); }
-        .panel-type-badge.smc { background: rgba(88,217,232,.15); color: var(--cyan); border: 1px solid rgba(88,217,232,.3); }
-        .panel-controls { display: flex; gap: 6px; align-items: center; flex: 1; }
-        .panel-controls select { padding: 4px 6px; font-size: 11px; min-width: 0; }
-        .panel-controls select.symbol-select { width: 90px; }
-        .panel-controls select.interval-select { width: 70px; }
-        .panel-actions { display: flex; gap: 4px; }
-        .panel-actions button { padding: 3px 8px; font-size: 11px; }
-        .panel-body { flex: 1; min-height: 0; position: relative; overflow: hidden; }
-        .panel-body.smc-panel { display: flex; flex-direction: column; }
-        .panel-body.smc-panel #chart-container { flex: 1; min-height: 0; }
-        .panel-body.smc-panel .smc-side {
-            width: 200px; border-left: 1px solid var(--grid); background: rgba(9,15,23,.7);
-            overflow-y: auto; padding: 8px; font-size: 10px; flex-shrink: 0;
-        }
-        .panel-status {
-            position: absolute; top: 8px; right: 10px; font-size: 9px; color: var(--muted);
-            letter-spacing: .04em; z-index: 5; pointer-events: none;
-        }
-        .panel-status.loaded { color: var(--green); }
-        @media (max-width: 960px) {
-            .workspace-grid { grid-template-columns: 1fr; grid-auto-rows: minmax(380px, auto); }
-        }
+        .ind-row { display: flex; gap: 4px; align-items: center; }
+        .ind-btn { padding: 4px 8px; font-size: 10px; border: 1px solid var(--grid); border-radius: 4px;
+            background: transparent; color: var(--muted); cursor: pointer; }
+        .ind-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(88,217,232,.08); }
+        .status { margin-left: auto; color: var(--muted); font-size: 11px; }
+        .chart-shell { height: calc(100vh - 56px); min-height: 600px; position: relative; display: flex; flex-direction: column; }
+        .chart-main-row { flex: 1; min-height: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) 280px; }
+        .tool-rail { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 6px;
+            border-right: 1px solid var(--grid); background: rgba(9,15,23,.8); }
+        .tool-button { width: 29px; height: 29px; padding: 0; border: 1px solid transparent; color: var(--muted);
+            background: transparent; font-size: 15px; line-height: 1; }
+        .tool-button:hover, .tool-button.active { color: var(--cyan); border-color: rgba(88,217,232,.3); background: rgba(88,217,232,.08); }
+        .tool-divider { width: 22px; height: 1px; margin: 2px 0; background: var(--grid); }
+        .chart-stage { min-width: 0; min-height: 0; position: relative; height: 100%; overflow: hidden; }
+        .chart-stage::before { content: "FOOTPRINT  ·  KLINECHART"; position: absolute; top: 14px; right: 18px; z-index: 1;
+            color: rgba(127,145,165,.5); font-size: 10px; letter-spacing: .08em; pointer-events: none; }
+        #kline-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10; }
+        .drawing-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 20; pointer-events: none; }
+        .drawing-canvas.active { pointer-events: auto; }
+        .toggle-btn { position: relative; }
+        .toggle-btn.active { color: var(--amber); border-color: rgba(245,201,106,.4);
+            background: rgba(245,201,106,.08); }
+        .tool-rail.collapsed { width: 0; overflow: hidden; padding: 0; border: none; }
+        .chart-main-row.rail-hidden { grid-template-columns: 0 minmax(0, 1fr) 280px; }
+        .rail-show-btn { display: none; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+            z-index: 30; width: 20px; height: 48px; border: 1px solid var(--grid); border-left: none;
+            border-radius: 0 4px 4px 0; background: rgba(13,20,30,.9); color: var(--muted);
+            cursor: pointer; font-size: 12px; }
+        .chart-main-row.rail-hidden .rail-show-btn { display: block; }
+        .quick-wheel { position: absolute; z-index: 100; width: 180px; height: 180px;
+            border-radius: 50%; background: rgba(13,20,30,.96); border: 1px solid var(--grid);
+            box-shadow: 0 12px 48px rgba(0,0,0,.5); display: flex; align-items: center;
+            justify-content: center; flex-wrap: wrap; gap: 4px; padding: 20px; }
+        .quick-wheel.hidden { display: none; }
+        .quick-wheel-item { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--grid);
+            background: rgba(18,28,40,.9); color: var(--muted); display: flex; align-items: center;
+            justify-content: center; cursor: pointer; font-size: 16px; transition: all .15s ease; }
+        .quick-wheel-item:hover { border-color: var(--cyan); color: var(--cyan);
+            background: rgba(88,217,232,.1); transform: scale(1.1); }
+        .ai-panel { min-width: 0; overflow: hidden; border-left: 1px solid var(--grid);
+            background: linear-gradient(180deg, rgba(18,28,40,.98), rgba(9,15,23,.98));
+            display: flex; flex-direction: column; }
+        .sidebar-tabs { display: flex; border-bottom: 1px solid var(--grid); background: rgba(9,15,23,.6); }
+        .sidebar-tab { flex: 1; padding: 9px 4px; text-align: center; font-size: 9px; color: var(--muted);
+            cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: .04em; transition: all .15s; }
+        .sidebar-tab:hover { color: var(--text); }
+        .sidebar-tab.active { color: var(--cyan); border-bottom-color: var(--cyan); background: rgba(88,217,232,.04); }
+        .sidebar-panel { display: none; flex: 1; overflow-y: auto; }
+        .sidebar-panel.show { display: flex; flex-direction: column; }
+
+        /* Professional AI Chatbot UI */
+        .ai-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+            border-bottom: 1px solid var(--grid); background: rgba(13,20,30,.6); }
+        .ai-avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #58d9e8, #4ade80);
+            display: flex; align-items: center; justify-content: center; font-size: 14px; color: #070b12; font-weight: 700; }
+        .ai-header-info { flex: 1; min-width: 0; }
+        .ai-header-title { color: var(--text); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+        .ai-header-status { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; }
+        .ai-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .ai-status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+        .ai-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
+        .ai-body::-webkit-scrollbar { width: 4px; }
+        .ai-body::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 2px; }
+        .ai-body::-webkit-scrollbar-track { background: transparent; }
+
+        .ai-bias-card { display: flex; align-items: center; gap: 10px; padding: 12px; margin-bottom: 10px;
+            border: 1px solid var(--grid); border-radius: 8px; background: linear-gradient(135deg, rgba(88,217,232,.06), rgba(18,28,40,.4)); }
+        .ai-bias-left { flex: 1; }
+        .ai-bias-label { color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+        .ai-bias-value { margin-top: 4px; color: var(--text); font-size: 18px; font-weight: 700; letter-spacing: .02em; }
+        .ai-bias-ring { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center;
+            justify-content: center; font-size: 11px; font-weight: 600; border: 2px solid var(--amber); color: var(--amber); }
+
+        .ai-section { margin-top: 10px; }
+        .ai-section-title { margin-bottom: 6px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
+            display: flex; align-items: center; gap: 4px; }
+        .ai-section-title::before { content: ''; width: 3px; height: 3px; border-radius: 50%; background: var(--cyan); }
+        .ai-summary { color: var(--text); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere;
+            padding: 8px 10px; border-radius: 6px; background: rgba(13,20,30,.4); border: 1px solid rgba(33,48,64,.3); }
+        .ai-list { color: var(--text); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere;
+            margin: 0; padding: 6px 10px 6px 24px; }
+        .ai-list li { margin-bottom: 3px; }
+        .ai-risk { color: var(--red); }
+        .ai-risk li::marker { color: var(--red); }
+
+        .ai-chat-msg { margin: 6px 0; display: flex; flex-direction: column; }
+        .ai-chat-msg .msg-bubble { max-width: 90%; padding: 8px 10px; border-radius: 8px; font-size: 10px;
+            line-height: 1.5; overflow-wrap: anywhere; }
+        .ai-chat-msg.user { align-items: flex-end; }
+        .ai-chat-msg.user .msg-bubble { background: linear-gradient(135deg, rgba(88,217,232,.15), rgba(88,217,232,.08));
+            border: 1px solid rgba(88,217,232,.25); color: var(--text); border-bottom-right-radius: 2px; }
+        .ai-chat-msg.ai { align-items: flex-start; }
+        .ai-chat-msg.ai .msg-bubble { background: rgba(18,28,40,.6); border: 1px solid var(--grid);
+            color: var(--text); border-bottom-left-radius: 2px; }
+        .ai-chat-msg .msg-meta { font-size: 8px; color: var(--muted); margin-top: 2px; padding: 0 4px; }
+        .ai-chat-empty { text-align: center; color: var(--muted); font-size: 10px; padding: 20px 0; }
+
+        .ai-agents { display: grid; gap: 4px; }
+        .ai-agent-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px;
+            padding: 4px 8px; border-radius: 4px; background: rgba(13,20,30,.3); }
+        .ai-agent-row input { accent-color: var(--cyan); }
+
+        .ai-input-bar { padding: 8px 10px; border-top: 1px solid var(--grid); background: rgba(13,20,30,.6); }
+        .ai-input-row { display: flex; gap: 4px; align-items: center; }
+        .ai-input { flex: 1; min-width: 0; border: 1px solid var(--grid); border-radius: 6px;
+            background: #0a1018; color: var(--text); padding: 8px 10px; font: inherit; font-size: 10px; transition: border-color .15s; }
+        .ai-input:focus { border-color: var(--cyan); outline: none; }
+        .ai-send-btn { padding: 7px 12px; color: #061017; background: linear-gradient(135deg, #58d9e8, #4ade80);
+            border: none; border-radius: 6px; font-size: 10px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+        .ai-send-btn:hover { opacity: .85; }
+        .ai-tool-btns { display: flex; gap: 4px; margin-top: 6px; }
+        .ai-tool-btn { padding: 4px 8px; font-size: 9px; border: 1px solid var(--grid); border-radius: 4px;
+            background: transparent; color: var(--muted); cursor: pointer; transition: all .15s; }
+        .ai-tool-btn:hover { color: var(--cyan); border-color: var(--cyan); }
+
+        .ai-model-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+        .ai-model-select { flex: 1; min-width: 0; padding: 5px 8px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 5px; background: #0a1018; color: var(--text); }
+        .ai-model-cost { font-size: 9px; color: var(--amber); white-space: nowrap; }
+        .ai-note { color: var(--muted); font-size: 9px; line-height: 1.4; padding: 4px 0; }
+        .analysis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--grid);
+            background: rgba(9,15,23,.86); min-width: 0; height: 130px; }
+        .analysis-panel { min-width: 0; min-height: 0; position: relative; overflow: hidden;
+            border-right: 1px solid var(--grid); background: linear-gradient(180deg, rgba(18,28,40,.72), rgba(13,20,30,.62)); }
+        .analysis-panel canvas { display: block; width: 100%; height: 100%; }
+        .analysis-label { position: absolute; z-index: 1; top: 9px; left: 14px; color: var(--text);
+            font-size: 10px; font-weight: 600; letter-spacing: .08em; pointer-events: none; }
+        .analysis-label::after { display: block; margin-top: 3px; color: var(--muted); content: "LIVE FLOW";
+            font-size: 8px; font-weight: normal; letter-spacing: .06em; }
+        .analysis-panel:nth-child(2) .analysis-label::after { content: "PRICE DISTRIBUTION"; }
+        .analysis-panel:nth-child(3) .analysis-label::after { content: "ORDER BOOK"; }
+        .legend { position: absolute; top: 12px; left: 18px; display: flex; align-items: center; gap: 9px;
+            color: var(--muted); pointer-events: none; font-size: 10px; z-index: 2; }
+        .legend strong { color: var(--cyan); font-weight: normal; letter-spacing: .08em; }
+        .legend-chip { padding: 3px 6px; border: 1px solid var(--grid); border-radius: 3px;
+            background: rgba(18,28,40,.82); letter-spacing: .04em; }
+        .legend-chip.buy { color: var(--green); }
+        .legend-chip.sell { color: var(--red); }
+        .legend-chip.delta { color: var(--amber); }
+        .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--grid);
+            background: rgba(13,20,30,.96); min-width: 0; height: 52px; }
+        .stat { min-width: 0; padding: 8px 12px; border-right: 1px solid var(--grid); overflow: hidden; }
+        .stat-label { display: block; color: var(--muted); font-size: 9px; letter-spacing: .08em; margin-bottom: 3px; }
+        .stat-value { display: block; max-width: 100%; overflow: hidden; color: var(--text); font-size: 12px;
+            text-overflow: ellipsis; white-space: nowrap; }
+        #session-delta { color: var(--amber); }
+        #poc { color: var(--cyan); }
+        #session-high { color: var(--green); }
+        #session-low { color: var(--red); }
+        @media (max-width: 1000px) { .chart-main-row { grid-template-columns: 42px minmax(0, 1fr); } .ai-panel { display: none; } }
+        @media (max-width: 700px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .analysis-grid { height: 100px; } }
+
+        .sym-search { position: relative; }
+        .sym-search input { width: 100px; padding: 5px 8px; font: inherit; font-size: 11px;
+            border: 1px solid var(--grid); border-radius: 4px; background: #0a1018; color: var(--text); }
+        .sym-search input:focus { border-color: var(--cyan); outline: none; }
+        .sym-dropdown { position: absolute; top: 100%; left: 0; z-index: 50; max-height: 260px; overflow-y: auto;
+            min-width: 200px; border: 1px solid var(--grid); border-radius: 4px; background: var(--panel);
+            box-shadow: 0 8px 24px rgba(0,0,0,.4); display: none; }
+        .sym-dropdown.show { display: block; }
+        .sym-item { padding: 7px 12px; cursor: pointer; font-size: 11px; color: var(--text); }
+        .sym-item:hover, .sym-item.focused { background: rgba(88,217,232,.08); color: var(--cyan); }
+        .sym-item-cat { font-size: 9px; color: var(--muted); margin-left: 8px; }
+
+        .layout-btns { display: flex; gap: 3px; }
+        .layout-btn { width: 26px; height: 26px; padding: 0; border: 1px solid var(--grid);
+            border-radius: 3px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+        .layout-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(88,217,232,.08); }
+
+        .tz-select, .ws-btn, .share-btn, .fp-style-btn, .ind-lib-btn, .journal-btn {
+            padding: 5px 8px; font-size: 10px; border: 1px solid var(--grid); border-radius: 4px;
+            background: transparent; color: var(--muted); cursor: pointer; }
+        .tz-select:hover, .ws-btn:hover, .share-btn:hover, .fp-style-btn:hover,
+        .ind-lib-btn:hover, .journal-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+
+        .chart-grid { display: grid; width: 100%; height: 100%; gap: 1px; background: var(--grid); }
+        .chart-grid.cells-1 { grid-template: 1fr / 1fr; }
+        .chart-grid.cells-2h { grid-template: 1fr / 1fr 1fr; }
+        .chart-grid.cells-2v { grid-template: 1fr 1fr / 1fr; }
+        .chart-grid.cells-4 { grid-template: 1fr 1fr / 1fr 1fr; }
+        .chart-cell { position: relative; background: var(--bg); overflow: hidden; }
+        .chart-cell.active-cell { outline: 1px solid rgba(88,217,232,.3); outline-offset: -1px; }
+
+        .data-window { position: absolute; z-index: 25; top: 8px; right: 8px; min-width: 160px;
+            padding: 8px 10px; border: 1px solid var(--grid); border-radius: 5px;
+            background: rgba(13,20,30,.94); font-size: 10px; color: var(--text); display: none;
+            pointer-events: none; line-height: 1.7; }
+        .data-window.show { display: block; }
+        .dw-row { display: flex; justify-content: space-between; gap: 12px; }
+        .dw-label { color: var(--muted); }
+        .dw-val { font-weight: 500; }
+        .dw-val.up { color: var(--green); }
+        .dw-val.down { color: var(--red); }
+
+        .ctx-menu { position: absolute; z-index: 60; min-width: 180px; border: 1px solid var(--grid);
+            border-radius: 5px; background: rgba(13,20,30,.97); box-shadow: 0 8px 24px rgba(0,0,0,.5);
+            display: none; padding: 4px 0; }
+        .ctx-menu.show { display: block; }
+        .ctx-item { padding: 7px 14px; cursor: pointer; font-size: 11px; color: var(--text); }
+        .ctx-item:hover { background: rgba(88,217,232,.08); color: var(--cyan); }
+        .ctx-sep { height: 1px; margin: 3px 0; background: var(--grid); }
+
+        .capture-overlay { position: absolute; z-index: 55; border: 2px dashed var(--cyan);
+            background: rgba(88,217,232,.06); display: none; pointer-events: none; }
+        .capture-overlay.show { display: block; }
+
+        .sidebar-tabs { display: flex; border-bottom: 1px solid var(--grid); background: rgba(9,15,23,.6); }
+        .sidebar-tab { flex: 1; padding: 8px 4px; text-align: center; font-size: 9px; color: var(--muted);
+            cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: .04em; }
+        .sidebar-tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+        .sidebar-panel { display: none; }
+        .sidebar-panel.show { display: block; }
+
+        .obj-tree { padding: 8px 10px; }
+        .obj-tree-item { display: flex; align-items: center; gap: 6px; padding: 5px 4px; font-size: 10px;
+            color: var(--text); cursor: pointer; border-radius: 3px; }
+        .obj-tree-item:hover { background: rgba(88,217,232,.06); }
+        .obj-tree-eye { width: 16px; text-align: center; color: var(--cyan); }
+        .obj-tree-eye.hidden { color: var(--muted); }
+        .obj-tree-del { margin-left: auto; color: var(--red); font-size: 9px; opacity: .5; }
+        .obj-tree-del:hover { opacity: 1; }
+        .obj-tree-empty { color: var(--muted); font-size: 10px; padding: 12px; text-align: center; }
+
+        .watchlist { padding: 8px 10px; }
+        .wl-header { display: flex; gap: 6px; margin-bottom: 8px; }
+        .wl-input { flex: 1; min-width: 0; padding: 4px 6px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 3px; background: #0a1018; color: var(--text); }
+        .wl-add { padding: 4px 8px; font-size: 10px; border: 1px solid var(--grid); border-radius: 3px;
+            background: transparent; color: var(--cyan); cursor: pointer; }
+        .wl-item { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding: 6px 8px; font-size: 11px; color: var(--text); cursor: pointer; border-radius: 3px; }
+        .wl-item:hover, .wl-item.active { background: rgba(88,217,232,.08); color: var(--cyan); }
+        .wl-price { font-size: 10px; color: var(--muted); }
+
+        .fp-settings { padding: 8px 10px; }
+        .fp-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding: 6px 0; border-bottom: 0.5px solid rgba(33,48,64,.4); font-size: 10px; color: var(--text); }
+        .fp-toggle { width: 32px; height: 16px; border-radius: 8px; background: var(--grid); position: relative;
+            cursor: pointer; transition: background .2s; }
+        .fp-toggle.on { background: var(--cyan); }
+        .fp-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+            border-radius: 50%; background: white; transition: left .2s; }
+        .fp-toggle.on::after { left: 18px; }
+
+        .ind-library { padding: 8px 10px; }
+        .ind-cat { color: var(--muted); font-size: 9px; letter-spacing: .08em; margin: 8px 0 4px; }
+        .ind-lib-item { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 4px; cursor: pointer; }
+        .ind-lib-item:hover { background: rgba(88,217,232,.06); }
+        .ind-lib-name { font-size: 11px; color: var(--text); }
+        .ind-lib-star { color: var(--amber); font-size: 12px; cursor: pointer; }
+        .ind-lib-star.empty { color: var(--muted); }
+        .ind-settings-modal { position: absolute; z-index: 70; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 280px; padding: 16px; border: 1px solid var(--grid); border-radius: 8px;
+            background: var(--panel); display: none; }
+        .ind-settings-modal.show { display: block; }
+        .ind-set-field { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 11px; }
+        .ind-set-field input { width: 50px; padding: 4px; font: inherit; font-size: 11px; border: 1px solid var(--grid);
+            border-radius: 3px; background: #0a1018; color: var(--text); }
+
+        .ai-model-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+        .ai-model-select { flex: 1; min-width: 0; padding: 4px 6px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 3px; background: #0a1018; color: var(--text); }
+        .ai-model-cost { font-size: 9px; color: var(--amber); white-space: nowrap; }
+        .ai-mic-btn.recording { color: var(--red); border-color: var(--red);
+            background: rgba(255,120,135,.08); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+
+        /* Multi-chart cell controls */
+        .cell-bar { display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+            border-bottom: 1px solid var(--grid); background: rgba(9,15,23,.85); height: 26px; z-index: 5; }
+        .cell-symbol { width: 72px; padding: 2px 5px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 3px; background: #0a1018; color: var(--text); }
+        .cell-symbol:focus { border-color: var(--cyan); outline: none; }
+        .cell-tf { padding: 2px 4px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 3px; background: #0a1018; color: var(--text); }
+        .cell-close { margin-left: auto; padding: 1px 6px; font-size: 10px; border: 1px solid var(--grid);
+            border-radius: 3px; background: transparent; color: var(--red); cursor: pointer; }
+        .cell-close:hover { background: rgba(255,120,135,.1); }
+        .cell-chart-area { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+        .cell-chart-area > div[id^="kline-container-"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .cell-chart-area > canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10; }
+        .chart-cell { display: flex; flex-direction: column; }
+
+        .journal-modal { position: fixed; z-index: 80; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 520px; max-height: 80vh; overflow-y: auto; padding: 20px; border: 1px solid var(--grid);
+            border-radius: 8px; background: var(--panel); display: none; }
+        .journal-modal.show { display: block; }
+        .journal-overlay { position: fixed; z-index: 79; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,.5); display: none; }
+        .journal-overlay.show { display: block; }
+        .journ-row { display: flex; gap: 8px; margin: 8px 0; }
+        .journ-input { flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 11px;
+            border: 1px solid var(--grid); border-radius: 4px; background: #0a1018; color: var(--text); }
+        .journ-label { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+        .journ-entry { padding: 10px; border: 1px solid var(--grid); border-radius: 5px; margin: 8px 0; font-size: 10px; }
+        .journ-entry-header { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .journ-pnl.positive { color: var(--green); }
+        .journ-pnl.negative { color: var(--red); }
     </style>
 </head>
 <body>
     <header>
-        <h1>CHART WORKSPACE</h1>
-        <div class="workspace-controls">
-            <select id="global-symbol">
-                <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option>
-            </select>
-            <select id="global-interval">
-                <option value="60">1m</option><option value="300">5m</option><option value="900">15m</option>
-            </select>
-            <label class="sync-toggle active" id="sync-toggle">
-                <input type="checkbox" id="sync-enabled" checked>
-                <span class="sync-label">SYNC symbol+interval</span>
-            </label>
-            <button id="add-panel" class="primary">+ ADD PANEL</button>
+        <h1>FOOTPRINT</h1>
+        <div class="sym-search">
+            <input id="symbol-input" placeholder="Search symbol..." value="BTCUSDT" autocomplete="off" />
+            <div class="sym-dropdown" id="sym-dropdown"></div>
         </div>
+        <select id="interval"><option value="60">1m</option><option value="300">5m</option><option value="900">15m</option></select>
+        <div class="layout-btns">
+            <button class="layout-btn active" data-layout="1" title="Single chart">1</button>
+            <button class="layout-btn" data-layout="2h" title="2 horizontal">2H</button>
+            <button class="layout-btn" data-layout="2v" title="2 vertical">2V</button>
+            <button class="layout-btn" data-layout="4" title="4 grid">4</button>
+        </div>
+        <button class="fp-style-btn" id="chart-style-btn" title="Toggle chart style">Candles</button>
+        <button class="ind-lib-btn" id="ind-lib-btn" title="Indicator library">Indicators</button>
+        <select class="tz-select" id="tz-select" title="Timezone">
+            <option value="UTC">UTC</option>
+            <option value="America/New_York">NY (EST)</option>
+            <option value="Europe/London">London (GMT)</option>
+            <option value="Asia/Tokyo">Tokyo (JST)</option>
+            <option value="Asia/Singapore">Singapore (SGT)</option>
+            <option value="local">Local time</option>
+        </select>
+        <div class="ind-row">
+            <button class="ind-btn active" data-ind="MA">EMA</button>
+            <button class="ind-btn active" data-ind="BOLL">BOLL</button>
+            <button class="ind-btn" data-ind="MACD">MACD</button>
+            <button class="ind-btn" data-ind="RSI">RSI</button>
+            <button class="ind-btn active" data-ind="VOL">VOL</button>
+        </div>
+        <button class="ws-btn" id="ws-save-btn" title="Save workspace">Save</button>
+        <button class="ws-btn" id="ws-load-btn" title="Load workspace">Load</button>
+        <button class="share-btn" id="share-btn" title="Share chart">Share</button>
+        <button class="journal-btn" id="journal-btn" title="Trading journal">Journal</button>
+        <button id="refresh">Refresh</button>
+        <span class="status" id="status">Loading footprint data...</span>
     </header>
-    <main class="workspace-grid" id="workspace-grid"></main>
+    <main class="chart-shell">
+        <div class="chart-main-row">
+            <aside class="tool-rail" id="tool-rail" aria-label="Drawing tools">
+                <button class="tool-button active" data-tool="crosshair" title="Crosshair">&#x002B;</button>
+                <button class="tool-button" data-tool="trend_line" title="Trend line">&#x2215;</button>
+                <button class="tool-button" data-tool="horizontal_level" title="Horizontal level">&#x2500;</button>
+                <button class="tool-button" data-tool="ray" title="Ray">&#x2197;</button>
+                <button class="tool-button" data-tool="fibonacci" title="Fibonacci">&#x03D5;</button>
+                <span class="tool-divider"></span>
+                <button class="tool-button" data-tool="measure" title="Measure">&#x2301;</button>
+                <button class="tool-button" data-tool="text" title="Text box">T</button>
+                <button class="tool-button" data-tool="arrow" title="Arrow">&#x2192;</button>
+                <button class="tool-button" data-tool="rectangle" title="Rectangle">&#x25AD;</button>
+                <button class="tool-button" data-tool="circle" title="Circle">&#x25CB;</button>
+                <button class="tool-button" data-tool="brush" title="Freehand brush">&#x270E;</button>
+                <span class="tool-divider"></span>
+                <button class="tool-button toggle-btn" id="stay-in-mode-btn" title="Stay in drawing mode (toggle)">&#x21BB;</button>
+                <button class="tool-button toggle-btn" id="magnet-btn" title="Magnet snap (toggle)">&#x25CE;</button>
+                <button class="tool-button" data-tool="clear" title="Clear all drawings">&#x2715;</button>
+                <span class="tool-divider"></span>
+                <button class="tool-button toggle-btn" id="hide-rail-btn" title="Hide tool sidebar">&#x25C0;</button>
+            </aside>
+            <section class="chart-stage">
+                <button class="rail-show-btn" id="show-rail-btn" title="Show tools">&#x25B6;</button>
+                <div class="chart-grid cells-1" id="chart-grid">
+                    <div class="chart-cell active-cell" data-cell="0">
+                        <div id="kline-container"></div>
+                        <canvas id="overlay-canvas"></canvas>
+                        <canvas id="drawing-canvas" class="drawing-canvas"></canvas>
+                        <div class="data-window" id="data-window"></div>
+                    </div>
+                </div>
+                <div class="capture-overlay" id="capture-overlay"></div>
+                <div id="quick-wheel" class="quick-wheel hidden"></div>
+                <div class="ctx-menu" id="ctx-menu"></div>
+                <div class="ind-settings-modal" id="ind-settings-modal"></div>
+                <div class="legend">
+                    <strong>FOOTPRINT</strong>
+                    <span class="legend-chip buy">BUY</span>
+                    <span class="legend-chip sell">SELL</span>
+                    <span class="legend-chip delta">DELTA</span>
+                </div>
+            </section>
+            <aside class="ai-panel" aria-label="Chart panels">
+                <div class="sidebar-tabs">
+                    <div class="sidebar-tab active" data-tab="ai">AI</div>
+                    <div class="sidebar-tab" data-tab="tree">Objects</div>
+                    <div class="sidebar-tab" data-tab="watch">Watch</div>
+                    <div class="sidebar-tab" data-tab="fp">Footprint</div>
+                </div>
+                <div class="sidebar-panel show" id="panel-ai">
+                    <div class="ai-header">
+                        <div class="ai-avatar">AI</div>
+                        <div class="ai-header-info">
+                            <div class="ai-header-title">Market Desk</div>
+                            <div class="ai-header-status">
+                                <span class="ai-status-dot" id="ai-status-dot"></span>
+                                <span id="ai-status">CONNECTING</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="ai-body" id="ai-body">
+                        <div class="ai-model-row">
+                            <select class="ai-model-select" id="ai-model-select">
+                                <option value="claude-opus-4">Claude Opus 4</option>
+                                <option value="claude-sonnet-4">Claude Sonnet 4</option>
+                                <option value="claude-haiku" selected>Claude Haiku</option>
+                                <option value="bedrock-nova-pro">Bedrock Nova Pro</option>
+                                <option value="bedrock-nova-lite">Bedrock Nova Lite</option>
+                            </select>
+                            <span class="ai-model-cost" id="ai-model-cost">~$0.005/req</span>
+                        </div>
+                        <div class="ai-bias-card">
+                            <div class="ai-bias-left">
+                                <div class="ai-bias-label">Current Bias</div>
+                                <div class="ai-bias-value" id="ai-bias">WAITING</div>
+                            </div>
+                            <div class="ai-bias-ring" id="ai-bias-ring">--</div>
+                        </div>
+                        <div class="ai-section">
+                            <div class="ai-section-title">Chart Read</div>
+                            <div class="ai-summary" id="ai-summary">Ask the analyst to interpret the current footprint, delta, profile, and DOM.</div>
+                        </div>
+                        <div class="ai-section">
+                            <div class="ai-section-title">Evidence</div>
+                            <ul class="ai-list" id="ai-evidence"><li>Footprint context will appear here.</li></ul>
+                        </div>
+                        <div class="ai-section">
+                            <div class="ai-section-title">Risk Notes</div>
+                            <ul class="ai-list ai-risk" id="ai-risk"><li>Analysis is informational until reviewed.</li></ul>
+                        </div>
+                        <div class="ai-section">
+                            <div class="ai-section-title">Chat History</div>
+                            <div id="ai-chat-log" class="ai-chat-empty">No conversation yet. Ask a question below.</div>
+                        </div>
+                        <div class="ai-section">
+                            <div class="ai-section-title">Chart Agents</div>
+                            <div class="ai-agents" id="ai-agents"><span class="ai-note">Loading agent controls...</span></div>
+                        </div>
+                    </div>
+                    <div class="ai-input-bar">
+                        <form id="ai-question" class="ai-input-row">
+                            <input class="ai-input" id="ai-input" autocomplete="off" placeholder="Ask about this chart..." />
+                            <button class="ai-send-btn" type="submit">Send</button>
+                        </form>
+                        <div class="ai-tool-btns">
+                            <button class="ai-tool-btn" type="button" id="ai-mic-btn" title="Voice input">Voice</button>
+                            <button class="ai-tool-btn" type="button" id="ai-screenshot-btn" title="Send chart to AI">Screenshot</button>
+                            <button class="ai-tool-btn" type="button" id="capture-star-btn" title="Capture area">Capture</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-panel" id="panel-tree">
+                    <div class="ai-header"><div class="ai-header-title">Object Tree</div></div>
+                    <div class="obj-tree" id="obj-tree-content" style="overflow-y:auto;flex:1;">
+                        <div class="obj-tree-empty">No drawings on chart. Use drawing tools to add objects.</div>
+                    </div>
+                </div>
+                <div class="sidebar-panel" id="panel-watch">
+                    <div class="ai-header"><div class="ai-header-title">Watch List</div></div>
+                    <div class="watchlist" id="watchlist-content" style="overflow-y:auto;flex:1;">
+                        <div class="wl-header">
+                            <input class="wl-input" id="wl-input" placeholder="Add symbol..." />
+                            <button class="wl-add" id="wl-add-btn">+</button>
+                        </div>
+                        <div id="wl-items"></div>
+                    </div>
+                </div>
+                <div class="sidebar-panel" id="panel-fp">
+                    <div class="ai-header"><div class="ai-header-title">Footprint Settings</div></div>
+                    <div class="fp-settings" id="fp-settings" style="overflow-y:auto;flex:1;">
+                        <div class="fp-setting-row"><span>Buy/sell cells</span><div class="fp-toggle on" data-fp="cells"></div></div>
+                        <div class="fp-setting-row"><span>Delta labels</span><div class="fp-toggle on" data-fp="delta"></div></div>
+                        <div class="fp-setting-row"><span>Volume profile (in-chart)</span><div class="fp-toggle" data-fp="vp"></div></div>
+                        <div class="fp-setting-row"><span>Bid/ask ladder</span><div class="fp-toggle" data-fp="ladder"></div></div>
+                        <div class="fp-setting-row"><span>Imbalances highlight</span><div class="fp-toggle on" data-fp="imbalance"></div></div>
+                        <div class="fp-setting-row"><span>Unfinished auctions</span><div class="fp-toggle" data-fp="auctions"></div></div>
+                        <div class="fp-setting-row"><span>Avg trade size</span><div class="fp-toggle" data-fp="avgsize"></div></div>
+                        <div class="fp-setting-row"><span>Absolute delta</span><div class="fp-toggle" data-fp="absdelta"></div></div>
+                        <div class="fp-setting-row"><span>POC line</span><div class="fp-toggle on" data-fp="poc"></div></div>
+                        <div class="fp-setting-row"><span>VA high/low</span><div class="fp-toggle" data-fp="va"></div></div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+        <div class="analysis-grid">
+            <div class="analysis-panel"><span class="analysis-label">CUMULATIVE DELTA</span><canvas id="delta-canvas"></canvas></div>
+            <div class="analysis-panel"><span class="analysis-label">VOLUME PROFILE</span><canvas id="profile-canvas"></canvas></div>
+            <div class="analysis-panel"><span class="analysis-label">DOM</span><canvas id="dom-canvas"></canvas></div>
+        </div>
+        <div class="stats">
+            <div class="stat"><span class="stat-label">VOLUME</span><span class="stat-value" id="session-volume">-</span></div>
+            <div class="stat"><span class="stat-label">DELTA</span><span class="stat-value" id="session-delta">-</span></div>
+            <div class="stat"><span class="stat-label">POC</span><span class="stat-value" id="poc">-</span></div>
+            <div class="stat"><span class="stat-label">HIGH</span><span class="stat-value" id="session-high">-</span></div>
+            <div class="stat"><span class="stat-label">LOW</span><span class="stat-value" id="session-low">-</span></div>
+            <div class="stat"><span class="stat-label">CANDLES</span><span class="stat-value" id="candle-count">-</span></div>
+        </div>
+    </main>
+    <div class="journal-overlay" id="journal-overlay"></div>
+    <div class="journal-modal" id="journal-modal">
+        <div class="ai-panel-header" style="justify-content: space-between;">
+            <span class="ai-panel-title">TRADING JOURNAL</span>
+            <button class="ws-btn" id="journal-close">Close</button>
+        </div>
+        <div class="journ-row">
+            <div style="flex:1"><div class="journ-label">Symbol</div><input class="journ-input" id="journ-symbol" placeholder="BTCUSDT" /></div>
+            <div style="flex:1"><div class="journ-label">Side</div>
+                <select class="journ-input" id="journ-side"><option>LONG</option><option>SHORT</option></select></div>
+        </div>
+        <div class="journ-row">
+            <div style="flex:1"><div class="journ-label">Entry price</div><input class="journ-input" id="journ-entry" placeholder="0.00" type="number" /></div>
+            <div style="flex:1"><div class="journ-label">Exit price</div><input class="journ-input" id="journ-exit" placeholder="0.00" type="number" /></div>
+            <div style="flex:1"><div class="journ-label">Size</div><input class="journ-input" id="journ-size" placeholder="0.00" type="number" /></div>
+        </div>
+        <div class="journ-row">
+            <div style="flex:1"><div class="journ-label">Notes</div><input class="journ-input" id="journ-notes" placeholder="Trade rationale..." /></div>
+            <button class="ws-btn" id="journ-add" style="align-self: flex-end;">Add entry</button>
+        </div>
+        <div id="journ-entries"></div>
+    </div>
+    <script src="/libs/fabric.min.js"></script>
+    <script>
+    (function () {
+        'use strict';
+        var CW = window.ChartWorkspace;
+        if (!CW) throw new Error('ChartWorkspace not available');
 
-<script>
-// KLineChart v9.6.0 (Apache 2.0) — pinned local copy
-// fabric.js v7.4.0 (MIT) — pinned local copy
-</script>
-<script src="/libs/klinecharts.min.js"></script>
-<script src="/libs/fabric.min.js"></script>
-<script>
-(function() {
-    'use strict';
-    var CW = window.ChartWorkspace;
-    if (!CW) throw new Error('ChartWorkspace not available');
+        var workspace = CW.createWorkspace();
+        var domState = { bids: [], asks: [], available: false };
+        var sessionId = localStorage.getItem('moondev-chart-session') || (crypto.randomUUID ? crypto.randomUUID() : 'sess-' + Date.now());
+        localStorage.setItem('moondev-chart-session', sessionId);
 
-    var workspace = CW.createWorkspace();
-    var syncEnabled = document.getElementById('sync-enabled').checked;
-    var syncToggle = document.getElementById('sync-toggle');
-    syncToggle.classList.add('active');
-    document.getElementById('sync-enabled').addEventListener('change', function() {
-        syncEnabled = this.checked;
-        syncToggle.classList.toggle('active', syncEnabled);
-    });
+        var tickSizes = { BTCUSDT: '0.10', ETHUSDT: '0.01', SOLUSDT: '0.001', BNBUSDT: '0.01' };
 
-    var panelCounter = 0;
-
-    // Minimal SMC panel renderer using KLineChart v9
-    function makeSmcPanel(symbol, timeframe) {
-        panelCounter++;
         var panel = CW.createPanel({
-            type: 'smc',
-            symbol: symbol || 'BTCUSDT',
-            timeframe: timeframe || '60',
-            data: { smcData: null, obLines: [], fvgAreas: [], liqLines: [], rbiHighlightedStrategy: null },
-            ui: { chartContainer: null, chart: null, overlayCanvas: null, overlayCtx: null, fabricCanvas: null },
-            hooks: { load: smcLoad }
+            type: 'footprint',
+            symbol: document.getElementById('symbol-input').value,
+            timeframe: document.getElementById('interval').value,
+            ui: {
+                klineContainer: document.getElementById('kline-container'),
+                overlayCanvas: document.getElementById('overlay-canvas'),
+                chart: null,
+                deltaCanvas: document.getElementById('delta-canvas'),
+                deltaCtx: document.getElementById('delta-canvas').getContext('2d'),
+                profileCanvas: document.getElementById('profile-canvas'),
+                profileCtx: document.getElementById('profile-canvas').getContext('2d'),
+                domCanvas: document.getElementById('dom-canvas'),
+                domCtx: document.getElementById('dom-canvas').getContext('2d'),
+                sessionId: sessionId
+            },
+            data: {
+                snapshot: null,
+                bars: [],
+                signals: [],
+                levels: [],
+                candles: [],
+                tickSize: 0.1,
+                drawingTool: null,
+                pendingAnchor: null,
+                drawings: [],
+                agents: {},
+                activeIndicators: { MA: true, BOLL: true, VOL: true, MACD: false, RSI: false },
+                stayInMode: false,
+                magnetSnap: false,
+                magnetStrength: 'weak',
+                fabricActive: false,
+                fabricDrawing: null,
+                fabricObjects: new Map(),
+                quickWheelTools: ['trend_line', 'horizontal_level', 'fibonacci', 'measure', 'text', 'arrow', 'rectangle', 'circle'],
+                quickWheelOpen: false,
+                chartStyle: 'footprint',
+                timezone: 'UTC',
+                layoutMode: '1',
+                activeCell: 0,
+                watchlist: [],
+                journal: [],
+                fpSettings: { cells: true, delta: true, vp: false, ladder: false, imbalance: true, auctions: false, avgsize: false, absdelta: false, poc: true, va: false },
+                aiModel: 'claude-sonnet-4',
+                indicatorFavorites: [],
+                indicatorSettings: { MA: { periods: [9, 21, 50, 200] }, BOLL: { period: 20, stdDev: 2 }, RSI: { period: 14 }, MACD: { fast: 12, slow: 26, signal: 9 } }
+            },
+            private: { socket: null }
         });
-
-        var grid = document.getElementById('workspace-grid');
-        var panelDiv = document.createElement('div');
-        panelDiv.id = 'panel-' + panel.id;
-        panelDiv.className = 'chart-panel';
-
-        var header = document.createElement('div');
-        header.className = 'panel-header';
-        header.innerHTML =
-            '<span class="panel-type-badge smc">SMC</span>' +
-            '<div class="panel-controls">' +
-                '<select class="symbol-select" data-panel="' + panel.id + '">' +
-                    '<option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option>' +
-                '</select>' +
-                '<select class="interval-select" data-panel="' + panel.id + '">' +
-                    '<option value="60">1m</option><option value="300">5m</option><option value="900">15m</option>' +
-                '</select>' +
-            '</div>' +
-            '<div class="panel-actions">' +
-                '<button class="danger remove-panel" data-panel="' + panel.id + '" title="Close panel">✕</button>' +
-            '</div>';
-        panelDiv.appendChild(header);
-        var body = document.createElement('div');
-        body.className = 'panel-body smc-panel';
-        body.id = 'panel-body-' + panel.id;
-        panelDiv.appendChild(body);
-
-        var chartContainer = document.createElement('div');
-        chartContainer.id = 'smc-chart-container-' + panel.id;
-        chartContainer.style.cssText = 'flex:1;min-height:0;position:relative;';
-        body.appendChild(chartContainer);
-
-        var overlayCanvas = document.createElement('canvas');
-        overlayCanvas.id = 'smc-overlay-' + panel.id;
-        overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;';
-        body.appendChild(overlayCanvas);
-
-        var sidePanel = document.createElement('div');
-        sidePanel.className = 'smc-side';
-        sidePanel.id = 'smc-side-' + panel.id;
-        sidePanel.innerHTML = '<div style="color:var(--cyan);font-size:10px;font-weight:600;margin-bottom:6px;letter-spacing:.06em;">SMC ANALYSIS</div>' +
-            '<div id="smc-content-' + panel.id + '" style="color:var(--muted);font-size:9px;">Loading...</div>';
-        body.appendChild(sidePanel);
-
-        var status = document.createElement('div');
-        status.className = 'panel-status';
-        status.id = 'smc-status-' + panel.id;
-        status.textContent = 'Initializing KLineChart...';
-        panelDiv.appendChild(status);
-
-        grid.appendChild(panelDiv);
-
-        panel.ui.chartContainer = chartContainer;
-        panel.ui.overlayCanvas = overlayCanvas;
-
-        var symSelect = header.querySelector('.symbol-select');
-        symSelect.value = panel.symbol;
-        symSelect.addEventListener('change', function() {
-            panel.symbol = symSelect.value;
-            if (syncEnabled) {
-                workspace.allPanels().forEach(function(other) {
-                    if (other.id !== panel.id) {
-                        var os = document.querySelector('.symbol-select[data-panel="' + other.id + '"]');
-                        if (os) os.value = panel.symbol;
-                        other.symbol = panel.symbol;
-                        if (other.hooks && other.hooks.load) other.hooks.load(other);
-                    }
-                });
-            }
-            if (panel.hooks && panel.hooks.load) panel.hooks.load(panel);
-        });
-
-        var intSelect = header.querySelector('.interval-select');
-        intSelect.value = panel.timeframe;
-        intSelect.addEventListener('change', function() {
-            panel.timeframe = intSelect.value;
-            if (syncEnabled) {
-                workspace.allPanels().forEach(function(other) {
-                    if (other.id !== panel.id) {
-                        var oi = document.querySelector('.interval-select[data-panel="' + other.id + '"]');
-                        if (oi) oi.value = panel.timeframe;
-                        other.timeframe = panel.timeframe;
-                        if (other.hooks && other.hooks.load) other.hooks.load(other);
-                    }
-                });
-            }
-            if (panel.hooks && panel.hooks.load) panel.hooks.load(panel);
-        });
-
-        header.querySelector('.remove-panel').addEventListener('click', function() {
-            grid.removeChild(panelDiv);
-            workspace.removePanel(panel.id);
-        });
-
         workspace.addPanel(panel);
 
-        // Initialize KLineChart
-        try {
-            var containerEl = chartContainer;
-            var cw = containerEl.clientWidth || 400;
-            var ch = containerEl.clientHeight || 300;
-            panel.ui.chart = klinecharts.init(containerEl, {
-                styles: {
-                    candle: {
-                        upColor: '#4ade80', downColor: '#f87171', noChangeColor: '#666',
-                        upBorderColor: '#4ade80', downBorderColor: '#f87171'
-                    },
-                    grid: { verticalColor: '#1e1e2e', horizontalColor: '#1e1e2e' },
-                    xAxis: { textColor: '#666', textSize: 10 },
-                    yAxis: { textColor: '#666', textSize: 10, formatter: function(v) { return Number(v).toFixed(2); } }
+        function escapeHtml(v) {
+            return String(v).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]; });
+        }
+        function formatVolume(v) {
+            var n = Number(v); if (!Number.isFinite(n) || n === 0) return '0';
+            var a = Math.abs(n); var d = a >= 1000 ? 0 : a >= 1 ? 2 : a >= 0.1 ? 3 : a >= 0.001 ? 5 : 8; return n.toFixed(d);
+        }
+        function formatCompact(v) {
+            var n = Number(v); if (!Number.isFinite(n) || n === 0) return '0';
+            var a = Math.abs(n);
+            if (a >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+            if (a >= 1000) return (n / 1000).toFixed(1) + 'K';
+            if (a >= 1) return n.toFixed(2); return n.toFixed(3);
+        }
+
+        function groupBars(levels, candles) {
+            var groups = new Map();
+            levels.forEach(function (l) {
+                var ms = new Date(l.bucket_time).getTime();
+                if (!groups.has(ms)) groups.set(ms, []);
+                groups.get(ms).push(l);
+            });
+            var candleMap = new Map((candles || []).map(function (c) { return [new Date(c.bucket_time).getTime(), c]; }));
+            (candles || []).forEach(function (c) {
+                var ms = new Date(c.bucket_time).getTime();
+                if (!groups.has(ms)) groups.set(ms, []);
+            });
+            var entries = [];
+            groups.forEach(function (rows, ms) {
+                var candle = candleMap.get(ms);
+                var prices = rows.map(function (r) { return Number(r.price); });
+                var fb = candle ? candle.close : 0;
+                entries.push({
+                    time: ms,
+                    rows: rows,
+                    open: candle ? Number(candle.open) : (prices[0] != null ? prices[0] : fb),
+                    close: candle ? Number(candle.close) : (prices.length ? prices[prices.length - 1] : fb),
+                    high: candle ? Number(candle.high) : Math.max.apply(null, prices.concat([fb])),
+                    low: candle ? Number(candle.low) : Math.min.apply(null, prices.concat([fb]))
+                });
+            });
+            entries.sort(function (a, b) { return a.time - b.time; });
+            return entries;
+        }
+
+        function initKLineChart() {
+            var el = panel.ui.klineContainer;
+            try {
+                panel.ui.chart = klinecharts.init(el, {
+                    styles: {
+                        candle: {
+                            type: 'candle_solid',
+                            upColor: '#4ade80', downColor: '#f87171', noChangeColor: '#666',
+                            upBorderColor: '#4ade80', downBorderColor: '#f87171',
+                            upWickColor: '#4ade80', downWickColor: '#f87171'
+                        },
+                        grid: { show: true, verticalColor: '#1a2330', horizontalColor: '#1a2330' },
+                        xAxis: { showAxisLine: true, axisLineColor: '#213040', tickColor: '#213040',
+                                 textColor: '#7f91a5', textSize: 10 },
+                        yAxis: { showAxisLine: true, axisLineColor: '#213040', tickColor: '#213040',
+                                textColor: '#7f91a5', textSize: 10,
+                                formatter: function(v) { return Number(v).toFixed(2); } },
+                        crosshair: {
+                            horizontal: { lineColor: '#58d9e8', lineStyle: 'dashed' },
+                            vertical: { lineColor: '#58d9e8', lineStyle: 'dashed' }
+                        },
+                        background: { type: 'solid', color: 'transparent' }
+                    }
+                });
+
+                applyIndicators();
+
+                var crosshairRAF = null;
+                panel.ui.chart.subscribeAction('onScroll', function () {
+                    if (crosshairRAF) return;
+                    crosshairRAF = requestAnimationFrame(function () {
+                        crosshairRAF = null;
+                        renderOverlay(); syncFabricDrawings();
+                    });
+                });
+                panel.ui.chart.subscribeAction('onZoom', function () {
+                    if (crosshairRAF) return;
+                    crosshairRAF = requestAnimationFrame(function () {
+                        crosshairRAF = null;
+                        renderOverlay(); syncFabricDrawings();
+                    });
+                });
+                panel.ui.chart.subscribeAction('onCrosshairChange', function () {
+                    if (crosshairRAF) return;
+                    crosshairRAF = requestAnimationFrame(function () {
+                        crosshairRAF = null;
+                        renderOverlay();
+                    });
+                });
+
+                var ro = new ResizeObserver(function () {
+                    var w = el.clientWidth, h = el.clientHeight;
+                    if (w < 10 || h < 10) return;
+                    if (panel.ui.chart && panel.ui.chart.resize) panel.ui.chart.resize();
+                    resizeOverlayCanvas();
+                    resizeFabricCanvas();
+                    renderOverlay();
+                    syncFabricDrawings();
+                });
+                ro.observe(el);
+            } catch (e) {
+                console.error('KLineChart init error:', e);
+                document.getElementById('status').textContent = 'KLineChart error: ' + e.message;
+            }
+        }
+
+        function applyIndicators() {
+            if (!panel.ui.chart) return;
+            var active = panel.data.activeIndicators;
+            try {
+                if (active.MA) panel.ui.chart.createIndicator({ name: 'MA', calcParams: [9, 21, 50] }, true, { id: 'candle_pane' });
+                if (active.BOLL) panel.ui.chart.createIndicator({ name: 'BOLL', calcParams: [20, 2] }, true, { id: 'candle_pane' });
+                if (active.VOL) panel.ui.chart.createIndicator('VOL', false, { id: 'pane_vol' });
+                if (active.MACD) panel.ui.chart.createIndicator('MACD', false, { id: 'pane_macd' });
+                if (active.RSI) panel.ui.chart.createIndicator({ name: 'RSI', calcParams: [14] }, false, { id: 'pane_rsi' });
+            } catch (e) { console.warn('Indicator create:', e.message); }
+        }
+
+        function resizeOverlayCanvas() {
+            var c = panel.ui.overlayCanvas;
+            var el = panel.ui.klineContainer;
+            var w = el.clientWidth || 800, h = el.clientHeight || 400;
+            var ratio = window.devicePixelRatio || 1;
+            c.width = Math.floor(w * ratio);
+            c.height = Math.floor(h * ratio);
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+            var ctx = c.getContext('2d');
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        }
+
+        var fabricCanvas = null;
+        var drawingStart = null;
+        var activeFabricObj = null;
+        var brushPath = null;
+
+        function initFabricCanvas() {
+            var el = document.getElementById('drawing-canvas');
+            if (!el || typeof fabric === 'undefined') return;
+            try {
+                fabricCanvas = new fabric.Canvas(el, {
+                    selection: false,
+                    backgroundColor: 'transparent',
+                    preserveObjectStacking: true,
+                    enableRetinaScaling: true,
+                    skipTargetFind: true
+                });
+                resizeFabricCanvas();
+                panel.ui.fabricCanvas = fabricCanvas;
+
+                fabricCanvas.on('mouse:down', function (opt) {
+                    var activeObj = fabricCanvas.getActiveObject();
+                    if (activeObj && activeObj.isEditing) {
+                        activeObj.exitEditing();
+                        if (!panel.data.stayInMode) deactivateTool();
+                        return;
+                    }
+                    var p = opt.pointer || fabricCanvas.getPointer(opt.e);
+                    if (panel.data.drawingTool === 'brush') {
+                        brushPath = [p];
+                        return;
+                    }
+                    drawingStart = p;
+                    var snapped = applyMagnetSnap(p);
+                    startDrawingObject(panel.data.drawingTool, snapped, opt.e);
+                });
+
+                fabricCanvas.on('mouse:move', function (opt) {
+                    var p = opt.pointer || fabricCanvas.getPointer(opt.e);
+                    if (!drawingStart && !brushPath) return;
+                    var snapped = applyMagnetSnap(p);
+                    updateDrawingObject(snapped);
+                });
+
+                fabricCanvas.on('mouse:up', function (opt) {
+                    if (brushPath) {
+                        finishBrush();
+                        return;
+                    }
+                    if (!drawingStart || !activeFabricObj) return;
+                    var p = opt.pointer || fabricCanvas.getPointer(opt.e);
+                    var snapped = applyMagnetSnap(p);
+                    finishDrawingObject(snapped);
+                });
+            } catch (e) {
+                console.error('Fabric init error:', e);
+            }
+        }
+
+        function resizeFabricCanvas() {
+            if (!fabricCanvas) return;
+            var el = panel.ui.klineContainer;
+            var w = el.clientWidth || 800, h = el.clientHeight || 400;
+            fabricCanvas.setWidth(w);
+            fabricCanvas.setHeight(h);
+            if (fabricCanvas.lowerCanvasEl) {
+                fabricCanvas.lowerCanvasEl.style.width = w + 'px';
+                fabricCanvas.lowerCanvasEl.style.height = h + 'px';
+            }
+            if (fabricCanvas.upperCanvasEl) {
+                fabricCanvas.upperCanvasEl.style.width = w + 'px';
+                fabricCanvas.upperCanvasEl.style.height = h + 'px';
+            }
+        }
+
+        function setFabricActive(active) {
+            panel.data.fabricActive = active;
+            var c = document.getElementById('drawing-canvas');
+            if (!c) return;
+            c.classList.toggle('active', active);
+            if (fabricCanvas && fabricCanvas.upperCanvasEl) {
+                fabricCanvas.upperCanvasEl.style.pointerEvents = active ? 'auto' : 'none';
+            }
+        }
+
+        function applyMagnetSnap(p) {
+            if (!panel.data.magnetSnap || !panel.data.drawingTool) return p;
+            var coords = getChartCoords();
+            if (!coords) return p;
+            var idx = Math.max(0, Math.min(coords.kList.length - 1,
+                Math.round((p.x - coords.candleSpace / 2) / coords.candleSpace)));
+            var kCandle = coords.kList[idx];
+            if (!kCandle) return p;
+            var candidates = [Number(kCandle.high), Number(kCandle.low), Number(kCandle.open), Number(kCandle.close)];
+            var threshold = panel.data.magnetStrength === 'strong' ? 12 : 24;
+            var bestY = p.y, bestDist = threshold;
+            candidates.forEach(function (price) {
+                var y = coords.p2y(price);
+                var dist = Math.abs(y - p.y);
+                if (dist < bestDist) { bestDist = dist; bestY = y; }
+            });
+            return { x: p.x, y: bestY };
+        }
+
+        function pixelToTimePrice(x, y) {
+            var coords = getChartCoords();
+            if (!coords) return null;
+            var idx = Math.max(0, Math.min(coords.kList.length - 1,
+                Math.round((x - coords.candleSpace / 2) / coords.candleSpace)));
+            var kCandle = coords.kList[idx];
+            if (!kCandle) return null;
+            var price = coords.maxP - (y - coords.topPad) / coords.plotH * coords.priceRange;
+            return { time: kCandle.timestamp, price: price, idx: idx };
+        }
+
+        function startDrawingObject(tool, p, e) {
+            if (!tool || !fabricCanvas) return;
+            var color = '#f5c96a';
+            if (tool === 'trend_line' || tool === 'ray' || tool === 'horizontal_level' || tool === 'measure' || tool === 'arrow') {
+                var points = [p.x, p.y, p.x, p.y];
+                var opts = { stroke: color, strokeWidth: 2, selectable: false, evented: false, strokeUniform: true };
+                if (tool === 'horizontal_level') opts.strokeDashArray = [5, 4];
+                activeFabricObj = new fabric.Line(points, opts);
+                if (tool === 'arrow') activeFabricObj.set({ strokeLineCap: 'round' });
+                fabricCanvas.add(activeFabricObj);
+            } else if (tool === 'fibonacci') {
+                activeFabricObj = new fabric.Group([], { selectable: false, evented: false });
+                fabricCanvas.add(activeFabricObj);
+            } else if (tool === 'rectangle') {
+                activeFabricObj = new fabric.Rect({
+                    left: p.x, top: p.y, width: 1, height: 1,
+                    fill: 'rgba(88,217,232,.1)', stroke: color, strokeWidth: 1.5,
+                    selectable: false, evented: false, strokeUniform: true
+                });
+                fabricCanvas.add(activeFabricObj);
+            } else if (tool === 'circle') {
+                activeFabricObj = new fabric.Circle({
+                    left: p.x, top: p.y, radius: 1,
+                    fill: 'rgba(88,217,232,.08)', stroke: color, strokeWidth: 1.5,
+                    selectable: false, evented: false, strokeUniform: true, originX: 'left', originY: 'top'
+                });
+                fabricCanvas.add(activeFabricObj);
+            } else if (tool === 'text') {
+                var textObj = new fabric.IText('Text', {
+                    left: p.x, top: p.y, fill: color, fontSize: 13, fontFamily: 'Consolas, monospace',
+                    editable: true, selectable: true, evented: true, editingBorderColor: '#58d9e8',
+                    cursorColor: '#58d9e8', selectionColor: 'rgba(88,217,232,.3)'
+                });
+                fabricCanvas.add(textObj);
+                activeFabricObj = textObj;
+                fabricCanvas.setActiveObject(textObj);
+                textObj.enterEditing();
+                textObj.selectAll();
+                var anchor = pixelToTimePrice(p.x, p.y);
+                if (anchor) {
+                    var drawing = { id: 'dwg-' + Date.now(), type: 'text', symbol: panel.symbol,
+                        timeframe: panel.timeframe, anchors: [anchor], style: { color: color } };
+                    panel.data.drawings.push(drawing);
+                    panel.data.fabricObjects.set(drawing.id, textObj);
+                    textObj.__drawingId = drawing.id;
+                    saveDrawing(drawing);
+                }
+                activeFabricObj = null;
+                drawingStart = null;
+                return;
+            }
+        }
+
+        function updateDrawingObject(p) {
+            if (!activeFabricObj || !drawingStart) return;
+            var tool = panel.data.drawingTool;
+            if (tool === 'trend_line' || tool === 'ray' || tool === 'measure' || tool === 'arrow') {
+                activeFabricObj.set({ x2: p.x, y2: p.y });
+                activeFabricObj.setCoords();
+            } else if (tool === 'horizontal_level') {
+                activeFabricObj.set({ y2: drawingStart.y, y1: drawingStart.y, x2: p.x });
+                activeFabricObj.setCoords();
+            } else if (tool === 'rectangle') {
+                var w = Math.abs(p.x - drawingStart.x);
+                var h = Math.abs(p.y - drawingStart.y);
+                activeFabricObj.set({
+                    left: Math.min(drawingStart.x, p.x), top: Math.min(drawingStart.y, p.y),
+                    width: w, height: h
+                });
+                activeFabricObj.setCoords();
+            } else if (tool === 'circle') {
+                var dx = p.x - drawingStart.x, dy = p.y - drawingStart.y;
+                activeFabricObj.set({
+                    left: Math.min(drawingStart.x, p.x), top: Math.min(drawingStart.y, p.y),
+                    radius: Math.max(1, Math.sqrt(dx * dx + dy * dy) / 2)
+                });
+                activeFabricObj.setCoords();
+            } else if (tool === 'fibonacci') {
+                while (activeFabricObj.size() > 0) activeFabricObj.remove(activeFabricObj.item(0));
+                var sp = drawingStart, ep = p;
+                var levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+                var color = '#f5c96a';
+                levels.forEach(function (l) {
+                    var y = sp.y + (ep.y - sp.y) * l;
+                    var line = new fabric.Line([sp.x, y, ep.x, y], {
+                        stroke: l === 0.5 ? '#58d9e8' : color, strokeWidth: 1,
+                        selectable: false, evented: false, strokeDashArray: l === 0.5 ? [] : [3, 3]
+                    });
+                    var label = new fabric.Text('Fib ' + l.toFixed(3), {
+                        left: ep.x + 4, top: y - 6, fill: '#7f91a5', fontSize: 9,
+                        fontFamily: 'Consolas, monospace', selectable: false, evented: false
+                    });
+                    activeFabricObj.add(line);
+                    activeFabricObj.add(label);
+                });
+                activeFabricObj.setCoords();
+            }
+            fabricCanvas.renderAll();
+        }
+
+        function finishDrawingObject(p) {
+            var tool = panel.data.drawingTool;
+            if (!activeFabricObj || !tool) return;
+
+            if (tool === 'arrow') {
+                var dx = p.x - drawingStart.x, dy = p.y - drawingStart.y;
+                var angle = Math.atan2(dy, dx);
+                var headLen = 10;
+                var head1 = new fabric.Line([p.x, p.y, p.x - headLen * Math.cos(angle - 0.5), p.y - headLen * Math.sin(angle - 0.5)], {
+                    stroke: '#f5c96a', strokeWidth: 2, selectable: false, evented: false
+                });
+                var head2 = new fabric.Line([p.x, p.y, p.x - headLen * Math.cos(angle + 0.5), p.y - headLen * Math.sin(angle + 0.5)], {
+                    stroke: '#f5c96a', strokeWidth: 2, selectable: false, evented: false
+                });
+                fabricCanvas.add(head1, head2);
+                activeFabricObj.__arrowHeads = [head1, head2];
+            }
+
+            var a1 = pixelToTimePrice(drawingStart.x, drawingStart.y);
+            var a2 = pixelToTimePrice(p.x, p.y);
+            if (!a1) { drawingStart = null; activeFabricObj = null; return; }
+            var anchors = a2 ? [a1, a2] : [a1];
+            if (tool === 'horizontal_level') anchors = [a1];
+
+            var drawing = {
+                id: 'dwg-' + Date.now(), type: tool, symbol: panel.symbol,
+                timeframe: panel.timeframe, anchors: anchors, style: { color: '#f5c96a' }
+            };
+            panel.data.drawings.push(drawing);
+            panel.data.fabricObjects.set(drawing.id, activeFabricObj);
+            activeFabricObj.__drawingId = drawing.id;
+            saveDrawing(drawing);
+
+            if (tool === 'measure' && a2) {
+                var diff = a2.price - a1.price;
+                var pct = a1.price !== 0 ? (diff / a1.price * 100).toFixed(2) : '0';
+                var label = new fabric.Text((diff >= 0 ? '+' : '') + diff.toFixed(2) + ' (' + pct + '%)', {
+                    left: p.x + 6, top: p.y - 8, fill: '#58d9e8', fontSize: 10,
+                    fontFamily: 'Consolas, monospace', selectable: false, evented: false
+                });
+                fabricCanvas.add(label);
+                activeFabricObj.__measureLabel = label;
+            }
+
+            drawingStart = null;
+            activeFabricObj = null;
+            if (!panel.data.stayInMode) deactivateTool();
+        }
+
+        function finishBrush() {
+            if (!brushPath || brushPath.length < 2) { brushPath = null; return; }
+            var pathStr = 'M ' + brushPath[0].x + ' ' + brushPath[0].y;
+            for (var i = 1; i < brushPath.length; i++) {
+                pathStr += ' L ' + brushPath[i].x + ' ' + brushPath[i].y;
+            }
+            var brushObj = new fabric.Path(pathStr, {
+                stroke: '#f5c96a', strokeWidth: 2, fill: null, strokeLineCap: 'round',
+                strokeLineJoin: 'round', selectable: false, evented: false, strokeUniform: true
+            });
+            fabricCanvas.add(brushObj);
+            var first = pixelToTimePrice(brushPath[0].x, brushPath[0].y);
+            var last = pixelToTimePrice(brushPath[brushPath.length - 1].x, brushPath[brushPath.length - 1].y);
+            if (first && last) {
+                var drawing = {
+                    id: 'dwg-' + Date.now(), type: 'brush', symbol: panel.symbol,
+                    timeframe: panel.timeframe, anchors: [first, last], style: { color: '#f5c96a' }
+                };
+                panel.data.drawings.push(drawing);
+                panel.data.fabricObjects.set(drawing.id, brushObj);
+                brushObj.__drawingId = drawing.id;
+                saveDrawing(drawing);
+            }
+            brushPath = null;
+            if (!panel.data.stayInMode) deactivateTool();
+        }
+
+        function syncFabricDrawings() {
+            if (!fabricCanvas || !panel.data.drawings.length) return;
+            var coords = getChartCoords();
+            if (!coords) return;
+            panel.data.drawings.forEach(function (drawing) {
+                var obj = panel.data.fabricObjects.get(drawing.id);
+                if (!obj) return;
+                var anchors = drawing.anchors || [];
+                if (!anchors.length) return;
+                var firstIdx = null, secondIdx = null;
+                for (var i = 0; i < coords.kList.length; i++) {
+                    if (coords.kList[i].timestamp === anchors[0].time) { firstIdx = i; break; }
+                }
+                if (anchors[1]) {
+                    for (var j = 0; j < coords.kList.length; j++) {
+                        if (coords.kList[j].timestamp === anchors[1].time) { secondIdx = j; break; }
+                    }
+                }
+                if (firstIdx == null) return;
+                var x1 = coords.idx2x(firstIdx), y1 = coords.p2y(Number(anchors[0].price));
+                var x2 = secondIdx != null ? coords.idx2x(secondIdx) : x1;
+                var y2 = secondIdx != null ? coords.p2y(Number(anchors[1].price)) : y1;
+
+                var type = drawing.type;
+                if (type === 'trend_line' || type === 'measure' || type === 'arrow' || type === 'ray') {
+                    obj.set({ x1: x1, y1: y1, x2: type === 'horizontal_level' ? x2 : x2, y2: y2 });
+                    obj.setCoords();
+                    if (obj.__arrowHeads) {
+                        obj.__arrowHeads.forEach(function (h) { fabricCanvas.remove(h); });
+                        obj.__arrowHeads = null;
+                    }
+                    if (type === 'arrow' && secondIdx != null) {
+                        var angle = Math.atan2(y2 - y1, x2 - x1);
+                        var headLen = 10;
+                        var h1 = new fabric.Line([x2, y2, x2 - headLen * Math.cos(angle - 0.5), y2 - headLen * Math.sin(angle - 0.5)], {
+                            stroke: '#f5c96a', strokeWidth: 2, selectable: false, evented: false
+                        });
+                        var h2 = new fabric.Line([x2, y2, x2 - headLen * Math.cos(angle + 0.5), y2 - headLen * Math.sin(angle + 0.5)], {
+                            stroke: '#f5c96a', strokeWidth: 2, selectable: false, evented: false
+                        });
+                        fabricCanvas.add(h1, h2);
+                        obj.__arrowHeads = [h1, h2];
+                    }
+                    if (obj.__measureLabel) { fabricCanvas.remove(obj.__measureLabel); obj.__measureLabel = null; }
+                    if (type === 'measure' && secondIdx != null) {
+                        var diff = Number(anchors[1].price) - Number(anchors[0].price);
+                        var pct = anchors[0].price !== 0 ? (diff / anchors[0].price * 100).toFixed(2) : '0';
+                        var lbl = new fabric.Text((diff >= 0 ? '+' : '') + diff.toFixed(2) + ' (' + pct + '%)', {
+                            left: x2 + 6, top: y2 - 8, fill: '#58d9e8', fontSize: 10,
+                            fontFamily: 'Consolas, monospace', selectable: false, evented: false
+                        });
+                        fabricCanvas.add(lbl);
+                        obj.__measureLabel = lbl;
+                    }
+                } else if (type === 'horizontal_level') {
+                    obj.set({ x1: 0, y1: y1, x2: coords.plotW, y2: y1 });
+                    obj.setCoords();
+                } else if (type === 'rectangle') {
+                    obj.set({ left: Math.min(x1, x2), top: Math.min(y1, y2),
+                              width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) });
+                    obj.setCoords();
+                } else if (type === 'circle') {
+                    var rdx = x2 - x1, rdy = y2 - y1;
+                    obj.set({ left: Math.min(x1, x2), top: Math.min(y1, y2),
+                              radius: Math.max(1, Math.sqrt(rdx * rdx + rdy * rdy) / 2) });
+                    obj.setCoords();
+                } else if (type === 'fibonacci') {
+                    while (obj.size() > 0) obj.remove(obj.item(0));
+                    var flevels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+                    flevels.forEach(function (l) {
+                        var fy = y1 + (y2 - y1) * l;
+                        obj.add(new fabric.Line([x1, fy, x2, fy], {
+                            stroke: l === 0.5 ? '#58d9e8' : '#f5c96a', strokeWidth: 1,
+                            selectable: false, evented: false, strokeDashArray: l === 0.5 ? [] : [3, 3]
+                        }));
+                        obj.add(new fabric.Text('Fib ' + l.toFixed(3), {
+                            left: x2 + 4, top: fy - 6, fill: '#7f91a5', fontSize: 9,
+                            fontFamily: 'Consolas, monospace', selectable: false, evented: false
+                        }));
+                    });
+                    obj.setCoords();
+                } else if (type === 'text') {
+                    obj.set({ left: x1, top: y1 });
+                    obj.setCoords();
                 }
             });
-            status.textContent = 'KLineChart ready';
-            status.classList.add('loaded');
-
-            // Overlay canvas for SMC markers
-            var oc = document.getElementById('smc-overlay-' + panel.id);
-            oc.width = cw;
-            oc.height = ch;
-
-            // Resize handler
-            var ro = new ResizeObserver(function() {
-                var w = containerEl.clientWidth || 400;
-                var h = containerEl.clientHeight || 300;
-                if (panel.ui.chart && panel.ui.chart.setSize) panel.ui.chart.setSize(w, h);
-                oc.width = w;
-                oc.height = h;
-            });
-            ro.observe(containerEl);
-
-            // Load data
-            smcLoad(panel);
-        } catch(e) {
-            status.textContent = 'KLineChart error: ' + e.message;
-            console.error('KLineChart init error:', e);
+            fabricCanvas.renderAll();
         }
-    }
 
-    function smcLoad(panel) {
-        var sym = panel.symbol;
-        var statusEl = document.getElementById('smc-status-' + panel.id);
-        if (statusEl) statusEl.textContent = 'Loading ' + sym + '...';
-        fetch('/api/smc?symbol=' + sym + '&timeframe=' + panel.timeframe)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                panel.data.smcData = data;
-                if (statusEl) statusEl.textContent = 'Loaded: ' + sym;
-                if (statusEl) statusEl.classList.add('loaded');
-                renderSmcChart(panel);
-                analyzeSmc(panel);
-            })
-            .catch(function(err) {
-                if (statusEl) statusEl.textContent = 'Error: ' + err.message;
+        function clearFabricDrawings() {
+            if (!fabricCanvas) return;
+            var objs = fabricCanvas.getObjects();
+            while (objs.length > 0) fabricCanvas.remove(objs[0]);
+            panel.data.fabricObjects.clear();
+            panel.data.drawings = [];
+            fabricCanvas.renderAll();
+        }
+
+        function deactivateTool() {
+            panel.data.drawingTool = null;
+            panel.data.pendingAnchor = null;
+            setFabricActive(false);
+            document.querySelectorAll('.tool-button').forEach(function (b) { b.classList.remove('active'); });
+            document.querySelector('.tool-button[data-tool="crosshair"]').classList.add('active');
+        }
+
+        function activateTool(tool) {
+            panel.data.drawingTool = tool;
+            panel.data.pendingAnchor = null;
+            setFabricActive(true);
+            document.querySelectorAll('.tool-button').forEach(function (b) { b.classList.remove('active'); });
+            var btn = document.querySelector('.tool-button[data-tool="' + tool + '"]');
+            if (btn) btn.classList.add('active');
+        }
+
+        function toggleQuickWheel(x, y) {
+            var wheel = document.getElementById('quick-wheel');
+            if (panel.data.quickWheelOpen) {
+                wheel.classList.add('hidden');
+                panel.data.quickWheelOpen = false;
+                return;
+            }
+            var el = panel.ui.klineContainer;
+            var rect = el.getBoundingClientRect();
+            var cx = x - rect.left, cy = y - rect.top;
+            wheel.style.left = Math.max(0, Math.min(el.clientWidth - 180, cx - 90)) + 'px';
+            wheel.style.top = Math.max(0, Math.min(el.clientHeight - 180, cy - 90)) + 'px';
+            wheel.innerHTML = '';
+            panel.data.quickWheelTools.forEach(function (tool) {
+                var item = document.createElement('div');
+                item.className = 'quick-wheel-item';
+                var icons = { trend_line: '/', horizontal_level: '\u2500', fibonacci: '\u03D5',
+                    measure: '\u2301', text: 'T', arrow: '\u2192', rectangle: '\u25AD', circle: '\u25CB' };
+                item.textContent = icons[tool] || '?';
+                item.title = tool;
+                item.onclick = function () {
+                    activateTool(tool);
+                    wheel.classList.add('hidden');
+                    panel.data.quickWheelOpen = false;
+                };
+                wheel.appendChild(item);
             });
-    }
+            wheel.classList.remove('hidden');
+            panel.data.quickWheelOpen = true;
+        }
 
-    function renderSmcChart(panel) {
-        if (!panel.ui.chart || !panel.data.smcData || !panel.data.smcData.candles) return;
-        var candles = panel.data.smcData.candles;
-        var data = candles.map(function(c) {
+        function getChartCoords() {
+            if (!panel.ui.chart) return null;
+            var chart = panel.ui.chart;
+            var visibleRange = null;
+            try { visibleRange = chart.getVisibleRange(); } catch (e) { return null; }
+            if (!visibleRange || !visibleRange.kLineDataList || !visibleRange.kLineDataList.length) return null;
+
+            var el = panel.ui.klineContainer;
+            var totalW = el.clientWidth || 800;
+            var totalH = el.clientHeight || 400;
+
+            var yAxisW = 62;
+            var xAxisH = 22;
+            var topPad = 8;
+            var plotW = Math.max(1, totalW - yAxisW);
+            var plotH = Math.max(1, totalH - xAxisH - topPad);
+
+            var kList = visibleRange.kLineDataList;
+            var visibleCount = kList.length;
+            var candleSpace = plotW / visibleCount;
+            var candleW = Math.max(2, candleSpace * 0.7);
+
+            var minP = Infinity, maxP = -Infinity;
+            kList.forEach(function (k) {
+                if (k.low != null && k.low < minP) minP = k.low;
+                if (k.high != null && k.high > maxP) maxP = k.high;
+            });
+            if (minP === Infinity) minP = 0;
+            if (maxP === -Infinity) maxP = 1;
+            var padP = (maxP - minP) * 0.08 || 0.01;
+            minP -= padP; maxP += padP;
+            var priceRange = maxP - minP || 1;
+
+            function t2x(ts) {
+                for (var i = 0; i < kList.length; i++) {
+                    if (kList[i].timestamp === ts) return i * candleSpace + candleSpace / 2;
+                }
+                return null;
+            }
+            function idx2x(i) { return i * candleSpace + candleSpace / 2; }
+            function p2y(p) { return topPad + (maxP - p) / priceRange * plotH; }
+
             return {
-                timestamp: c.time,
-                open: c.open, high: c.high, low: c.low, close: c.close,
-                volume: c.volume || 0
+                kList: kList, visibleCount: visibleCount,
+                plotW: plotW, plotH: plotH, topPad: topPad,
+                candleSpace: candleSpace, candleW: candleW,
+                minP: minP, maxP: maxP, priceRange: priceRange,
+                t2x: t2x, idx2x: idx2x, p2y: p2y
             };
-        });
-        try {
-            panel.ui.chart.setData(data);
-        } catch(e) {
-            console.warn('KLineChart setData error:', e.message);
         }
-        drawSmcOverlays(panel);
-    }
 
-    function drawSmcOverlays(panel) {
-        var canvas = panel.ui.overlayCanvas;
-        if (!canvas) return;
-        var ctx = canvas.getContext('2d');
-        var w = canvas.width, h = canvas.height;
-        ctx.clearRect(0, 0, w, h);
-        if (!panel.data.smcData || !panel.data.smcData.candles || !panel.data.smcData.candles.length) return;
-        var candles = panel.data.smcData.candles;
-        if (!candles.length) return;
-        var firstT = candles[0].time, lastT = candles[candles.length-1].time;
-        var minP = Infinity, maxP = -Infinity;
-        candles.forEach(function(c) { if (c.low < minP) minP = c.low; if (c.high > maxP) maxP = c.high; });
-        if (minP === Infinity) minP = 0;
-        if (maxP === -Infinity) maxP = 1;
-        var pr = maxP - minP || 1, tr = lastT - firstT || 1;
-        var cw = canvas.clientWidth || 400, ch = canvas.clientHeight || 300;
-        var pad = { top: 8, right: 8, bottom: 16, left: 8 };
-        var pw = cw - pad.left - pad.right, ph = ch - pad.top - pad.bottom;
-        function t2x(t) { return pad.left + (t - firstT) / tr * pw; }
-        function p2y(p) { return pad.top + (maxP - p) / pr * ph; }
+        function renderOverlay() {
+            var c = panel.ui.overlayCanvas;
+            if (!c) return;
+            var ctx = c.getContext('2d');
+            var el = panel.ui.klineContainer;
+            var w = el.clientWidth || 800, h = el.clientHeight || 400;
+            ctx.clearRect(0, 0, w, h);
 
-        (panel.data.obLines || []).forEach(function(ob) {
-            var x = t2x(ob.time), y1 = p2y(ob.high), y2 = p2y(ob.low);
-            var col = ob.type === 'demand' ? '#4ade80' : '#f87171';
-            ctx.fillStyle = ob.type === 'demand' ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)';
-            ctx.strokeStyle = col; ctx.lineWidth = 1;
-            ctx.fillRect(x - 4, y2, 8, y1 - y2);
-            ctx.strokeRect(x - 4, y2, 8, y1 - y2);
-            ctx.fillStyle = col; ctx.font = '9px monospace';
-            ctx.fillText(ob.type.toUpperCase(), x + 10, y2 + 10);
-        });
-        (panel.data.fvgAreas || []).forEach(function(fvg) {
-            var x = t2x(fvg.time), y1 = p2y(fvg.high), y2 = p2y(fvg.low);
-            ctx.fillStyle = 'rgba(251,191,36,0.15)';
-            ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1;
-            ctx.fillRect(x - 2, y2, 4, y1 - y2);
-            ctx.strokeRect(x - 2, y2, 4, y1 - y2);
-        });
-        (panel.data.liqLines || []).forEach(function(liq) {
-            var y = p2y(liq.price);
-            if (y < pad.top || y > pad.top + ph) return;
-            ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
-            ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + pw, y); ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = '#a78bfa'; ctx.font = '8px monospace';
-            ctx.fillText('$' + liq.price.toFixed(2), pad.left + pw - 45, y - 2);
-        });
-    }
+            var coords = getChartCoords();
+            if (!coords) return;
 
-    function analyzeSmc(panel) {
-        var content = document.getElementById('smc-content-' + panel.id);
-        if (!content) return;
-        var candles = panel.data.smcData && panel.data.smcData.candles;
-        if (!candles || !candles.length) { content.innerHTML = '<span style="color:var(--muted)">No data</span>'; return; }
-        var obLines = [], fvgAreas = [], liqLines = [];
-        for (var i = 2; i < candles.length - 2; i++) {
-            if (candles[i].close > candles[i-1].close && candles[i-1].close > candles[i-2].close)
-                obLines.push({ time: candles[i].time, high: candles[i].high, low: candles[i].low, type: 'demand' });
-            if (candles[i].close < candles[i-1].close && candles[i-1].close < candles[i-2].close)
-                obLines.push({ time: candles[i].time, high: candles[i].high, low: candles[i].low, type: 'supply' });
-            if (candles[i].high < candles[i+1].low)
-                fvgAreas.push({ time: candles[i+1].time, high: candles[i+1].low, low: candles[i].high });
-            if (candles[i].low > candles[i+1].high)
-                fvgAreas.push({ time: candles[i+1].time, high: candles[i+1].high, low: candles[i].low });
-        }
-        var rh = [], rl = [];
-        for (var j = candles.length - 20; j < candles.length; j++) {
-            if (j > 0 && j < candles.length - 1) {
-                if (candles[j].high > candles[j-1].high && candles[j].high > candles[j+1].high)
-                    rh.push({ price: candles[j].high, time: candles[j].time });
-                if (candles[j].low < candles[j-1].low && candles[j].low < candles[j+1].low)
-                    rl.push({ price: candles[j].low, time: candles[j].time });
+            if (panel.data.chartStyle === 'footprint') {
+                renderFootprintCells(ctx, coords);
             }
+            renderSignalOverlays(ctx, coords);
         }
-        panel.data.obLines = obLines;
-        panel.data.fvgAreas = fvgAreas;
-        panel.data.liqLines = rh.concat(rl);
-        var bos = 0;
-        for (var k = 3; k < candles.length - 3; k++) {
-            if (candles[k].close > candles[k-1].close && candles[k-1].close > candles[k-2].close && candles[k-2].close > candles[k-3].close) bos++;
-            if (candles[k].close < candles[k-1].close && candles[k-1].close < candles[k-2].close && candles[k-2].close < candles[k-3].close) bos++;
+
+        function renderFootprintCells(ctx, coords) {
+            var bars = panel.data.bars;
+            if (!bars.length) return;
+            var displayStep = panel.ui.tickSize || 0.1;
+            displayStep = displayStep * Math.max(1, Math.ceil(coords.priceRange / (displayStep * 12)));
+
+            var minBin = Math.floor(coords.minP / displayStep);
+            var maxBin = Math.ceil(coords.maxP / displayStep);
+            var binCount = Math.max(1, maxBin - minBin + 1);
+
+            var cellW = Math.max(6, Math.min(28, coords.candleW * 0.36));
+            var cellH = Math.max(8, Math.min(20, coords.plotH / binCount));
+            var showValues = coords.candleSpace >= 44;
+
+            coords.kList.forEach(function (kCandle, idx) {
+                var bar = null;
+                for (var bi = 0; bi < bars.length; bi++) {
+                    if (bars[bi].time === kCandle.timestamp) { bar = bars[bi]; break; }
+                }
+                if (!bar || !bar.rows.length) return;
+
+                var x = coords.idx2x(idx);
+                var grouped = new Map();
+                bar.rows.forEach(function (row) {
+                    var binIdx = Math.floor(Number(row.price) / displayStep) - minBin;
+                    if (binIdx < 0) binIdx = 0;
+                    var cur = grouped.get(binIdx) || { buy_volume: 0, sell_volume: 0, total_volume: 0, delta: 0 };
+                    cur.buy_volume += Number(row.buy_volume);
+                    cur.sell_volume += Number(row.sell_volume);
+                    cur.total_volume += Number(row.total_volume);
+                    cur.delta += Number(row.delta);
+                    grouped.set(binIdx, cur);
+                });
+
+                for (var bi2 = 0; bi2 < binCount; bi2++) {
+                    var row = grouped.get(bi2);
+                    if (!row) continue;
+                    var price = (minBin + bi2) * displayStep;
+                    var buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
+                    var rowY = coords.p2y(price);
+                    if (buy > 0) {
+                        ctx.fillStyle = 'rgba(99,211,145,' + Math.min(.75, .12 + buy / total * .63) + ')';
+                        var bx = x - cellW - 2;
+                        ctx.fillRect(bx, rowY - cellH / 2, cellW, cellH - 1);
+                        if (showValues) { ctx.fillStyle = '#c8d2dc'; ctx.font = '9px Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.fillText(formatVolume(buy), bx + 2, rowY); }
+                    }
+                    if (sell > 0) {
+                        ctx.fillStyle = 'rgba(238,119,119,' + Math.min(.75, .12 + sell / total * .63) + ')';
+                        var sx = x + 2;
+                        ctx.fillRect(sx, rowY - cellH / 2, cellW, cellH - 1);
+                        if (showValues) { ctx.fillStyle = '#c8d2dc'; ctx.font = '9px Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.fillText(formatVolume(sell), sx + 2, rowY); }
+                    }
+                }
+
+                var barDelta = bar.rows.reduce(function (s, r) { return s + Number(r.delta); }, 0);
+                if (idx % 4 === 0 || idx === coords.kList.length - 1) {
+                    if (Math.abs(barDelta) > 0) {
+                        var lbl = 'DELTA ' + (barDelta >= 0 ? '+' : '') + formatVolume(barDelta);
+                        ctx.font = '600 9px Consolas,monospace';
+                        ctx.fillStyle = barDelta >= 0 ? '#64e6a0' : '#ff7887';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(lbl, x, coords.topPad - 4);
+                        ctx.textAlign = 'left';
+                    }
+                }
+            });
         }
-        var html = '<div style="margin-bottom:6px;">' +
-            '<span style="color:#4ade80;font-size:10px;">Demand: ' + obLines.filter(function(o){return o.type==='demand';}).length + '</span> ' +
-            '<span style="color:#f87171;font-size:10px;">Supply: ' + obLines.filter(function(o){return o.type==='supply';}).length + '</span> ' +
-            '<span style="color:#fbbf24;font-size:10px;">FVG: ' + fvgAreas.length + '</span> ' +
-            '<span style="color:#a78bfa;font-size:10px;">Liq: ' + liqLines.length + '</span> ' +
-            '<span style="color:#22d3ee;font-size:10px;">BOS: ' + bos + '</span>' +
-            '</div>';
-        content.innerHTML = html;
-        setTimeout(function() { drawSmcOverlays(panel); }, 50);
-    }
 
-    // Add initial panels
-    makeSmcPanel('BTCUSDT', '60');
-    makeSmcPanel('ETHUSDT', '60');
+        function renderSignalOverlays(ctx, coords) {
+            var overlays = panel.data.snapshot ? (panel.data.snapshot.overlays || []) : [];
+            if (!overlays.length) return;
+            var visibleTimes = new Map();
+            coords.kList.forEach(function (k, i) { visibleTimes.set(k.timestamp, i); });
+            var dense = coords.candleSpace < 80;
 
-    document.getElementById('add-panel').addEventListener('click', function() {
-        var sym = document.getElementById('global-symbol').value;
-        var iv = document.getElementById('global-interval').value;
-        makeSmcPanel(sym, iv);
-    });
+            overlays.forEach(function (ov) {
+                var agentState = panel.data.agents[ov.source] || { enabled: true, render: true };
+                if (!agentState.enabled || !agentState.render) return;
+                var idx = visibleTimes.get(ov.bucket_time ? new Date(ov.bucket_time).getTime() : null);
+                if (idx == null) return;
+                var kCandle = coords.kList[idx];
+                var centerX = coords.idx2x(idx);
+                var color = ov.color || '#ad9aff';
+                var anchorPrice = Number(ov.price) || (ov.side === 'SELL' ? Number(kCandle.high) : Number(kCandle.low));
+                var anchorY = coords.p2y(anchorPrice);
 
-    window.addEventListener('resize', function() {
-        workspace.allPanels().forEach(function(p) {
-            if (p.ui.chart && p.ui.chart.setSize && p.ui.chartContainer) {
-                var el = p.ui.chartContainer;
-                p.ui.chart.setSize(el.clientWidth || 400, el.clientHeight || 300);
+                ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
+                if (ov.price_low != null && ov.price_high != null) {
+                    var zt = coords.p2y(Number(ov.price_high)), zb = coords.p2y(Number(ov.price_low));
+                    ctx.globalAlpha = .12;
+                    ctx.fillRect(centerX - Math.max(10, coords.candleW / 2 - 2), zt, Math.max(20, coords.candleW - 4), zb - zt);
+                    ctx.globalAlpha = .6;
+                    ctx.strokeRect(centerX - Math.max(10, coords.candleW / 2 - 2), zt, Math.max(20, coords.candleW - 4), zb - zt);
+                } else {
+                    ctx.beginPath(); ctx.moveTo(centerX, anchorY); ctx.lineTo(centerX, anchorY + (ov.side === 'SELL' ? -10 : 10)); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(centerX, anchorY, dense ? 3 : 4, 0, Math.PI * 2); ctx.fill();
+                }
+                var showLabel = !dense || idx === coords.kList.length - 1;
+                if (showLabel && ov.label) {
+                    var srcLabel = ov.source === 'rbi_agent' ? 'RBI' : ov.source === 'custom_chart_bot' ? 'BOT' : 'FLOW';
+                    ctx.font = '600 8px Consolas,monospace';
+                    ctx.fillStyle = color;
+                    ctx.fillText(srcLabel + ' ' + String(ov.label).slice(0, 18), centerX - 30, anchorY + (ov.side === 'SELL' ? -12 : 18));
+                }
+                ctx.restore();
+            });
+        }
+
+        function saveDrawing(drawing) {
+            var sym = document.getElementById('symbol-input').value;
+            var tf = Math.round(Number(document.getElementById('interval').value) / 60) + 'm';
+            fetch('/api/chart/drawings?symbol=' + sym + '&timeframe=' + tf, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(drawing)
+            }).catch(function () {});
+        }
+
+        function applySnapshot(data, resetView) {
+            panel.data.snapshot = data;
+            panel.data.levels = data.levels || [];
+            panel.data.candles = data.candles || [];
+            panel.data.signals = data.signals || [];
+            panel.data.bars = groupBars(panel.data.levels, panel.data.candles);
+
+            if (panel.ui.chart && panel.data.candles.length) {
+                var kData = panel.data.candles.map(function (c) {
+                    return { timestamp: new Date(c.bucket_time).getTime(), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: 0 };
+                });
+                try { panel.ui.chart.applyNewData(kData); } catch (e) { console.warn('applyNewData:', e.message); }
+            }
+
+            if (panel.data.snapshot && panel.data.snapshot.footprint) {
+                var fp = panel.data.snapshot.footprint;
+                var levels = fp.levels || [];
+                var buyVol = levels.reduce(function (s, l) { return s + Number(l.buy_volume); }, 0);
+                var sellVol = levels.reduce(function (s, l) { return s + Number(l.sell_volume); }, 0);
+                var vol = buyVol + sellVol, delta = buyVol - sellVol;
+                var byPrice = new Map();
+                levels.forEach(function (l) { byPrice.set(l.price, (byPrice.get(l.price) || 0) + Number(l.total_volume)); });
+                var poc = null;
+                byPrice.forEach(function (v, k) { if (!poc || v > poc.v) poc = { k: k, v: v }; });
+                var prices = levels.map(function (l) { return Number(l.price); });
+                document.getElementById('session-volume').textContent = formatVolume(vol);
+                document.getElementById('session-delta').textContent = (delta >= 0 ? '+' : '') + formatVolume(delta);
+                document.getElementById('poc').textContent = poc ? Number(poc.k).toFixed(2) : '-';
+                document.getElementById('session-high').textContent = prices.length ? Math.max.apply(null, prices).toFixed(2) : '-';
+                document.getElementById('session-low').textContent = prices.length ? Math.min.apply(null, prices).toFixed(2) : '-';
+                document.getElementById('candle-count').textContent = panel.data.candles.length;
+            }
+
+            document.getElementById('status').textContent = (data.symbol || panel.symbol) + ' | ' +
+                (data.trade_count || 0) + ' trades | ' + (panel.data.candles.length) + ' candles | realtime';
+
+            setTimeout(function () { renderOverlay(); renderAnalysis(); syncFabricDrawings(); }, 60);
+        }
+
+        function connectRealtime() {
+            if (panel.private.socket) panel.private.socket.close();
+            var sym = document.getElementById('symbol-input').value;
+            var iv = Number(document.getElementById('interval').value);
+            var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            panel.private.socket = new WebSocket(proto + '//' + window.location.host + '/ws/binance/' + sym + '?interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize + '&candle_limit=100');
+            panel.private.socket.onopen = function () { document.getElementById('ai-status').textContent = 'REALTIME'; };
+            panel.private.socket.onmessage = function (event) {
+                var msg = JSON.parse(event.data);
+                if (msg.type === 'snapshot') applySnapshot(msg.data);
+                if (msg.type === 'error') document.getElementById('status').textContent = 'Error: ' + msg.message;
+            };
+            panel.private.socket.onclose = function () {
+                document.getElementById('ai-status').textContent = 'RECONNECTING';
+                setTimeout(function () { connectRealtime(); }, 2000);
+            };
+        }
+
+        function load() {
+            var sym = document.getElementById('symbol-input').value;
+            var iv = Number(document.getElementById('interval').value);
+            document.getElementById('status').textContent = 'Loading ' + sym + '...';
+            panel.ui.tickSize = Number(tickSizes[sym] || '0.01');
+            fetch('/api/binance/footprint?symbol=' + sym + '&hours=24&interval_seconds=' + iv + '&tick_size=' + panel.ui.tickSize)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    applySnapshot(data, true);
+                    connectRealtime();
+                    loadDom();
+                })
+                .catch(function (err) {
+                    panel.data.bars = [];
+                    document.getElementById('status').textContent = 'Error: ' + err.message;
+                });
+            renderOverlay();
+            renderAnalysis();
+        }
+
+        function loadDom() {
+            fetch('/api/binance/dom?symbol=' + document.getElementById('symbol-input').value)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    domState = data;
+                    domState.available = !!data && (!!data.available || (Array.isArray(data.bids) && data.bids.length) || (Array.isArray(data.asks) && data.asks.length));
+                    drawDom();
+                })
+                .catch(function () { domState = { bids: [], asks: [], available: false }; drawDom(); });
+        }
+
+        function renderAnalysis() { drawCumulativeDelta(); drawVolumeProfile(); drawDom(); }
+
+        function drawCumulativeDelta() {
+            var c = panel.ui.deltaCanvas, ctx = panel.ui.deltaCtx;
+            var w = c.clientWidth, h = c.clientHeight;
+            ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, w, h);
+            if (!panel.data.bars.length) return;
+            var values = [], running = 0;
+            panel.data.bars.forEach(function (bar) { running += bar.rows.reduce(function (s, r) { return s + Number(r.delta); }, 0); values.push(running); });
+            var mn = Math.min.apply(null, [0].concat(values)), mx = Math.max.apply(null, [0].concat(values));
+            var range = Math.max(mx - mn, 0.000001);
+            var left = 14, top = 36, pw = Math.max(1, w - 28), ph = Math.max(1, h - 52);
+            var x = function (i) { return left + i * pw / Math.max(values.length - 1, 1); };
+            var y = function (v) { return top + (mx - v) / range * ph; };
+            var zy = y(0);
+            ctx.strokeStyle = '#28313d'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(left, zy); ctx.lineTo(left + pw, zy); ctx.stroke(); ctx.setLineDash([]);
+            ctx.beginPath();
+            values.forEach(function (v, i) { i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+            ctx.lineTo(x(values.length - 1), zy); ctx.lineTo(x(0), zy); ctx.closePath();
+            ctx.fillStyle = values[values.length - 1] >= 0 ? 'rgba(100,230,160,.15)' : 'rgba(255,120,135,.15)'; ctx.fill();
+            ctx.strokeStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            values.forEach(function (v, i) { i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+            ctx.stroke(); ctx.lineWidth = 1;
+            ctx.fillStyle = values[values.length - 1] >= 0 ? '#64e6a0' : '#ff7887';
+            ctx.font = '600 11px Consolas,monospace';
+            ctx.fillText((values[values.length - 1] >= 0 ? '+' : '') + formatVolume(values[values.length - 1]), w - 66, 23);
+        }
+
+        function drawVolumeProfile() {
+            var c = panel.ui.profileCanvas, ctx = panel.ui.profileCtx;
+            var w = c.clientWidth, h = c.clientHeight;
+            ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, w, h);
+            var levels = new Map();
+            panel.data.bars.forEach(function (bar) {
+                bar.rows.forEach(function (row) { levels.set(row.price, (levels.get(row.price) || 0) + Number(row.total_volume)); });
+            });
+            var entries = []; levels.forEach(function (v, k) { entries.push([k, v]); });
+            entries.sort(function (a, b) { return Number(b[0]) - Number(a[0]); });
+            if (!entries.length) return;
+            var maxVol = Math.max.apply(null, entries.map(function (e) { return Number(e[1]); }).concat([1]));
+            var maxPts = Math.max(5, Math.min(12, Math.floor((h - 42) / 10)));
+            var step = Math.max(1, Math.ceil(entries.length / maxPts));
+            var buckets = [];
+            for (var bi = 0; bi < entries.length; bi += step) {
+                var slice = entries.slice(bi, Math.min(entries.length, bi + step));
+                buckets.push({ price: Number(slice[Math.floor(slice.length / 2)][0]), volume: slice.reduce(function (s, e) { return s + Number(e[1]); }, 0) });
+            }
+            var left = 52, right = 12, top = 32, bottom = 10;
+            var pw = Math.max(1, w - left - right), rh = Math.max(8, (h - top - bottom) / buckets.length);
+            var poc = buckets.reduce(function (best, cur) { return cur.volume > best.volume ? cur : best; }, buckets[0]);
+            buckets.forEach(function (bucket, idx) {
+                var by = top + idx * rh, bw = pw * bucket.volume / maxVol;
+                ctx.fillStyle = bucket === poc ? 'rgba(245,201,106,.75)' : 'rgba(88,217,232,.45)';
+                ctx.fillRect(left, by + 1, bw, Math.max(4, rh - 3));
+                if (idx === 0 || idx === Math.floor(buckets.length / 2) || idx === buckets.length - 1 || bucket === poc) {
+                    ctx.fillStyle = bucket === poc ? '#f5c96a' : '#7f91a5';
+                    ctx.font = '9px Consolas,monospace'; ctx.fillText(bucket.price.toFixed(2), 4, by + rh - 3);
+                }
+            });
+            ctx.fillStyle = '#f5c96a'; ctx.font = '600 9px Consolas,monospace';
+            ctx.fillText('POC ' + poc.price.toFixed(2), Math.max(left, w - 70), 23);
+        }
+
+        function drawDom() {
+            var c = panel.ui.domCanvas, ctx = panel.ui.domCtx;
+            var w = c.clientWidth, h = c.clientHeight;
+            ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#0c1016'; ctx.fillRect(0, 0, w, h);
+            var avail = domState && (domState.available || (Array.isArray(domState.bids) && domState.bids.length) || (Array.isArray(domState.asks) && domState.asks.length));
+            if (!avail) { ctx.fillStyle = '#778292'; ctx.font = '10px Consolas,monospace'; ctx.fillText('Waiting for order-book snapshot', 12, 38); return; }
+            var bids = (domState.bids || []).slice(0, 6).map(function (l) { return { price: Number(l.price), quantity: Number(l.quantity) }; }).reverse();
+            var asks = (domState.asks || []).slice(0, 6).map(function (l) { return { price: Number(l.price), quantity: Number(l.quantity) }; }).reverse();
+            var maxQ = Math.max.apply(null, bids.concat(asks).map(function (l) { return l.quantity; }).concat([1]));
+            var rh = Math.max(14, Math.min(18, (h - 30) / Math.max(bids.length, asks.length, 5)));
+            var cx = w / 2;
+            for (var ii = 0; ii < Math.max(bids.length, asks.length, 5); ii++) {
+                var y = 24 + ii * rh, bid = bids[ii], ask = asks[ii];
+                var bidBar = bid ? (cx - 50) * bid.quantity / maxQ : 0;
+                var askBar = ask ? (w - (cx + 50)) * ask.quantity / maxQ : 0;
+                if (bid) {
+                    ctx.fillStyle = 'rgba(100,230,160,.2)'; ctx.fillRect(8, y + 1, bidBar, rh - 5);
+                    ctx.fillStyle = '#64e6a0'; ctx.font = '9px Consolas,monospace'; ctx.textAlign = 'right'; ctx.fillText(formatCompact(bid.quantity), cx - 50, y + rh - 5);
+                    ctx.fillStyle = '#d7dee8'; ctx.textAlign = 'left'; ctx.fillText(bid.price.toFixed(2), cx - 45, y + rh - 5);
+                }
+                if (ask) {
+                    ctx.fillStyle = 'rgba(255,120,135,.2)'; ctx.fillRect(cx + 50, y + 1, askBar, rh - 5);
+                    ctx.fillStyle = '#d7dee8'; ctx.textAlign = 'left'; ctx.fillText(ask.price.toFixed(2), cx + 45, y + rh - 5);
+                    ctx.fillStyle = '#ff7887'; ctx.fillText(formatCompact(ask.quantity), w - 8, y + rh - 5);
+                }
+            }
+            if (bids[0] && asks[0]) {
+                ctx.fillStyle = '#58d9e8'; ctx.font = '600 9px Consolas,monospace'; ctx.textAlign = 'left';
+                ctx.fillText('SPREAD ' + (asks[0].price - bids[0].price).toFixed(2), 10, h - 6);
+            }
+            ctx.textAlign = 'left';
+        }
+
+        function renderAiAnalysis(result) {
+            var a = (result && result.analysis) || {};
+            var bias = String(a.bias || 'WAITING').toUpperCase();
+            var conf = Number(a.confidence);
+            var statusEl = document.getElementById('ai-status');
+            var dotEl = document.getElementById('ai-status-dot');
+            statusEl.textContent = result && result.available ? 'BEDROCK' : 'LOCAL';
+            dotEl.classList.toggle('offline', !result || !result.available);
+            var biasEl = document.getElementById('ai-bias');
+            biasEl.textContent = bias;
+            biasEl.style.color = bias.indexOf('BULL') >= 0 ? '#64e6a0' : bias.indexOf('BEAR') >= 0 ? '#ff7887' : '#e7eef7';
+            var ringEl = document.getElementById('ai-bias-ring');
+            ringEl.textContent = Number.isFinite(conf) ? Math.round(conf * 100) + '%' : '--';
+            ringEl.style.borderColor = bias.indexOf('BULL') >= 0 ? '#64e6a0' : bias.indexOf('BEAR') >= 0 ? '#ff7887' : '#f5c96a';
+            ringEl.style.color = bias.indexOf('BULL') >= 0 ? '#64e6a0' : bias.indexOf('BEAR') >= 0 ? '#ff7887' : '#f5c96a';
+            document.getElementById('ai-summary').textContent = a.summary || (result && result.message) || 'Ask the analyst to interpret the current chart.';
+            var ev = Array.isArray(a.key_evidence) && a.key_evidence.length ? a.key_evidence : ['Context ready.'];
+            var rk = Array.isArray(a.risk_notes) && a.risk_notes.length ? a.risk_notes : ['Review before acting.'];
+            document.getElementById('ai-evidence').innerHTML = ev.slice(0, 5).map(function (i) { return '<li>' + escapeHtml(String(i)) + '</li>'; }).join('');
+            document.getElementById('ai-risk').innerHTML = rk.slice(0, 5).map(function (i) { return '<li>' + escapeHtml(String(i)) + '</li>'; }).join('');
+        }
+
+        function askChartAi(question, imageData) {
+            var statusEl = document.getElementById('ai-status');
+            statusEl.textContent = 'ANALYZING';
+            var logEl = document.getElementById('ai-chat-log');
+            if (logEl) {
+                logEl.className = '';
+                logEl.innerHTML += '<div class="ai-chat-msg user"><div class="msg-bubble">' + escapeHtml(question) + '</div><div class="msg-meta">You</div></div>';
+                var body = document.getElementById('ai-body');
+                if (body) body.scrollTop = body.scrollHeight;
+            }
+            var payload = { question: question, session_id: panel.ui.sessionId, model: panel.data.aiModel };
+            if (panel.data.snapshot) payload.snapshot = panel.data.snapshot;
+            if (imageData) payload.image = imageData;
+            fetch('/api/binance/ai/analyze', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function (r) { return r.json(); })
+              .then(function (result) {
+                if (Array.isArray(result.contributions) && panel.data.snapshot) {
+                    panel.data.snapshot.overlays = (panel.data.snapshot.overlays || []).concat(result.contributions);
+                    renderOverlay();
+                }
+                loadSessionHistory();
+                renderAiAnalysis(result);
+            }).catch(function (err) {
+                renderAiAnalysis({ available: false, message: 'Analysis unavailable: ' + err.message });
+            });
+        }
+
+        function loadSessionHistory() {
+            fetch('/api/binance/ai/sessions/' + panel.ui.sessionId)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var msgs = Array.isArray(data.messages) ? data.messages : [];
+                    var c = document.getElementById('ai-chat-log');
+                    if (!msgs.length) { c.className = 'ai-chat-empty'; c.textContent = 'No conversation yet. Ask a question below.'; return; }
+                    c.className = '';
+                    c.innerHTML = msgs.slice(-12).map(function (m) {
+                        var role = String(m.role || 'note').toLowerCase();
+                        var isUser = role === 'user' || role === 'human';
+                        var cls = isUser ? 'user' : 'ai';
+                        var label = isUser ? 'You' : 'AI';
+                        var content = escapeHtml(String(m.content || '')).slice(0, 300);
+                        return '<div class="ai-chat-msg ' + cls + '"><div class="msg-bubble">' + content + '</div>' +
+                            '<div class="msg-meta">' + label + '</div></div>';
+                    }).join('');
+                    var body = document.getElementById('ai-body');
+                    if (body) body.scrollTop = body.scrollHeight;
+                }).catch(function () {
+                    var c = document.getElementById('ai-chat-log');
+                    c.className = 'ai-chat-empty';
+                    c.textContent = 'Session memory unavailable.';
+                });
+        }
+
+        function loadAgentControls() {
+            fetch('/api/chart/agents')
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    panel.data.agents = data.agents || {};
+                    var c = document.getElementById('ai-agents');
+                    c.innerHTML = Object.entries(data.agents || {}).map(function (entry) {
+                        var id = entry[0], ag = entry[1];
+                        return '<div class="ai-agent-row"><span>' + escapeHtml(ag.label) + '</span><div>' +
+                            '<label><input type="checkbox" data-agent="' + id + '" data-kind="enabled" ' + (ag.enabled ? 'checked' : '') + ' /></label>' +
+                            '<label title="Render"><input type="checkbox" data-agent="' + id + '" data-kind="render" ' + (ag.render ? 'checked' : '') + ' /></label>' +
+                            '</div></div>';
+                    }).join('');
+                    c.querySelectorAll('input[data-agent]').forEach(function (input) {
+                        input.addEventListener('change', function () {
+                            var aid = input.dataset.agent, kind = input.dataset.kind, val = input.checked;
+                            var ag = panel.data.agents[aid] || { enabled: true, render: true };
+                            var payload = { enabled: kind === 'enabled' ? val : !!ag.enabled, render: kind === 'render' ? val : !!ag.render };
+                            fetch('/api/chart/agents/' + aid + '/toggle', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                            }).then(function (r) { return r.json(); })
+                              .then(function (res) { panel.data.agents[aid] = res.state || payload; renderOverlay(); });
+                        });
+                    });
+                }).catch(function () { document.getElementById('ai-agents').textContent = 'Agent controls unavailable'; });
+        }
+
+        function loadDrawings() {
+            var sym = document.getElementById('symbol-input').value;
+            var tf = Math.round(Number(document.getElementById('interval').value) / 60) + 'm';
+            fetch('/api/chart/drawings?symbol=' + sym + '&timeframe=' + tf)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    panel.data.drawings = data.drawings || [];
+                    rebuildFabricDrawings();
+                })
+                .catch(function () { panel.data.drawings = []; });
+        }
+
+        function rebuildFabricDrawings() {
+            if (!fabricCanvas) return;
+            var objs = fabricCanvas.getObjects();
+            while (objs.length > 0) fabricCanvas.remove(objs[0]);
+            panel.data.fabricObjects.clear();
+            var color = '#f5c96a';
+            panel.data.drawings.forEach(function (drawing) {
+                var obj = null;
+                var type = drawing.type;
+                if (type === 'trend_line' || type === 'ray' || type === 'measure' || type === 'arrow' || type === 'horizontal_level') {
+                    var opts = { stroke: color, strokeWidth: 2, selectable: false, evented: false, strokeUniform: true };
+                    if (type === 'horizontal_level') opts.strokeDashArray = [5, 4];
+                    obj = new fabric.Line([0, 0, 1, 1], opts);
+                } else if (type === 'fibonacci') {
+                    obj = new fabric.Group([], { selectable: false, evented: false });
+                } else if (type === 'rectangle') {
+                    obj = new fabric.Rect({ left: 0, top: 0, width: 1, height: 1,
+                        fill: 'rgba(88,217,232,.1)', stroke: color, strokeWidth: 1.5,
+                        selectable: false, evented: false, strokeUniform: true });
+                } else if (type === 'circle') {
+                    obj = new fabric.Circle({ left: 0, top: 0, radius: 1,
+                        fill: 'rgba(88,217,232,.08)', stroke: color, strokeWidth: 1.5,
+                        selectable: false, evented: false, strokeUniform: true, originX: 'left', originY: 'top' });
+                } else if (type === 'text') {
+                    obj = new fabric.IText(String(drawing.text || 'Text'), {
+                        left: 0, top: 0, fill: color, fontSize: 13, fontFamily: 'Consolas, monospace',
+                        editable: true, selectable: true, evented: true
+                    });
+                } else if (type === 'brush') {
+                    obj = new fabric.Path('M 0 0', { stroke: color, strokeWidth: 2, fill: null,
+                        strokeLineCap: 'round', strokeLineJoin: 'round', selectable: false, evented: false, strokeUniform: true });
+                }
+                if (obj) {
+                    fabricCanvas.add(obj);
+                    panel.data.fabricObjects.set(drawing.id, obj);
+                    obj.__drawingId = drawing.id;
+                }
+            });
+            syncFabricDrawings();
+        }
+
+        document.getElementById('symbol-input').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { panel.symbol = this.value.toUpperCase(); this.value = panel.symbol; load(); loadDrawings(); }
+        });
+        document.getElementById('interval').addEventListener('change', function () {
+            panel.timeframe = this.value; load(); loadDrawings();
+        });
+        document.getElementById('refresh').addEventListener('click', function () { load(); });
+        document.getElementById('ai-question').addEventListener('submit', function (e) {
+            e.preventDefault();
+            var input = document.getElementById('ai-input');
+            var q = input.value.trim();
+            if (q) { input.value = ''; askChartAi(q); }
+        });
+        document.querySelectorAll('.ind-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var name = btn.dataset.ind;
+                btn.classList.toggle('active');
+                panel.data.activeIndicators[name] = btn.classList.contains('active');
+                if (panel.ui.chart) {
+                    try {
+                        if (panel.data.activeIndicators[name]) {
+                            var isOverlay = (name === 'MA' || name === 'BOLL');
+                            var paneId = isOverlay ? 'candle_pane' : 'pane_' + name.toLowerCase();
+                            var val = name === 'MA' ? { name: 'MA', calcParams: [9, 21, 50] } :
+                                       name === 'BOLL' ? { name: 'BOLL', calcParams: [20, 2] } :
+                                       name === 'RSI' ? { name: 'RSI', calcParams: [14] } : name;
+                            panel.ui.chart.createIndicator(val, isOverlay, { id: paneId });
+                        } else {
+                            var isOverlay2 = (name === 'MA' || name === 'BOLL');
+                            var paneId2 = isOverlay2 ? 'candle_pane' : 'pane_' + name.toLowerCase();
+                            if (isOverlay2) {
+                                panel.ui.chart.removeIndicator(paneId2, { name: name });
+                            } else {
+                                panel.ui.chart.removeIndicator(paneId2);
+                            }
+                        }
+                    } catch (e) { console.warn('Indicator toggle:', e.message); }
+                }
+            });
+        });
+        document.querySelectorAll('.tool-button[data-tool]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var tool = button.dataset.tool;
+                if (tool === 'clear') {
+                    clearFabricDrawings();
+                    return;
+                }
+                if (tool === 'crosshair') {
+                    deactivateTool();
+                } else {
+                    activateTool(tool);
+                }
+            });
+        });
+
+        var stayBtn = document.getElementById('stay-in-mode-btn');
+        if (stayBtn) {
+            stayBtn.addEventListener('click', function () {
+                panel.data.stayInMode = !panel.data.stayInMode;
+                stayBtn.classList.toggle('active', panel.data.stayInMode);
+            });
+        }
+
+        var magnetBtn = document.getElementById('magnet-btn');
+        if (magnetBtn) {
+            magnetBtn.addEventListener('click', function () {
+                var states = [false, 'weak', 'strong'];
+                var cur = states.indexOf(panel.data.magnetSnap);
+                var next = states[(cur + 1) % 3];
+                panel.data.magnetSnap = next;
+                magnetBtn.classList.toggle('active', !!next);
+                magnetBtn.title = 'Magnet snap: ' + (next || 'off') + (next === 'weak' ? ' (24px)' : next === 'strong' ? ' (12px)' : '');
+            });
+        }
+
+        var hideRailBtn = document.getElementById('hide-rail-btn');
+        var showRailBtn = document.getElementById('show-rail-btn');
+        var toolRail = document.getElementById('tool-rail');
+        var mainRow = document.querySelector('.chart-main-row');
+        if (hideRailBtn) {
+            hideRailBtn.addEventListener('click', function () {
+                if (toolRail) toolRail.classList.add('collapsed');
+                if (mainRow) mainRow.classList.add('rail-hidden');
+            });
+        }
+        if (showRailBtn) {
+            showRailBtn.addEventListener('click', function () {
+                if (toolRail) toolRail.classList.remove('collapsed');
+                if (mainRow) mainRow.classList.remove('rail-hidden');
+            });
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (e.altKey && !panel.data.quickWheelOpen && e.key === 'Alt') {
+                toggleQuickWheel(e.clientX, e.clientY);
+                e.preventDefault();
+            }
+            if (e.key === 'Escape') {
+                if (panel.data.quickWheelOpen) {
+                    var wheel = document.getElementById('quick-wheel');
+                    if (wheel) wheel.classList.add('hidden');
+                    panel.data.quickWheelOpen = false;
+                }
+                if (fabricCanvas) {
+                    var active = fabricCanvas.getActiveObject();
+                    if (active && active.isEditing) active.exitEditing();
+                }
+                deactivateTool();
+                e.preventDefault();
             }
         });
-    });
-})();
-</script>
+
+        var SYMBOLS = [
+            { sym: 'BTCUSDT', cat: 'Crypto' }, { sym: 'ETHUSDT', cat: 'Crypto' },
+            { sym: 'SOLUSDT', cat: 'Crypto' }, { sym: 'BNBUSDT', cat: 'Crypto' },
+            { sym: 'XRPUSDT', cat: 'Crypto' }, { sym: 'DOGEUSDT', cat: 'Crypto' },
+            { sym: 'ADAUSDT', cat: 'Crypto' }, { sym: 'AVAXUSDT', cat: 'Crypto' },
+            { sym: 'LINKUSDT', cat: 'Crypto' }, { sym: 'DOTUSDT', cat: 'Crypto' }
+        ];
+        var symInputEl = document.getElementById('symbol-input');
+        var symDropdown = document.getElementById('sym-dropdown');
+        function showSymDropdown(filter) {
+            var f = (filter || '').toUpperCase();
+            var matches = SYMBOLS.filter(function (s) { return !f || s.sym.indexOf(f) >= 0; }).slice(0, 10);
+            if (!matches.length) { symDropdown.classList.remove('show'); return; }
+            symDropdown.innerHTML = matches.map(function (s) {
+                return '<div class="sym-item" data-sym="' + s.sym + '">' + s.sym + '<span class="sym-item-cat">' + s.cat + '</span></div>';
+            }).join('');
+            symDropdown.classList.add('show');
+            symDropdown.querySelectorAll('.sym-item').forEach(function (item) {
+                item.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    symInputEl.value = this.dataset.sym;
+                    symDropdown.classList.remove('show');
+                    panel.symbol = this.dataset.sym; load(); loadDrawings();
+                });
+            });
+        }
+        symInputEl.addEventListener('focus', function () { showSymDropdown(this.value); });
+        symInputEl.addEventListener('input', function () { showSymDropdown(this.value); });
+        symInputEl.addEventListener('blur', function () { setTimeout(function () { symDropdown.classList.remove('show'); }, 150); });
+
+        document.querySelectorAll('.sidebar-tab').forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                document.querySelectorAll('.sidebar-tab').forEach(function (t) { t.classList.remove('active'); });
+                tab.classList.add('active');
+                document.querySelectorAll('.sidebar-panel').forEach(function (p) { p.classList.remove('show'); });
+                var pe = document.getElementById('panel-' + tab.dataset.tab);
+                if (pe) pe.classList.add('show');
+                if (tab.dataset.tab === 'tree') refreshObjectTree();
+            });
+        });
+
+        document.querySelectorAll('.layout-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                document.querySelectorAll('.layout-btn').forEach(function (b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                panel.data.layoutMode = btn.dataset.layout;
+                applyLayout(btn.dataset.layout);
+            });
+        });
+        /* Multi-chart support */
+        var secondaryCells = [];
+
+        function getGenericCoords(chart, el) {
+            if (!chart) return null;
+            var visibleRange = null;
+            try { visibleRange = chart.getVisibleRange(); } catch (e) { return null; }
+            if (!visibleRange || !visibleRange.kLineDataList || !visibleRange.kLineDataList.length) return null;
+            var totalW = el.clientWidth || 800, totalH = el.clientHeight || 400;
+            var yAxisW = 62, xAxisH = 22, topPad = 8;
+            var plotW = Math.max(1, totalW - yAxisW), plotH = Math.max(1, totalH - xAxisH - topPad);
+            var kList = visibleRange.kLineDataList;
+            var candleSpace = plotW / kList.length;
+            var candleW = Math.max(2, candleSpace * 0.7);
+            var minP = Infinity, maxP = -Infinity;
+            kList.forEach(function (k) {
+                if (k.low != null && k.low < minP) minP = k.low;
+                if (k.high != null && k.high > maxP) maxP = k.high;
+            });
+            if (minP === Infinity) minP = 0; if (maxP === -Infinity) maxP = 1;
+            var padP = (maxP - minP) * 0.08 || 0.01; minP -= padP; maxP += padP;
+            var priceRange = maxP - minP || 1;
+            function idx2x(i) { return i * candleSpace + candleSpace / 2; }
+            function p2y(p) { return topPad + (maxP - p) / priceRange * plotH; }
+            return { kList: kList, plotW: plotW, plotH: plotH, topPad: topPad,
+                candleSpace: candleSpace, candleW: candleW, minP: minP, maxP: maxP,
+                priceRange: priceRange, idx2x: idx2x, p2y: p2y };
+        }
+
+        function renderCellOverlay(cell) {
+            if (!cell || !cell.overlayCanvas || !cell.chart) return;
+            var ctx = cell.overlayCanvas.getContext('2d');
+            var el = cell.klineContainer;
+            var w = el.clientWidth || 800, h = el.clientHeight || 400;
+            ctx.clearRect(0, 0, w, h);
+            var coords = getGenericCoords(cell.chart, el);
+            if (!coords || !cell.data.bars.length) return;
+            var displayStep = cell.tickSize || 0.1;
+            displayStep = displayStep * Math.max(1, Math.ceil(coords.priceRange / (displayStep * 12)));
+            var minBin = Math.floor(coords.minP / displayStep);
+            var maxBin = Math.ceil(coords.maxP / displayStep);
+            var binCount = Math.max(1, maxBin - minBin + 1);
+            var cellW = Math.max(6, Math.min(28, coords.candleW * 0.36));
+            var cellH = Math.max(8, Math.min(20, coords.plotH / binCount));
+            var showValues = coords.candleSpace >= 44;
+            coords.kList.forEach(function (kCandle, idx) {
+                var bar = null;
+                for (var bi = 0; bi < cell.data.bars.length; bi++) {
+                    if (cell.data.bars[bi].time === kCandle.timestamp) { bar = cell.data.bars[bi]; break; }
+                }
+                if (!bar || !bar.rows.length) return;
+                var x = coords.idx2x(idx);
+                var grouped = new Map();
+                bar.rows.forEach(function (row) {
+                    var binIdx = Math.floor(Number(row.price) / displayStep) - minBin;
+                    if (binIdx < 0) binIdx = 0;
+                    var cur = grouped.get(binIdx) || { buy_volume: 0, sell_volume: 0, total_volume: 0, delta: 0 };
+                    cur.buy_volume += Number(row.buy_volume);
+                    cur.sell_volume += Number(row.sell_volume);
+                    cur.total_volume += Number(row.total_volume);
+                    cur.delta += Number(row.delta);
+                    grouped.set(binIdx, cur);
+                });
+                for (var bi2 = 0; bi2 < binCount; bi2++) {
+                    var row = grouped.get(bi2);
+                    if (!row) continue;
+                    var price = (minBin + bi2) * displayStep;
+                    var buy = Number(row.buy_volume), sell = Number(row.sell_volume), total = Math.max(Number(row.total_volume), 1);
+                    var rowY = coords.p2y(price);
+                    if (buy > 0) {
+                        ctx.fillStyle = 'rgba(99,211,145,' + Math.min(.75, .12 + buy / total * .63) + ')';
+                        ctx.fillRect(x - cellW - 2, rowY - cellH / 2, cellW, cellH - 1);
+                        if (showValues) { ctx.fillStyle = '#c8d2dc'; ctx.font = '9px Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.fillText(formatVolume(buy), x - cellW, rowY); }
+                    }
+                    if (sell > 0) {
+                        ctx.fillStyle = 'rgba(238,119,119,' + Math.min(.75, .12 + sell / total * .63) + ')';
+                        ctx.fillRect(x + 2, rowY - cellH / 2, cellW, cellH - 1);
+                        if (showValues) { ctx.fillStyle = '#c8d2dc'; ctx.font = '9px Consolas,monospace'; ctx.textBaseline = 'middle'; ctx.fillText(formatVolume(sell), x + 2, rowY); }
+                    }
+                }
+            });
+        }
+
+        function loadSecondaryCellData(cell) {
+            var sym = cell.symbol, iv = cell.timeframe;
+            fetch('/api/binance/footprint?symbol=' + sym + '&hours=24&interval_seconds=' + iv + '&tick_size=' + cell.tickSize)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    cell.data.levels = data.levels || [];
+                    cell.data.candles = data.candles || [];
+                    cell.data.bars = groupBars(cell.data.levels, cell.data.candles);
+                    if (cell.chart && cell.data.candles.length) {
+                        var kData = cell.data.candles.map(function (c) {
+                            return { timestamp: new Date(c.bucket_time).getTime(), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: 0 };
+                        });
+                        try { cell.chart.applyNewData(kData); } catch (e) {}
+                    }
+                    setTimeout(function () { renderCellOverlay(cell); }, 60);
+                }).catch(function () {});
+        }
+
+        function createSecondaryCell(cellIndex, symbol, timeframe) {
+            var grid = document.getElementById('chart-grid');
+            var cellEl = document.createElement('div');
+            cellEl.className = 'chart-cell';
+            cellEl.dataset.cell = String(cellIndex);
+            var bar = document.createElement('div'); bar.className = 'cell-bar';
+            var symInput = document.createElement('input'); symInput.className = 'cell-symbol'; symInput.value = symbol; symInput.placeholder = 'Symbol';
+            var tfSelect = document.createElement('select'); tfSelect.className = 'cell-tf';
+            [{v:'60',l:'1m'},{v:'300',l:'5m'},{v:'900',l:'15m'},{v:'1800',l:'30m'},{v:'3600',l:'1h'},{v:'14400',l:'4h'}].forEach(function(tf) {
+                var o = document.createElement('option'); o.value = tf.v; o.textContent = tf.l; if (tf.v === String(timeframe)) o.selected = true; tfSelect.appendChild(o);
+            });
+            var closeBtn = document.createElement('button'); closeBtn.className = 'cell-close'; closeBtn.textContent = 'x'; closeBtn.title = 'Close';
+            bar.appendChild(symInput); bar.appendChild(tfSelect); bar.appendChild(closeBtn);
+            var chartArea = document.createElement('div'); chartArea.className = 'cell-chart-area';
+            var klineEl = document.createElement('div'); klineEl.id = 'kline-container-' + cellIndex;
+            var overlayCanvas = document.createElement('canvas'); overlayCanvas.id = 'overlay-canvas-' + cellIndex;
+            chartArea.appendChild(klineEl); chartArea.appendChild(overlayCanvas);
+            cellEl.appendChild(bar); cellEl.appendChild(chartArea);
+            grid.appendChild(cellEl);
+            var chart = null;
+            try {
+                chart = klinecharts.init(klineEl, {
+                    styles: {
+                        candle: { type: 'candle_solid', upColor: '#4ade80', downColor: '#f87171', noChangeColor: '#666',
+                            upBorderColor: '#4ade80', downBorderColor: '#f87171', upWickColor: '#4ade80', downWickColor: '#f87171' },
+                        grid: { show: true, verticalColor: '#1a2330', horizontalColor: '#1a2330' },
+                        xAxis: { showAxisLine: true, axisLineColor: '#213040', tickColor: '#213040', textColor: '#7f91a5', textSize: 10 },
+                        yAxis: { showAxisLine: true, axisLineColor: '#213040', tickColor: '#213040', textColor: '#7f91a5', textSize: 10 },
+                        crosshair: { horizontal: { lineColor: '#58d9e8', lineStyle: 'dashed' }, vertical: { lineColor: '#58d9e8', lineStyle: 'dashed' } },
+                        background: { type: 'solid', color: 'transparent' }
+                    }
+                });
+                chart.createIndicator({ name: 'MA', calcParams: [9, 21, 50] }, true, { id: 'candle_pane' });
+                chart.createIndicator('VOL', false, { id: 'pane_vol' });
+            } catch (e) { console.error('Secondary chart init:', e); }
+            var cell = { id: cellIndex, el: cellEl, chart: chart, klineContainer: klineEl, overlayCanvas: overlayCanvas,
+                symbol: symbol, timeframe: Number(timeframe), tickSize: Number(tickSizes[symbol] || '0.01'),
+                data: { bars: [], levels: [], candles: [] }, ro: null, rafId: null };
+            function resizeOverlay() {
+                var w = klineEl.clientWidth || 800, h = klineEl.clientHeight || 400, ratio = window.devicePixelRatio || 1;
+                overlayCanvas.width = Math.floor(w * ratio); overlayCanvas.height = Math.floor(h * ratio);
+                overlayCanvas.style.width = w + 'px'; overlayCanvas.style.height = h + 'px';
+                overlayCanvas.getContext('2d').setTransform(ratio, 0, 0, ratio, 0, 0);
+            }
+            resizeOverlay();
+            if (chart) {
+                chart.subscribeAction('onScroll', function () { if (cell.rafId) return; cell.rafId = requestAnimationFrame(function () { cell.rafId = null; renderCellOverlay(cell); }); });
+                chart.subscribeAction('onZoom', function () { if (cell.rafId) return; cell.rafId = requestAnimationFrame(function () { cell.rafId = null; renderCellOverlay(cell); }); });
+                chart.subscribeAction('onCrosshairChange', function () { if (cell.rafId) return; cell.rafId = requestAnimationFrame(function () { cell.rafId = null; renderCellOverlay(cell); }); });
+            }
+            cell.ro = new ResizeObserver(function () {
+                var w = klineEl.clientWidth, h = klineEl.clientHeight; if (w < 10 || h < 10) return;
+                if (chart && chart.resize) chart.resize(); resizeOverlay(); renderCellOverlay(cell);
+            });
+            cell.ro.observe(klineEl);
+            symInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') { cell.symbol = this.value.toUpperCase(); this.value = cell.symbol; cell.tickSize = Number(tickSizes[cell.symbol] || '0.01'); loadSecondaryCellData(cell); }
+            });
+            tfSelect.addEventListener('change', function () { cell.timeframe = Number(this.value); loadSecondaryCellData(cell); });
+            closeBtn.addEventListener('click', function () { var b = document.querySelector('.layout-btn[data-layout="1"]'); if (b) b.click(); });
+            loadSecondaryCellData(cell);
+            return cell;
+        }
+
+        function destroySecondaryCells() {
+            secondaryCells.forEach(function (cell) {
+                if (cell.ro) cell.ro.disconnect();
+                if (cell.chart) { try { klinecharts.dispose(cell.chart); } catch (e) {} }
+                if (cell.el && cell.el.parentNode) cell.el.parentNode.removeChild(cell.el);
+            });
+            secondaryCells = [];
+        }
+
+        function applyLayout(mode) {
+            var grid = document.getElementById('chart-grid');
+            destroySecondaryCells();
+            grid.className = 'chart-grid cells-' + mode;
+            var cellCount = mode === '1' ? 1 : (mode === '2h' || mode === '2v') ? 2 : mode === '4' ? 4 : 1;
+            var secondaryCount = cellCount - 1;
+            var mainSym = document.getElementById('symbol-input').value;
+            var mainIv = Number(document.getElementById('interval').value);
+            var timeframes = [60, 300, 900, 3600];
+            var tfIdx = timeframes.indexOf(mainIv);
+            for (var i = 0; i < secondaryCount; i++) {
+                var tf = timeframes[(tfIdx + i + 1) % timeframes.length];
+                secondaryCells.push(createSecondaryCell(i + 1, mainSym, tf));
+            }
+            setTimeout(function () {
+                if (panel.ui.chart && panel.ui.chart.resize) panel.ui.chart.resize();
+                resizeOverlayCanvas(); resizeFabricCanvas(); renderOverlay(); syncFabricDrawings();
+                secondaryCells.forEach(function (cell) { if (cell.chart && cell.chart.resize) cell.chart.resize(); renderCellOverlay(cell); });
+            }, 80);
+        }
+
+        var chartStyleBtn = document.getElementById('chart-style-btn');
+        chartStyleBtn.addEventListener('click', function () {
+            panel.data.chartStyle = panel.data.chartStyle === 'footprint' ? 'candles' : 'footprint';
+            chartStyleBtn.textContent = panel.data.chartStyle === 'footprint' ? 'Candles' : 'Footprint';
+            renderOverlay();
+        });
+
+        var tzSelect = document.getElementById('tz-select');
+        tzSelect.addEventListener('change', function () { panel.data.timezone = this.value; renderOverlay(); });
+
+        function saveWorkspace() {
+            var ws = { symbol: panel.symbol, timeframe: panel.timeframe, chartStyle: panel.data.chartStyle,
+                timezone: panel.data.timezone, layoutMode: panel.data.layoutMode,
+                activeIndicators: panel.data.activeIndicators, fpSettings: panel.data.fpSettings,
+                watchlist: panel.data.watchlist, aiModel: panel.data.aiModel };
+            localStorage.setItem('moondev_workspace', JSON.stringify(ws));
+            try { fetch('/api/chart/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ws) }).catch(function(){}); } catch(e){}
+            document.getElementById('status').textContent = 'Workspace saved';
+        }
+        function loadWorkspace() {
+            var raw = localStorage.getItem('moondev_workspace');
+            if (!raw) { document.getElementById('status').textContent = 'No saved workspace'; return; }
+            try {
+                var ws = JSON.parse(raw);
+                if (ws.symbol) { symInputEl.value = ws.symbol; panel.symbol = ws.symbol; }
+                if (ws.chartStyle) { panel.data.chartStyle = ws.chartStyle; chartStyleBtn.textContent = ws.chartStyle === 'footprint' ? 'Candles' : 'Footprint'; }
+                if (ws.timezone) { tzSelect.value = ws.timezone; panel.data.timezone = ws.timezone; }
+                if (ws.watchlist) { panel.data.watchlist = ws.watchlist; renderWatchlist(); }
+                if (ws.aiModel) { document.getElementById('ai-model-select').value = ws.aiModel; panel.data.aiModel = ws.aiModel; }
+                load(); loadDrawings();
+                document.getElementById('status').textContent = 'Workspace loaded';
+            } catch (e) { document.getElementById('status').textContent = 'Load error'; }
+        }
+        document.getElementById('ws-save-btn').addEventListener('click', saveWorkspace);
+        document.getElementById('ws-load-btn').addEventListener('click', loadWorkspace);
+
+        document.getElementById('share-btn').addEventListener('click', function () {
+            var url = window.location.origin + '/charts/workspace/?sym=' + panel.symbol + '&tf=' + panel.timeframe + '&style=' + panel.data.chartStyle;
+            if (navigator.clipboard) navigator.clipboard.writeText(url).then(function () { document.getElementById('status').textContent = 'Share link copied'; });
+            else document.getElementById('status').textContent = url;
+        });
+
+        var wlInputEl = document.getElementById('wl-input');
+        document.getElementById('wl-add-btn').addEventListener('click', function () {
+            var sym = (wlInputEl.value || '').toUpperCase().trim();
+            if (!sym) return;
+            if (panel.data.watchlist.indexOf(sym) < 0) panel.data.watchlist.push(sym);
+            wlInputEl.value = ''; renderWatchlist(); loadWatchlistPrices();
+        });
+        wlInputEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') document.getElementById('wl-add-btn').click(); });
+        function renderWatchlist() {
+            var c = document.getElementById('wl-items');
+            if (!panel.data.watchlist.length) { c.innerHTML = '<div class="obj-tree-empty">Add symbols to watch</div>'; return; }
+            c.innerHTML = panel.data.watchlist.map(function (sym, i) {
+                return '<div class="wl-item' + (sym === panel.symbol ? ' active' : '') + '" data-sym="' + sym + '"><span>' + sym + '</span><span class="wl-price" id="wl-price-' + i + '">--</span></div>';
+            }).join('');
+            c.querySelectorAll('.wl-item').forEach(function (item) {
+                item.addEventListener('click', function () { symInputEl.value = this.dataset.sym; panel.symbol = this.dataset.sym; load(); loadDrawings(); renderWatchlist(); });
+            });
+        }
+        function loadWatchlistPrices() {
+            panel.data.watchlist.forEach(function (sym, i) {
+                fetch('/api/binance/dom?symbol=' + sym).then(function(r) { return r.json(); }).then(function(data) {
+                    var el = document.getElementById('wl-price-' + i);
+                    if (el && data && data.mid_price) el.textContent = '$' + Number(data.mid_price).toFixed(2);
+                }).catch(function(){});
+            });
+        }
+        renderWatchlist();
+
+        document.querySelectorAll('.fp-toggle').forEach(function (toggle) {
+            toggle.addEventListener('click', function () {
+                var key = this.dataset.fp;
+                panel.data.fpSettings[key] = !panel.data.fpSettings[key];
+                this.classList.toggle('on', panel.data.fpSettings[key]);
+                renderOverlay();
+            });
+        });
+
+        var aiModelSel = document.getElementById('ai-model-select');
+        var modelCosts = { 'claude-opus-4': '~$0.075/req', 'claude-sonnet-4': '~$0.015/req', 'claude-haiku': '~$0.005/req', 'bedrock-nova-pro': '~$0.012/req', 'bedrock-nova-lite': '~$0.001/req' };
+        aiModelSel.addEventListener('change', function () { panel.data.aiModel = this.value; document.getElementById('ai-model-cost').textContent = modelCosts[this.value] || '--'; });
+
+        var micBtn = document.getElementById('ai-mic-btn');
+        var recognition = null;
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            var SRc = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SRc(); recognition.continuous = false; recognition.interimResults = false; recognition.lang = 'en-US';
+            recognition.onresult = function (e) { document.getElementById('ai-input').value = e.results[0][0].transcript; };
+            recognition.onend = function () { micBtn.classList.remove('recording'); micBtn.textContent = 'Voice'; };
+            recognition.onerror = function () { micBtn.classList.remove('recording'); micBtn.textContent = 'Voice'; };
+        }
+        micBtn.addEventListener('click', function () {
+            if (!recognition) { alert('Voice input not supported in this browser. Try Chrome or Edge.'); return; }
+            if (micBtn.classList.contains('recording')) { recognition.stop(); return; }
+            micBtn.classList.add('recording'); micBtn.textContent = 'Stop'; recognition.start();
+        });
+
+        document.getElementById('ai-screenshot-btn').addEventListener('click', function () {
+            var kc = document.getElementById('kline-container');
+            var oc = document.getElementById('overlay-canvas');
+            var tmp = document.createElement('canvas');
+            tmp.width = kc.clientWidth || 800; tmp.height = kc.clientHeight || 400;
+            var ctx = tmp.getContext('2d');
+            ctx.fillStyle = '#070b12'; ctx.fillRect(0, 0, tmp.width, tmp.height);
+            try { ctx.drawImage(oc, 0, 0, tmp.width, tmp.height); } catch(e) {}
+            var dataUrl = tmp.toDataURL('image/png');
+            askChartAi('Analyze this chart screenshot. What do you see? Give me a bias and key levels.', dataUrl);
+            document.getElementById('status').textContent = 'Screenshot sent to AI';
+        });
+
+        var captureStarBtn = document.getElementById('capture-star-btn');
+        var captureOverlayEl = document.getElementById('capture-overlay');
+        var capturing = false, capStart = null;
+        captureStarBtn.addEventListener('click', function () {
+            captureStarBtn.classList.toggle('active');
+            capturing = captureStarBtn.classList.contains('active');
+            document.getElementById('status').textContent = capturing ? 'Drag on chart to capture area' : '';
+        });
+        var klineElForCap = panel.ui.klineContainer;
+        klineElForCap.addEventListener('mousedown', function (e) {
+            if (!capturing) return;
+            var rect = klineElForCap.getBoundingClientRect();
+            capStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            captureOverlayEl.style.left = capStart.x + 'px'; captureOverlayEl.style.top = capStart.y + 'px';
+            captureOverlayEl.style.width = '0px'; captureOverlayEl.style.height = '0px';
+            captureOverlayEl.classList.add('show');
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!capturing || !capStart) return;
+            var rect = klineElForCap.getBoundingClientRect();
+            var cx = Math.max(0, Math.min(klineElForCap.clientWidth, e.clientX - rect.left));
+            var cy = Math.max(0, Math.min(klineElForCap.clientHeight, e.clientY - rect.top));
+            captureOverlayEl.style.left = Math.min(capStart.x, cx) + 'px';
+            captureOverlayEl.style.top = Math.min(capStart.y, cy) + 'px';
+            captureOverlayEl.style.width = Math.abs(cx - capStart.x) + 'px';
+            captureOverlayEl.style.height = Math.abs(cy - capStart.y) + 'px';
+        });
+        document.addEventListener('mouseup', function (e) {
+            if (!capturing || !capStart) return;
+            var rect = klineElForCap.getBoundingClientRect();
+            var cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+            var sx = Math.min(capStart.x, cx), sy = Math.min(capStart.y, cy);
+            var sw = Math.abs(cx - capStart.x), sh = Math.abs(cy - capStart.y);
+            captureOverlayEl.classList.remove('show');
+            if (sw > 10 && sh > 10) {
+                var oc = document.getElementById('overlay-canvas');
+                var tmp = document.createElement('canvas');
+                tmp.width = sw; tmp.height = sh;
+                var ctx = tmp.getContext('2d');
+                try { ctx.drawImage(oc, sx, sy, sw, sh, 0, 0, sw, sh); } catch(err) {}
+                askChartAi('Analyze this captured chart area. What patterns or levels do you see?', tmp.toDataURL('image/png'));
+                document.getElementById('status').textContent = 'Area captured and sent to AI';
+            }
+            capStart = null; capturing = false; captureStarBtn.classList.remove('active');
+        });
+
+        klineElForCap.addEventListener('mousemove', function (e) {
+            var coords = getChartCoords();
+            if (!coords || !coords.kList.length) return;
+            var rect = klineElForCap.getBoundingClientRect();
+            var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+            var idx = Math.max(0, Math.min(coords.kList.length - 1, Math.round((mx - coords.candleSpace / 2) / coords.candleSpace)));
+            var k = coords.kList[idx];
+            if (!k) return;
+            var dw = document.getElementById('data-window');
+            var change = Number(k.close) - Number(k.open);
+            var pct = k.open != 0 ? (change / Number(k.open) * 100).toFixed(2) : '0';
+            dw.innerHTML = '<div class="dw-row"><span class="dw-label">Date</span><span class="dw-val">' + new Date(k.timestamp).toLocaleString() + '</span></div>' +
+                '<div class="dw-row"><span class="dw-label">O</span><span class="dw-val ' + (change >= 0 ? 'up' : 'down') + '">' + Number(k.open).toFixed(2) + '</span></div>' +
+                '<div class="dw-row"><span class="dw-label">H</span><span class="dw-val up">' + Number(k.high).toFixed(2) + '</span></div>' +
+                '<div class="dw-row"><span class="dw-label">L</span><span class="dw-val down">' + Number(k.low).toFixed(2) + '</span></div>' +
+                '<div class="dw-row"><span class="dw-label">C</span><span class="dw-val ' + (change >= 0 ? 'up' : 'down') + '">' + Number(k.close).toFixed(2) + '</span></div>' +
+                '<div class="dw-row"><span class="dw-label">Chg</span><span class="dw-val ' + (change >= 0 ? 'up' : 'down') + '">' + (change >= 0 ? '+' : '') + change.toFixed(2) + ' (' + pct + '%)</span></div>';
+            dw.classList.add('show');
+        });
+        klineElForCap.addEventListener('mouseleave', function () { var dw = document.getElementById('data-window'); if (dw) dw.classList.remove('show'); });
+
+        klineElForCap.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            var menu = document.getElementById('ctx-menu');
+            menu.innerHTML = '<div class="ctx-item" data-act="fp">Footprint settings...</div>' +
+                '<div class="ctx-item" data-act="toggleFP">' + (panel.data.chartStyle === 'footprint' ? 'Hide footprint' : 'Show footprint') + '</div>' +
+                '<div class="ctx-sep"></div><div class="ctx-item" data-act="clear">Clear all drawings</div>' +
+                '<div class="ctx-item" data-act="reset">Reset chart</div>' +
+                '<div class="ctx-sep"></div><div class="ctx-item" data-act="save">Save workspace</div>' +
+                '<div class="ctx-item" data-act="share">Share chart</div>' +
+                '<div class="ctx-sep"></div><div class="ctx-item" data-act="shot">Screenshot to AI</div>' +
+                '<div class="ctx-item" data-act="journal">Open journal</div>';
+            var rect = klineElForCap.getBoundingClientRect();
+            menu.style.left = Math.min(e.clientX - rect.left, klineElForCap.clientWidth - 200) + 'px';
+            menu.style.top = Math.min(e.clientY - rect.top, klineElForCap.clientHeight - 220) + 'px';
+            menu.classList.add('show');
+            menu.querySelectorAll('.ctx-item').forEach(function (item) {
+                item.addEventListener('click', function () {
+                    menu.classList.remove('show');
+                    var act = this.dataset.act;
+                    if (act === 'fp') document.querySelector('[data-tab="fp"]').click();
+                    else if (act === 'toggleFP') chartStyleBtn.click();
+                    else if (act === 'clear') clearFabricDrawings();
+                    else if (act === 'reset') { clearFabricDrawings(); renderOverlay(); }
+                    else if (act === 'save') saveWorkspace();
+                    else if (act === 'share') document.getElementById('share-btn').click();
+                    else if (act === 'shot') document.getElementById('ai-screenshot-btn').click();
+                    else if (act === 'journal') document.getElementById('journal-btn').click();
+                });
+            });
+        });
+        document.addEventListener('click', function () { var m = document.getElementById('ctx-menu'); if (m) m.classList.remove('show'); });
+
+        var indLibBtnEl = document.getElementById('ind-lib-btn');
+        indLibBtnEl.addEventListener('click', function () {
+            var tab = document.querySelector('[data-tab="tree"]');
+            tab.click();
+            var container = document.getElementById('obj-tree-content');
+            var cats = { 'Basic': ['MA', 'EMA', 'BOLL', 'VOL', 'MACD', 'RSI', 'KDJ', 'CCI', 'WR', 'OBV'],
+                'Order Flow': ['Volume Profile', 'Delta Profile', 'Cumulative Delta', 'POC', 'VAP'],
+                'Custom': ['Liquidity Sweep', 'FVG Tracker', 'Asian Range', 'Session Volume'] };
+            var html = '<div class="ind-library">';
+            Object.keys(cats).forEach(function (cat) {
+                html += '<div class="ind-cat">' + cat.toUpperCase() + '</div>';
+                cats[cat].forEach(function (name) {
+                    var starred = panel.data.indicatorFavorites.indexOf(name) >= 0;
+                    html += '<div class="ind-lib-item"><span class="ind-lib-star' + (starred ? '' : ' empty') + '" data-star="' + name + '">' + (starred ? '\u2605' : '\u2606') + '</span><span class="ind-lib-name">' + name + '</span><span class="wl-price" style="margin-left:auto">Add</span></div>';
+                });
+            });
+            html += '</div>';
+            container.innerHTML = html;
+            container.querySelectorAll('.ind-lib-item').forEach(function (item) {
+                item.addEventListener('click', function (e) {
+                    if (e.target.dataset.star) {
+                        var name = e.target.dataset.star;
+                        var idx = panel.data.indicatorFavorites.indexOf(name);
+                        if (idx >= 0) panel.data.indicatorFavorites.splice(idx, 1);
+                        else panel.data.indicatorFavorites.push(name);
+                        indLibBtnEl.click();
+                        return;
+                    }
+                    var name = item.querySelector('.ind-lib-name').textContent;
+                    var key = name === 'EMA' ? 'MA' : name === 'BOLL' ? 'BOLL' : name === 'VOL' ? 'VOL' : name === 'MACD' ? 'MACD' : name === 'RSI' ? 'RSI' : null;
+                    if (key) { var btn = document.querySelector('.ind-btn[data-ind="' + key + '"]'); if (btn) btn.click(); }
+                    else document.getElementById('status').textContent = name + ' selected';
+                });
+            });
+        });
+
+        function refreshObjectTree() {
+            var c = document.getElementById('obj-tree-content');
+            if (!c || document.getElementById('ind-lib-content')) return;
+            if (!panel.data.drawings.length) {
+                c.innerHTML = '<div class="obj-tree-empty">No drawings on chart</div>';
+                return;
+            }
+            var icons = { trend_line: '/', horizontal_level: '\u2500', ray: '\u2197', fibonacci: '\u03D5', measure: '\u2301', text: 'T', arrow: '\u2192', rectangle: '\u25AD', circle: '\u25CB', brush: '\u270E' };
+            c.innerHTML = panel.data.drawings.map(function (d, i) {
+                return '<div class="obj-tree-item" data-id="' + d.id + '"><span class="obj-tree-eye">\u25CF</span><span>' + (icons[d.type] || '?') + '</span><span>' + d.type.replace('_', ' ') + ' #' + (i+1) + '</span><span class="obj-tree-del" data-del="' + d.id + '">DEL</span></div>';
+            }).join('');
+            c.querySelectorAll('.obj-tree-item').forEach(function (item) {
+                item.addEventListener('click', function (e) {
+                    if (e.target.dataset.del) {
+                        var id = e.target.dataset.del;
+                        var obj = panel.data.fabricObjects.get(id);
+                        if (obj && fabricCanvas) { if (obj.__arrowHeads) obj.__arrowHeads.forEach(function(h){fabricCanvas.remove(h);}); if (obj.__measureLabel) fabricCanvas.remove(obj.__measureLabel); fabricCanvas.remove(obj); fabricCanvas.renderAll(); }
+                        panel.data.fabricObjects.delete(id);
+                        panel.data.drawings = panel.data.drawings.filter(function (d) { return d.id !== id; });
+                        refreshObjectTree();
+                    } else {
+                        var eye = this.querySelector('.obj-tree-eye');
+                        var obj = panel.data.fabricObjects.get(this.dataset.id);
+                        if (obj) { obj.visible = !obj.visible; fabricCanvas.renderAll(); eye.classList.toggle('hidden'); }
+                    }
+                });
+            });
+        }
+
+        var journModal = document.getElementById('journal-modal');
+        var journOverlay = document.getElementById('journal-overlay');
+        document.getElementById('journal-btn').addEventListener('click', function () { journModal.classList.add('show'); journOverlay.classList.add('show'); renderJournal(); });
+        document.getElementById('journal-close').addEventListener('click', function () { journModal.classList.remove('show'); journOverlay.classList.remove('show'); });
+        journOverlay.addEventListener('click', function () { journModal.classList.remove('show'); journOverlay.classList.remove('show'); });
+        document.getElementById('journ-add').addEventListener('click', function () {
+            var entry = { symbol: document.getElementById('journ-symbol').value || panel.symbol, side: document.getElementById('journ-side').value, entry: parseFloat(document.getElementById('journ-entry').value) || 0, exit: parseFloat(document.getElementById('journ-exit').value) || 0, size: parseFloat(document.getElementById('journ-size').value) || 0, notes: document.getElementById('journ-notes').value, date: new Date().toISOString() };
+            entry.pnl = entry.side === 'LONG' ? (entry.exit - entry.entry) * entry.size : (entry.entry - entry.exit) * entry.size;
+            panel.data.journal.push(entry);
+            localStorage.setItem('moondev_journal', JSON.stringify(panel.data.journal));
+            ['journ-entry','journ-exit','journ-size','journ-notes'].forEach(function (id) { document.getElementById(id).value = ''; });
+            renderJournal();
+        });
+        function renderJournal() {
+            var c = document.getElementById('journ-entries');
+            if (!panel.data.journal.length) { c.innerHTML = '<div class="obj-tree-empty">No journal entries yet</div>'; return; }
+            c.innerHTML = panel.data.journal.map(function (e) {
+                var cls = e.pnl >= 0 ? 'positive' : 'negative';
+                return '<div class="journ-entry"><div class="journ-entry-header"><span>' + e.symbol + ' ' + e.side + '</span><span class="journ-pnl ' + cls + '">P&L: ' + (e.pnl >= 0 ? '+' : '') + e.pnl.toFixed(2) + '</span></div><div>Entry: ' + e.entry + ' Exit: ' + e.exit + ' Size: ' + e.size + '</div>' + (e.notes ? '<div style="color:var(--muted);margin-top:4px">' + e.notes + '</div>' : '') + '</div>';
+            }).join('');
+        }
+        try { panel.data.journal = JSON.parse(localStorage.getItem('moondev_journal') || '[]'); } catch(e) {}
+
+        window.addEventListener('resize', function () {
+            resizeOverlayCanvas();
+            resizeFabricCanvas();
+            renderOverlay();
+            syncFabricDrawings();
+            secondaryCells.forEach(function (cell) {
+                if (cell.chart && cell.chart.resize) cell.chart.resize();
+                renderCellOverlay(cell);
+            });
+        });
+
+        resizeOverlayCanvas();
+        initKLineChart();
+        initFabricCanvas();
+        load();
+        loadDom();
+        loadAgentControls();
+        loadSessionHistory();
+        loadDrawings();
+        setInterval(function () {
+            load();
+            loadSessionHistory();
+            secondaryCells.forEach(function (cell) { loadSecondaryCellData(cell); });
+        }, 30000);
+    })();
+    </script>
 </body>
 </html>

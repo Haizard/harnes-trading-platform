@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  var PANEL_TYPES = ['footprint', 'smc'];
+  var PANEL_TYPES = ['footprint'];
 
   function createPanel(options) {
     options = options || {};
@@ -43,7 +43,7 @@
       ui: options.ui || null,
 
       // host hooks so the workspace can dispatch without knowing the render
-      // internals of footprint vs lightweight-charts.
+      // internals of the footprint overlay.
       hooks: options.hooks || null,
 
       // panel-local cache for page-specific state that does not belong to the

@@ -791,7 +791,50 @@ async def get_health():
 
 
 
-# ── SMC Chart API ─────────────────────────────────────────
+# ── Footprint Chart API ───────────────────────────────────
+
+def _generate_synthetic_trades(candles: list[dict], interval_seconds: int) -> list[dict]:
+    """Generate synthetic trades from kline data when DB trades are unavailable.
+
+    Produces realistic-looking buy/sell volume at various price levels within
+    each candle so the footprint visualization works even without a live trade feed.
+    """
+    import random
+    from datetime import timedelta
+
+    trades = []
+    for candle in candles:
+        bt = candle["bucket_time"]
+        if isinstance(bt, str):
+            from datetime import datetime
+            bt = datetime.fromisoformat(bt)
+
+        o = float(candle["open"])
+        h = float(candle["high"])
+        lo = float(candle["low"])
+        c = float(candle["close"])
+        v = float(candle.get("volume", 1.0))
+
+        # Buy bias: bullish candle → more buys, bearish → more sells
+        buy_bias = 0.58 if c >= o else 0.42
+
+        n_trades = random.randint(15, 30)
+        vol_per_trade = max(v / n_trades, 0.5) if v > 0 else 1.0
+
+        for _ in range(n_trades):
+            price = lo + (h - lo) * random.random()
+            trade_time = bt + timedelta(seconds=random.randint(0, max(1, interval_seconds - 1)))
+            side = "BUY" if random.random() < buy_bias else "SELL"
+            quantity = vol_per_trade * random.uniform(0.3, 1.7)
+
+            trades.append({
+                "event_time": trade_time,
+                "price": str(round(price, 2)),
+                "quantity": str(round(quantity, 6)),
+                "aggressor_side": side,
+            })
+
+    return trades
 
 @app.get("/api/binance/footprint")
 async def api_binance_footprint(
@@ -809,15 +852,40 @@ async def api_binance_footprint(
         from src.binance_history import fetch_binance_klines
         from src.db_storage import get_binance_market_trades
 
-        trades = await asyncio.to_thread(get_binance_market_trades, symbol, hours)
-        dom = await _get_binance_dom_state(symbol)
         warnings = []
+        # DB calls may hang if pool is unavailable — wrap with timeout
         try:
-            history_candles = await asyncio.to_thread(fetch_binance_klines, symbol, interval_seconds, candle_limit)
+            trades = await asyncio.wait_for(
+                asyncio.to_thread(get_binance_market_trades, symbol, hours),
+                timeout=5.0
+            )
+        except (asyncio.TimeoutError, Exception):
+            trades = []
+            warnings.append("Trade DB query timed out or failed.")
+        try:
+            dom = await asyncio.wait_for(_get_binance_dom_state(symbol), timeout=5.0)
+        except (asyncio.TimeoutError, Exception):
+            dom = {"source": "binance", "bids": [], "asks": [], "available": False}
+            warnings.append("DOM state query timed out or failed.")
+        try:
+            history_candles = await asyncio.wait_for(
+                asyncio.to_thread(fetch_binance_klines, symbol, interval_seconds, candle_limit),
+                timeout=10.0
+            )
         except Exception as e:
             history_candles = []
             warnings.append(f"Failed to fetch klines: {str(e)[:200]}")
-        agent_signals = await _get_binance_agent_signals(history_candles or trades, interval_seconds, candles=bool(history_candles))
+        if not trades and history_candles:
+            trades = _generate_synthetic_trades(history_candles, interval_seconds)
+            warnings.append("No live trades in database — showing synthetic footprint from candle data.")
+        try:
+            agent_signals = await asyncio.wait_for(
+                _get_binance_agent_signals(history_candles or trades, interval_seconds, candles=bool(history_candles)),
+                timeout=8.0
+            )
+        except asyncio.TimeoutError:
+            agent_signals = []
+            warnings.append("Agent signal computation timed out — skipping signals.")
         snapshot = BinanceChartService().build_snapshot(
             symbol=symbol,
             trades=trades,
@@ -925,7 +993,10 @@ async def _get_binance_dom_state(symbol: str) -> dict:
 @app.get("/api/binance/dom")
 async def api_binance_dom(symbol: str = "BTCUSDT"):
     """Return reconstructed Binance top-of-book levels from PostgreSQL."""
-    return await _get_binance_dom_state(symbol)
+    try:
+        return await asyncio.wait_for(_get_binance_dom_state(symbol), timeout=5.0)
+    except (asyncio.TimeoutError, Exception):
+        return {"source": "binance", "symbol": symbol.upper(), "bids": [], "asks": [], "available": False}
 
 
 @app.get("/api/binance/stream/stats")
@@ -970,8 +1041,10 @@ async def api_binance_ai_analyze(payload: dict):
     snapshot = payload.get("snapshot") or {}
     question = str(payload.get("question") or "Analyze the current Binance order flow.").strip()[:2000]
     session_id = str(payload.get("session_id") or "")[:80]
-    if not snapshot:
-        raise HTTPException(status_code=400, detail="snapshot is required")
+    image_data = payload.get("image") or ""
+    model_id = payload.get("model") or ""
+    if not snapshot and not image_data:
+        raise HTTPException(status_code=400, detail="snapshot or image is required")
     try:
         from src.bedrock_llm import ChatMessage, ChatOptions, bedrock_chat, is_bedrock_configured
         if not is_bedrock_configured():
@@ -983,15 +1056,21 @@ async def api_binance_ai_analyze(payload: dict):
             "action, and chart_contributions. Never claim certainty. Never place or authorize trades. "
             "The action must be WAIT, WATCH, or PREPARE_REVIEW."
         )
-        context = json.dumps(snapshot, separators=(",", ":"), default=str)[:24000]
+        context = json.dumps(snapshot, separators=(",", ":"), default=str)[:24000] if snapshot else "{}"
+        user_content = f"Question: {question}\nChart context:\n{context}"
+        if image_data:
+            user_content += "\n[Chart screenshot/image attached for analysis.]"
         messages = []
         if session_id:
             from src.chart_workspace import append_chat, get_chat
             for item in get_chat(session_id, 12):
                 messages.append(ChatMessage(role=item["role"], content=item["content"]))
-            append_chat(session_id, "user", question, snapshot.get("symbol", ""), snapshot.get("timeframe", ""), snapshot.get("as_of"))
-        messages.append(ChatMessage(role="user", content=f"Question: {question}\nChart context:\n{context}"))
-        response = await bedrock_chat(messages, ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt))
+            append_chat(session_id, "user", question, snapshot.get("symbol", "") if snapshot else "", snapshot.get("timeframe", "") if snapshot else "", snapshot.get("as_of") if snapshot else "")
+        messages.append(ChatMessage(role="user", content=user_content))
+        opts = ChatOptions(max_tokens=1800, temperature=0.2, system_prompt=system_prompt)
+        if model_id:
+            setattr(opts, "model_id", model_id)
+        response = await bedrock_chat(messages, opts)
         analysis = response.json_data or {"summary": response.text, "bias": "UNKNOWN", "confidence": 0, "action": "WAIT"}
         from src.chart_contracts import normalize_chart_contributions
         contributions = normalize_chart_contributions(analysis.get("chart_contributions", []), "bedrock")
@@ -1185,22 +1264,9 @@ def _compute_bollinger(data, period=20, mult=2.0):
     return upper, lower
 
 
-@app.get("/charts/smc/", response_class=HTMLResponse)
-async def smc_charts_page():
-    """SMC Charts with TradingView embed + Python bot overlays."""
-    try:
-        from pathlib import Path
-        html_file = Path(__file__).parent / "templates" / "charts" / "smc_chart.html"
-        if html_file.exists():
-            return HTMLResponse(html_file.read_text(encoding="utf-8"))
-        return HTMLResponse("<h1>SMC Charts module not available</h1>", status_code=503)
-    except Exception as e:
-        return HTMLResponse(f"<h1>SMC Charts error: {e}</h1>", status_code=500)
-
-
 @app.get("/charts/workspace/", response_class=HTMLResponse)
 async def chart_workspace_page():
-    """Multi-panel chart workspace — hosts footprint and SMC panels in one grid."""
+    """Footprint chart workspace — KLineChart candles + fabric.js footprint overlay."""
     try:
         from pathlib import Path
         html_file = Path(__file__).parent / "templates" / "charts" / "workspace.html"
@@ -1209,6 +1275,26 @@ async def chart_workspace_page():
         return HTMLResponse("<h1>Chart workspace module not available</h1>", status_code=503)
     except Exception as e:
         return HTMLResponse(f"<h1>Chart workspace error: {e}</h1>", status_code=500)
+
+
+# ── Chart Workspace Save/Load API ─────────────────────────
+
+_workspace_store: dict = {}
+
+@app.post("/api/chart/workspace")
+async def save_chart_workspace(request: Request):
+    """Save chart workspace configuration."""
+    try:
+        body = await request.json()
+        _workspace_store["default"] = body
+        return {"status": "saved"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}, 500
+
+@app.get("/api/chart/workspace")
+async def load_chart_workspace():
+    """Load saved chart workspace configuration."""
+    return _workspace_store.get("default", {})
 
 
 # ── Auth API Endpoints ─────────────────────────────────────
